@@ -31,10 +31,12 @@ TODO for devtool:
 1. Polisj UI. Remove flickering. Maybe adopt UI from livestore
 2. Rename data -> query
 3. Mutation - show button display diff. Also, add pagination if too much mutations
+1. In devtool - maybe use db to store traces?
 4. Data diff/change?
 1. Display how much rows were selected during query in general list
 1. Keep same tab open when change action/selector
-1. Why does it have "2" postfix?
+1. Ability to edit rows?
+1. newValue always dilsplay as "circualr". Maybe just display array of oldValue and newValues, without status/startedAt/
 
 Then:
 1. Nested index
