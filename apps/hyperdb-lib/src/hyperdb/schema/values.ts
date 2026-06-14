@@ -38,6 +38,17 @@ type PartialFields<TFields extends Record<string, Validator<any>>> = {
   [K in keyof TFields]: OptionalValidator<Infer<TFields[K]>>;
 };
 
+type RequiredFields<
+  TFields extends Record<string, Validator<any>>,
+  TKeys extends keyof TFields,
+> = {
+  [K in keyof TFields]: K extends TKeys
+    ? TFields[K] extends OptionalValidator<infer T>
+      ? Validator<T>
+      : TFields[K]
+    : TFields[K];
+};
+
 export type InferObject<TFields extends Record<string, Validator<any>>> = {
   [K in RequiredKeys<TFields>]: Infer<TFields[K]>;
 } & {
@@ -552,6 +563,26 @@ export const v = {
     ) as PartialFields<TFields>;
 
     return v.object(partialFields);
+  },
+
+  required<
+    TFields extends Record<string, Validator<any>>,
+    TKeys extends keyof TFields & string,
+  >(
+    validator: ObjectValidator<TFields>,
+    keys: TKeys[],
+  ): ObjectValidator<RequiredFields<TFields, TKeys>> {
+    const keySet = new Set<string>(keys);
+    const newFields = Object.fromEntries(
+      Object.entries(validator.fields).map(([key, field]) => {
+        if (keySet.has(key) && isOptionalValidator(field)) {
+          return [key, field.inner];
+        }
+        return [key, field];
+      }),
+    ) as RequiredFields<TFields, TKeys>;
+
+    return v.object(newFields);
   },
 
   any(): Validator<any> {

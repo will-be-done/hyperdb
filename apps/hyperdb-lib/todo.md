@@ -20,6 +20,8 @@ TODO:
 1. DONE Rename selector -> query; action -> mutation?
 1. DONE better naming query/mutation. But if name query, then what is selectFrom() - . Actually maybe current naming is good. Action, selectors, query = selectFrom, mutation = insert/upsert/delete
 1. DONE Value - add bigint/arraybuffer support
+1. Make sure that cache layer same as in reselect
+1. Turn on arguments validation
 1. Integrate to will be done
 1. Maybe rename trait -> context?
 1. Refactor UI with claude code
