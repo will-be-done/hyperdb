@@ -2,7 +2,7 @@
 import { assertType, describe, expect, it } from "vitest";
 import { selectFrom } from "../commands/query/builder";
 import { defineTable, type ExtractSchema } from "./table";
-import { v } from "./values";
+import { assertValid, type Infer, v } from "./values";
 
 const typeCheckOnly = false as boolean;
 
@@ -165,6 +165,44 @@ describe("defineTable", () => {
       .toQuery();
 
     expect(query.index).toBe("byProjectId");
+  });
+
+  it("exposes the table schema as a typed validator helper", () => {
+    const tasksTable = defineTable("tasks", {
+      id: v.string(),
+      projectId: v.string(),
+      title: v.string(),
+      state: v.union(v.literal("todo"), v.literal("done")),
+    }).index("byProjectId", ["projectId"]);
+
+    const task = assertValid(tasksTable.v(), {
+      id: "task-1",
+      projectId: "project-1",
+      title: "Task 1",
+      state: "todo",
+    });
+
+    assertType<Infer<ReturnType<typeof tasksTable.v>>>({
+      id: "task-1",
+      projectId: "project-1",
+      title: "Task 1",
+      state: "done",
+    });
+    expect(task).toEqual({
+      id: "task-1",
+      projectId: "project-1",
+      title: "Task 1",
+      state: "todo",
+    });
+    expect(tasksTable.v()).toBe(tasksTable.schemaValidator);
+    expect(() =>
+      assertValid(tasksTable.v(), {
+        id: "task-1",
+        projectId: "project-1",
+        title: "Task 1",
+        state: "doing",
+      }),
+    ).toThrow(/expected one of union variants/);
   });
 
   it("allows indexes on fields that exist in only one union variant", () => {

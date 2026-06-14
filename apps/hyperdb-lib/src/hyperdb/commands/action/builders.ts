@@ -26,18 +26,19 @@ export type ActionFn<TReturn, TParams extends any[]> = (
 export type ActionArgsSchema = Record<string, Validator<any>>;
 
 export type ObjectAction<
-  TArgs,
   TReturn,
   TSchema extends ActionArgsSchema = ActionArgsSchema,
-> = ((args: TArgs) => Generator<unknown, TReturn, unknown>) & {
+> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
-  readonly handler: (args: TArgs) => Generator<unknown, TReturn, unknown>;
+  readonly handler: (
+    args: InferObject<TSchema>,
+  ) => Generator<unknown, TReturn, unknown>;
 };
 
 export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
-  name?: string;
+  name: string;
   args: TSchema;
   handler: (
     args: InferObject<TSchema>,
@@ -86,9 +87,17 @@ const positionalTraceArg = (args: unknown[]): unknown => {
   return args;
 };
 
+const assertActionName = (name: unknown): string => {
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error("Action name is required");
+  }
+
+  return name;
+};
+
 export function action<TSchema extends ActionArgsSchema, TReturn>(
   definition: ActionDefinition<TSchema, TReturn>,
-): ObjectAction<InferObject<TSchema>, TReturn, TSchema>;
+): ObjectAction<TReturn, TSchema>;
 export function action<TReturn, TParams extends any[]>(
   fn: ActionFn<TReturn, TParams>,
 ): ActionFn<TReturn, TParams>;
@@ -96,14 +105,14 @@ export function action<TReturn, TParams extends any[]>(
   input: ActionDefinition<ActionArgsSchema, TReturn> | ActionFn<TReturn, TParams>,
 ): ActionFn<TReturn, TParams> {
   if (typeof input !== "function") {
-    const displayName = input.name || input.handler.name || "anonymous action";
+    const displayName = assertActionName(input.name);
     const wrapped = ((args: InferObject<typeof input.args>) =>
       wrapGeneratorWithTraceMeta(
         input.handler(args),
         "action",
         displayName,
         args,
-      )) as ObjectAction<InferObject<typeof input.args>, TReturn, typeof input.args>;
+      )) as ObjectAction<TReturn, typeof input.args>;
 
     return defineActionMetadata(wrapped, {
       name: displayName,

@@ -139,6 +139,27 @@ describe("action", () => {
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
   });
 
+  it("object-form action requires an explicit name", () => {
+    expect(() =>
+      action({
+        args: {},
+        handler: function* missingActionName() {
+          return null;
+        },
+      } as never),
+    ).toThrow("Action name is required");
+
+    expect(() =>
+      action({
+        name: "",
+        args: {},
+        handler: function* blankActionName() {
+          return null;
+        },
+      }),
+    ).toThrow("Action name is required");
+  });
+
   it("should dispatch actions", () => {
     const driver = new BptreeInmemDriver();
     const db = new DB(driver);

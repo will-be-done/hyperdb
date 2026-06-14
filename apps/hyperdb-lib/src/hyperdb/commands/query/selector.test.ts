@@ -105,6 +105,7 @@ describe("selector", () => {
     });
 
     const doneProjectTasks = selector({
+      name: "doneProjectTasks",
       args: { projectId: v.string() },
       handler: function* doneProjectTasks({ projectId }) {
         const tasks = yield* projectTasks({ projectId });
@@ -142,6 +143,27 @@ describe("selector", () => {
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
   });
 
+  test("object-form selector requires an explicit name", () => {
+    expect(() =>
+      selector({
+        args: {},
+        handler: function* missingSelectorName() {
+          return null;
+        },
+      } as never),
+    ).toThrow("Selector name is required");
+
+    expect(() =>
+      selector({
+        name: "",
+        args: {},
+        handler: function* blankSelectorName() {
+          return null;
+        },
+      }),
+    ).toThrow("Selector name is required");
+  });
+
   test("cached object-form selectors share one DB subscription for same args", () => {
     const cachedTasksTable = defineTable("cachedSelectorTasks", {
       id: v.string(),
@@ -151,6 +173,7 @@ describe("selector", () => {
     let runCount = 0;
 
     const cachedTasks = selector({
+      name: "cachedTasks",
       args: { projectId: v.string() },
       handler: function* cachedTasks({ projectId }) {
         runCount++;
@@ -179,6 +202,83 @@ describe("selector", () => {
     expect(testDb.subscribers).toHaveLength(0);
   });
 
+  test("cached object-form selector args normalize nested object key order", () => {
+    const orderedTasksTable = defineTable("orderedSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      orderToken: v.string(),
+    }).index("projectOrder", ["projectId", "orderToken"]);
+    const testDb = createTestDB(orderedTasksTable);
+    let runCount = 0;
+
+    const orderedTasks = selector({
+      name: "orderedTasks",
+      args: {
+        filter: v.object({
+          projectId: v.string(),
+          orderToken: v.string(),
+        }),
+      },
+      handler: function* orderedTasks({ filter }) {
+        runCount++;
+        return yield* selectFrom(orderedTasksTable, "projectOrder").where((q) =>
+          q
+            .eq("projectId", filter.projectId)
+            .eq("orderToken", filter.orderToken),
+        );
+      },
+    });
+
+    const first = initCachedSelector(testDb, orderedTasks, {
+      filter: { projectId: "project-1", orderToken: "a" },
+    });
+    const second = initCachedSelector(testDb, orderedTasks, {
+      filter: { orderToken: "a", projectId: "project-1" },
+    });
+    const unsubscribeFirst = first.subscribe(() => {});
+    const unsubscribeSecond = second.subscribe(() => {});
+
+    expect(runCount).toBe(1);
+    expect(testDb.subscribers).toHaveLength(1);
+
+    unsubscribeFirst();
+    unsubscribeSecond();
+  });
+
+  test("cached object-form selector rejects unsupported serialized args", () => {
+    const rejectedArgsTasksTable = defineTable("rejectedArgsSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = createTestDB(rejectedArgsTasksTable);
+    const rejectedArgsTasks = selector({
+      name: "rejectedArgsTasks",
+      args: { projectId: v.string() },
+      handler: function* rejectedArgsTasks({ projectId }) {
+        return yield* selectFrom(rejectedArgsTasksTable, "project").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() =>
+      initCachedSelector(testDb, rejectedArgsTasks, {
+        projectId: undefined,
+      } as never),
+    ).toThrow(/undefined is not supported/);
+    expect(() =>
+      initCachedSelector(testDb, rejectedArgsTasks, {
+        projectId: () => "project-1",
+      } as never),
+    ).toThrow(/functions are not supported/);
+    expect(() =>
+      initCachedSelector(testDb, rejectedArgsTasks, circular as never),
+    ).toThrow(/circular reference/);
+    expect(testDb.subscribers).toHaveLength(0);
+  });
+
   test("cached object-form selectors split entries by args", () => {
     const cachedArgsTasksTable = defineTable("cachedArgsSelectorTasks", {
       id: v.string(),
@@ -187,6 +287,7 @@ describe("selector", () => {
     const testDb = createTestDB(cachedArgsTasksTable);
 
     const cachedTasks = selector({
+      name: "cachedArgsTasks",
       args: { projectId: v.string() },
       handler: function* cachedTasks({ projectId }) {
         return yield* selectFrom(cachedArgsTasksTable, "project").where((q) =>
@@ -221,6 +322,7 @@ describe("selector", () => {
     let runCount = 0;
 
     const projectTasks = selector({
+      name: "invalidationProjectTasks",
       args: { projectId: v.string() },
       handler: function* projectTasks({ projectId }) {
         runCount++;
@@ -269,6 +371,7 @@ describe("selector", () => {
     let runCount = 0;
 
     const defaultGcTasks = selector({
+      name: "defaultGcTasks",
       args: { projectId: v.string() },
       handler: function* defaultGcTasks({ projectId }) {
         runCount++;
@@ -309,6 +412,7 @@ describe("selector", () => {
     let runCount = 0;
 
     const gcTasks = selector({
+      name: "gcTasks",
       args: { projectId: v.string() },
       handler: function* gcTasks({ projectId }) {
         runCount++;

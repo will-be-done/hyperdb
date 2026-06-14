@@ -15,6 +15,7 @@ import {
   type SelectRangeCmd,
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
+  type AnyObjectSelector,
   type ObjectSelector,
   type SelectorArgs,
   type SelectorReturn,
@@ -22,7 +23,7 @@ import {
 import { useDB } from "./context";
 import { asyncDispatch, syncDispatch } from "../hyperdb";
 
-type SyncSelectorEnabledOptions<TSelector extends ObjectSelector<any, any>> = {
+type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;
   args: SelectorArgs<TSelector>;
   enabled?: true;
@@ -32,7 +33,7 @@ type SyncSelectorEnabledOptions<TSelector extends ObjectSelector<any, any>> = {
 };
 
 type SyncSelectorMaybeDisabledOptions<
-  TSelector extends ObjectSelector<any, any>,
+  TSelector extends AnyObjectSelector,
 > = {
   selector: TSelector;
   args: SelectorArgs<TSelector>;
@@ -42,7 +43,7 @@ type SyncSelectorMaybeDisabledOptions<
   gcTime?: number;
 };
 
-type AsyncSelectorEnabledOptions<TSelector extends ObjectSelector<any, any>> = {
+type AsyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;
   args: SelectorArgs<TSelector>;
   enabled?: true;
@@ -51,7 +52,7 @@ type AsyncSelectorEnabledOptions<TSelector extends ObjectSelector<any, any>> = {
 };
 
 type AsyncSelectorMaybeDisabledOptions<
-  TSelector extends ObjectSelector<any, any>,
+  TSelector extends AnyObjectSelector,
 > = {
   selector: TSelector;
   args: SelectorArgs<TSelector>;
@@ -63,8 +64,8 @@ type AsyncSelectorMaybeDisabledOptions<
 const isObjectSelectorOptions = (
   value: unknown,
 ): value is {
-  selector: ObjectSelector<any, any>;
-  args: unknown;
+  selector: AnyObjectSelector;
+  args: any;
   enabled?: boolean;
   defaultValue?: unknown;
   debugKey?: string;
@@ -80,10 +81,10 @@ const createDisabledStore = <TReturn>(defaultValue: TReturn) => ({
   getSnapshot: () => defaultValue,
 });
 
-export function useSyncSelector<TSelector extends ObjectSelector<any, any>>(
+export function useSyncSelector<TSelector extends AnyObjectSelector>(
   options: SyncSelectorEnabledOptions<TSelector>,
 ): SelectorReturn<TSelector>;
-export function useSyncSelector<TSelector extends ObjectSelector<any, any>>(
+export function useSyncSelector<TSelector extends AnyObjectSelector>(
   options: SyncSelectorMaybeDisabledOptions<TSelector>,
 ): SelectorReturn<TSelector>;
 export function useSyncSelector<TReturn>(
@@ -94,8 +95,8 @@ export function useSyncSelector<TReturn>(
 export function useSyncSelector<TReturn>(
   input:
     | (() => Generator<unknown, TReturn, unknown>)
-    | SyncSelectorEnabledOptions<ObjectSelector<any, TReturn>>
-    | SyncSelectorMaybeDisabledOptions<ObjectSelector<any, TReturn>>,
+    | SyncSelectorEnabledOptions<ObjectSelector<TReturn, any>>
+    | SyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn, any>>,
   deps: DependencyList = [],
   debugKey?: string,
 ): TReturn {
@@ -117,7 +118,11 @@ export function useSyncSelector<TReturn>(
       });
     }
 
-    return initSelector(db, input, debugKey);
+    return initSelector(
+      db,
+      input as () => Generator<unknown, TReturn, unknown>,
+      debugKey,
+    );
   }, [
     db,
     ...(isObjectForm
@@ -135,15 +140,15 @@ export function useSyncSelector<TReturn>(
   return useSyncExternalStore(selector.subscribe, selector.getSnapshot);
 }
 
-export function useAsyncSelector<TSelector extends ObjectSelector<any, any>>(
+export function useAsyncSelector<TSelector extends AnyObjectSelector>(
   options: AsyncSelectorEnabledOptions<TSelector> & {
     defaultValue: SelectorReturn<TSelector>;
   },
 ): SelectorReturn<TSelector>;
-export function useAsyncSelector<TSelector extends ObjectSelector<any, any>>(
+export function useAsyncSelector<TSelector extends AnyObjectSelector>(
   options: AsyncSelectorEnabledOptions<TSelector>,
 ): SelectorReturn<TSelector> | undefined;
-export function useAsyncSelector<TSelector extends ObjectSelector<any, any>>(
+export function useAsyncSelector<TSelector extends AnyObjectSelector>(
   options: AsyncSelectorMaybeDisabledOptions<TSelector>,
 ): SelectorReturn<TSelector>;
 export function useAsyncSelector<TReturn>(
@@ -154,8 +159,8 @@ export function useAsyncSelector<TReturn>(
 export function useAsyncSelector<TReturn>(
   input:
     | (() => Generator<unknown, TReturn, unknown>)
-    | AsyncSelectorEnabledOptions<ObjectSelector<any, TReturn>>
-    | AsyncSelectorMaybeDisabledOptions<ObjectSelector<any, TReturn>>,
+    | AsyncSelectorEnabledOptions<ObjectSelector<TReturn, any>>
+    | AsyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn, any>>,
   deps: DependencyList = [],
   debugKey?: string,
 ): TReturn | undefined {
@@ -177,6 +182,12 @@ export function useAsyncSelector<TReturn>(
   genRef.current = isObjectForm
     ? () => input.selector(input.args)
     : (input as () => Generator<unknown, TReturn, unknown>);
+
+  useEffect(() => {
+    if (isObjectForm) {
+      setResult(objectDefaultValue as TReturn | undefined);
+    }
+  }, [argsKey]);
 
   useEffect(() => {
     if (!enabled) {

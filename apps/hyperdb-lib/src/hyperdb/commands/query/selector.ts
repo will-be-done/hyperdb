@@ -59,14 +59,24 @@ export type SelectorFn<TReturn, TParams extends any[]> = (
 export type SelectorArgsSchema = Record<string, Validator<any>>;
 
 export type ObjectSelector<
-  TArgs,
   TReturn,
   TSchema extends SelectorArgsSchema = SelectorArgsSchema,
-> = ((args: TArgs) => Generator<unknown, TReturn, unknown>) & {
+> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
   readonly kind: "selector";
   readonly name: string;
   readonly args: TSchema;
-  readonly handler: (args: TArgs) => Generator<unknown, TReturn, unknown>;
+  readonly handler: (
+    args: InferObject<TSchema>,
+  ) => Generator<unknown, TReturn, unknown>;
+};
+
+export type AnyObjectSelector = ((
+  args: any,
+) => Generator<unknown, any, unknown>) & {
+  readonly kind: "selector";
+  readonly name: string;
+  readonly args: SelectorArgsSchema;
+  readonly handler: (args: any) => Generator<unknown, any, unknown>;
 };
 
 export type SelectorReturn<TSelector> = TSelector extends (
@@ -82,7 +92,7 @@ export type SelectorArgs<TSelector> = TSelector extends (
   : never;
 
 export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
-  name?: string;
+  name: string;
   args: TSchema;
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
@@ -129,9 +139,17 @@ const positionalTraceArg = (args: unknown[]): unknown => {
   return args;
 };
 
+const assertSelectorName = (name: unknown): string => {
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error("Selector name is required");
+  }
+
+  return name;
+};
+
 export function selector<TSchema extends SelectorArgsSchema, TReturn>(
   definition: SelectorDefinition<TSchema, TReturn>,
-): ObjectSelector<InferObject<TSchema>, TReturn, TSchema>;
+): ObjectSelector<TReturn, TSchema>;
 export function selector<TReturn, TParams extends any[]>(
   fn: SelectorGeneratorFn<TReturn, TParams>,
 ): SelectorGeneratorFn<TReturn, TParams>;
@@ -145,19 +163,14 @@ export function selector<TReturn, TParams extends any[]>(
     | SelectorFn<TReturn, TParams>,
 ): SelectorGeneratorFn<TReturn, TParams> {
   if (typeof input !== "function") {
-    const displayName =
-      input.name || input.handler.name || "anonymous selector";
+    const displayName = assertSelectorName(input.name);
     const wrapped = ((args: InferObject<typeof input.args>) =>
       wrapGeneratorWithTraceMeta(
         input.handler(args),
         "selector",
         displayName,
         args,
-      )) as ObjectSelector<
-      InferObject<typeof input.args>,
-      TReturn,
-      typeof input.args
-    >;
+      )) as ObjectSelector<TReturn, typeof input.args>;
 
     return defineSelectorMetadata(wrapped, {
       name: displayName,
@@ -501,8 +514,8 @@ const ensureSelectorCacheEntrySubscribed = <TReturn>(
   if (entry.dbUnsubscribe) return;
 
   entry.dbUnsubscribe = entry.db.subscribe((ops, _traits, revision) => {
-    entry.currentRevision = revision;
     if (!isNeedToRerunRange(entry.selectRangeCmds, ops)) {
+      entry.currentRevision = revision;
       if (debugKey) {
         console.log("selector no need to rerun", debugKey, ops);
       }
@@ -519,7 +532,7 @@ const ensureSelectorCacheEntrySubscribed = <TReturn>(
   });
 };
 
-export function initCachedSelector<TSelector extends ObjectSelector<any, any>>(
+export function initCachedSelector<TSelector extends AnyObjectSelector>(
   db: SubscribableDB,
   selector: TSelector,
   args: SelectorArgs<TSelector>,

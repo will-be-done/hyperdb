@@ -279,4 +279,30 @@ describe("useAsyncSelector", () => {
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
     expect(mocks.setResult).toHaveBeenCalledWith(["task-1"]);
   });
+
+  it("resets object-form async selector result when args key changes", () => {
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+    mocks.runSelectorAsync.mockReturnValue(new Promise(() => {}));
+    mocks.stableSerializeSelectorArgs
+      .mockReturnValueOnce("project-1")
+      .mockReturnValueOnce("project-2");
+
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: ["loading-1"],
+    });
+    mocks.cleanup?.();
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-2" },
+      defaultValue: ["loading-2"],
+    });
+
+    expect(mocks.setResult).toHaveBeenCalledWith(["loading-1"]);
+    expect(mocks.setResult).toHaveBeenCalledWith(["loading-2"]);
+    expect(mocks.runSelectorAsync).toHaveBeenCalledTimes(2);
+  });
 });
