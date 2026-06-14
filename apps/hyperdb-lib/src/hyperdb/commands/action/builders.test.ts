@@ -5,6 +5,7 @@ import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import { action, deleteRows, syncDispatch, insert, upsert } from "./builders";
 import { selectFrom } from "../query/builder";
 import { v } from "../../schema/values";
+import { getGeneratorTraceMeta } from "../../tracing/metadata";
 
 type Task = {
   type: "task";
@@ -69,6 +70,75 @@ const insertAction = action(function* () {
 });
 
 describe("action", () => {
+  it("dispatches object-form actions with one args object", () => {
+    const driver = new BptreeInmemDriver();
+    const db = new DB(driver);
+    execSync(db.loadTables([tasksTables]));
+
+    const createTask = action({
+      name: "createTask",
+      args: {
+        id: v.string(),
+        title: v.string(),
+      },
+      handler: function* ({ id, title }) {
+        const task: Task = {
+          type: "task",
+          id,
+          title,
+          state: "todo",
+          projectId: "project-1",
+          orderToken: "a",
+        };
+
+        yield* insert(tasksTables, [task]);
+
+        return yield* selectFrom(tasksTables, "title").where((q) =>
+          q.eq("title", title),
+        );
+      },
+    });
+
+    expect(
+      syncDispatch(
+        db,
+        createTask({
+          id: "task-1",
+          title: "Task 1",
+        }),
+      ),
+    ).toEqual([
+      {
+        type: "task",
+        id: "task-1",
+        title: "Task 1",
+        state: "todo",
+        projectId: "project-1",
+        orderToken: "a",
+      },
+    ]);
+  });
+
+  it("object-form action exposes metadata and traces the args object", () => {
+    const args = { id: v.string() };
+    const createTask = action({
+      name: "createTask",
+      args,
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    const gen = createTask({ id: "task-1" });
+    const traceMeta = getGeneratorTraceMeta(gen);
+
+    expect(createTask.kind).toBe("action");
+    expect(createTask.name).toBe("createTask");
+    expect(createTask.args).toBe(args);
+    expect(traceMeta?.name).toBe("createTask");
+    expect(traceMeta?.args).toEqual([{ id: "task-1" }]);
+  });
+
   it("should dispatch actions", () => {
     const driver = new BptreeInmemDriver();
     const db = new DB(driver);

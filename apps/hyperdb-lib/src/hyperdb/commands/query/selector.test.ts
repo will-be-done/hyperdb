@@ -1,11 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { DB, execSync } from "../../db";
-import { selector, initSelector } from "./selector";
+import { selector, initSelector, initCachedSelector, select } from "./selector";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
 import { selectFrom } from "./builder";
 import { v } from "../../schema/values";
+import { getGeneratorTraceMeta } from "../../tracing/metadata";
 
 type Task = {
   type: "task";
@@ -56,7 +57,256 @@ const specificTask = selector(function* (id: string) {
   return tasks[0];
 });
 
+const createTestDB = (...tables: Parameters<SubscribableDB["loadTables"]>[0]) => {
+  const testDb = new SubscribableDB(new DB(new BptreeInmemDriver()));
+  execSync(testDb.loadTables(tables));
+  return testDb;
+};
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("selector", () => {
+  test("object-form selector returns rows and can yield another selector", () => {
+    const objectTasksTable = defineTable("objectSelectorTasks", {
+      id: v.string(),
+      title: v.string(),
+      state: v.union(v.literal("todo"), v.literal("done")),
+      projectId: v.string(),
+    }).index("projectState", ["projectId", "state"]);
+    const testDb = createTestDB(objectTasksTable);
+
+    execSync(
+      testDb.insert(objectTasksTable, [
+        {
+          id: "task-1",
+          title: "Task 1",
+          state: "done",
+          projectId: "project-1",
+        },
+        {
+          id: "task-2",
+          title: "Task 2",
+          state: "todo",
+          projectId: "project-1",
+        },
+      ]),
+    );
+
+    const projectTasks = selector({
+      name: "projectTasks",
+      args: { projectId: v.string() },
+      handler: function* ({ projectId }) {
+        return yield* selectFrom(objectTasksTable, "projectState").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    const doneProjectTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* doneProjectTasks({ projectId }) {
+        const tasks = yield* projectTasks({ projectId });
+        return tasks.filter((task) => task.state === "done");
+      },
+    });
+
+    expect(select(testDb, doneProjectTasks({ projectId: "project-1" }))).toEqual([
+      {
+        id: "task-1",
+        title: "Task 1",
+        state: "done",
+        projectId: "project-1",
+      },
+    ]);
+  });
+
+  test("object-form selector exposes metadata and traces the args object", () => {
+    const args = { id: v.string() };
+    const metadataSelector = selector({
+      name: "metadataSelector",
+      args,
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    const gen = metadataSelector({ id: "task-1" });
+    const traceMeta = getGeneratorTraceMeta(gen);
+
+    expect(metadataSelector.kind).toBe("selector");
+    expect(metadataSelector.name).toBe("metadataSelector");
+    expect(metadataSelector.args).toBe(args);
+    expect(traceMeta?.name).toBe("metadataSelector");
+    expect(traceMeta?.args).toEqual([{ id: "task-1" }]);
+  });
+
+  test("cached object-form selectors share one DB subscription for same args", () => {
+    const cachedTasksTable = defineTable("cachedSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = createTestDB(cachedTasksTable);
+    let runCount = 0;
+
+    const cachedTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* cachedTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(cachedTasksTable, "project").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    const first = initCachedSelector(testDb, cachedTasks, {
+      projectId: "project-1",
+    });
+    const second = initCachedSelector(testDb, cachedTasks, {
+      projectId: "project-1",
+    });
+    const unsubscribeFirst = first.subscribe(() => {});
+    const unsubscribeSecond = second.subscribe(() => {});
+
+    expect(runCount).toBe(1);
+    expect(testDb.subscribers).toHaveLength(1);
+
+    unsubscribeFirst();
+    expect(testDb.subscribers).toHaveLength(1);
+
+    unsubscribeSecond();
+    expect(testDb.subscribers).toHaveLength(0);
+  });
+
+  test("cached object-form selectors split entries by args", () => {
+    const cachedArgsTasksTable = defineTable("cachedArgsSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = createTestDB(cachedArgsTasksTable);
+
+    const cachedTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* cachedTasks({ projectId }) {
+        return yield* selectFrom(cachedArgsTasksTable, "project").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    const first = initCachedSelector(testDb, cachedTasks, {
+      projectId: "project-1",
+    });
+    const second = initCachedSelector(testDb, cachedTasks, {
+      projectId: "project-2",
+    });
+    const unsubscribeFirst = first.subscribe(() => {});
+    const unsubscribeSecond = second.subscribe(() => {});
+
+    expect(testDb.subscribers).toHaveLength(2);
+
+    unsubscribeFirst();
+    unsubscribeSecond();
+  });
+
+  test("cached object-form selector reruns only for invalidating ops", () => {
+    const invalidationTasksTable = defineTable("invalidationSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      orderToken: v.string(),
+    }).index("projectOrder", ["projectId", "orderToken"]);
+    const testDb = createTestDB(invalidationTasksTable);
+    const snapshots: string[][] = [];
+    let runCount = 0;
+
+    const projectTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* projectTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(invalidationTasksTable, "projectOrder").where(
+          (q) => q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    const cached = initCachedSelector(testDb, projectTasks, {
+      projectId: "project-1",
+    });
+    const unsubscribe = cached.subscribe(() => {
+      snapshots.push(cached.getSnapshot().map((task) => task.id));
+    });
+
+    execSync(
+      testDb.insert(invalidationTasksTable, [
+        { id: "other", projectId: "project-2", orderToken: "a" },
+      ]),
+    );
+
+    expect(runCount).toBe(1);
+    expect(snapshots).toEqual([]);
+
+    execSync(
+      testDb.insert(invalidationTasksTable, [
+        { id: "matching", projectId: "project-1", orderToken: "a" },
+      ]),
+    );
+
+    expect(runCount).toBe(2);
+    expect(snapshots).toEqual([["matching"]]);
+
+    unsubscribe();
+  });
+
+  test("cached object-form selector keeps entries until gcTime expires", () => {
+    vi.useFakeTimers();
+
+    const gcTasksTable = defineTable("gcSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = createTestDB(gcTasksTable);
+    let runCount = 0;
+
+    const gcTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* gcTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(gcTasksTable, "project").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    const first = initCachedSelector(
+      testDb,
+      gcTasks,
+      { projectId: "project-1" },
+      { gcTime: 1000 },
+    );
+    first.subscribe(() => {})();
+
+    expect(testDb.subscribers).toHaveLength(0);
+
+    const second = initCachedSelector(
+      testDb,
+      gcTasks,
+      { projectId: "project-1" },
+      { gcTime: 1000 },
+    );
+    const unsubscribeSecond = second.subscribe(() => {});
+
+    expect(runCount).toBe(1);
+    expect(testDb.subscribers).toHaveLength(1);
+
+    unsubscribeSecond();
+    vi.advanceTimersByTime(1000);
+
+    initCachedSelector(testDb, gcTasks, { projectId: "project-1" });
+
+    expect(runCount).toBe(2);
+  });
+
   test("works with range", () => {
     const selector = initSelector(db, () => allDoneTasks("done"));
 
