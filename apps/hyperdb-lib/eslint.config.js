@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import importPlugin from "eslint-plugin-import";
+import reactHooks from "eslint-plugin-react-hooks";
 import unusedImports from "eslint-plugin-unused-imports";
 import globals from "globals";
 import { globalIgnores } from "eslint/config";
@@ -20,6 +21,7 @@ export default tseslint.config([
     },
     plugins: {
       import: importPlugin,
+      "react-hooks": reactHooks,
       "unused-imports": unusedImports,
     },
     settings: {
@@ -39,6 +41,7 @@ export default tseslint.config([
       "@typescript-eslint/require-yield": "off",
       "import/no-cycle": ["error", { ignoreExternal: true }],
       "no-unused-vars": "off",
+      "react-hooks/exhaustive-deps": "warn",
       "unused-imports/no-unused-imports": "error",
       "unused-imports/no-unused-vars": [
         "warn",

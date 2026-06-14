@@ -1,6 +1,7 @@
 import React, {
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -47,6 +48,8 @@ export type HyperDBDevtoolsPanelProps = {
 
 const storageKey = "hyperdb-devtools-open";
 const unassignedDBId = "__hyperdb_unassigned__";
+const mutationEventBatchSize = 30;
+const mutationValuePreviewSize = 30;
 
 const readStoredOpenState = (initialIsOpen: boolean): boolean => {
   try {
@@ -86,8 +89,7 @@ type TraceDBOption = {
   traceCount: number;
 };
 
-const traceDBId = (trace: RootTrace): string =>
-  trace.dbId ?? unassignedDBId;
+const traceDBId = (trace: RootTrace): string => trace.dbId ?? unassignedDBId;
 
 const getTraceDBOptions = (traces: RootTrace[]): TraceDBOption[] => {
   const optionMap = new Map<string, TraceDBOption>();
@@ -807,6 +809,10 @@ const EventBlock = styled("article")`
   margin-bottom: 8px;
 `;
 
+const LoadMoreSentinel = styled("div")`
+  height: 1px;
+`;
+
 const EventHeader = styled("div")`
   display: flex;
   align-items: center;
@@ -974,6 +980,43 @@ const formatRecordCount = (event: SelectCommandEvent): string => {
   return String(event.resultCount ?? 0);
 };
 
+export const getTraceQueriedRowCount = (trace: RootTrace): number =>
+  trace.commandEvents.reduce(
+    (total, event) => total + (event.resultCount ?? 0),
+    0,
+  );
+
+export const formatTraceQueriedRowCount = (trace: RootTrace): string => {
+  const queriedRowCount = getTraceQueriedRowCount(trace);
+  const hasPendingSelect = trace.commandEvents.some(
+    (event) => event.status === "running" && event.resultCount === undefined,
+  );
+
+  return `${queriedRowCount}${hasPendingSelect ? "+" : ""}`;
+};
+
+const formatTraceQueriedRows = (trace: RootTrace): string => {
+  const queriedRowCount = getTraceQueriedRowCount(trace);
+  const hasPendingSelect = trace.commandEvents.some(
+    (event) => event.status === "running" && event.resultCount === undefined,
+  );
+  const unit = queriedRowCount === 1 && !hasPendingSelect ? "row" : "rows";
+
+  return `${formatTraceQueriedRowCount(trace)} ${unit}`;
+};
+
+const countActionFrames = (frame: TraceFrame): number =>
+  (frame.kind === "action" ? 1 : 0) +
+  frame.children.reduce((total, child) => total + countActionFrames(child), 0);
+
+export const getTraceActionCount = (trace: RootTrace): number =>
+  trace.frames.reduce((total, frame) => total + countActionFrames(frame), 0);
+
+const formatTraceActions = (trace: RootTrace): string => {
+  const actionCount = getTraceActionCount(trace);
+  return `${actionCount} act`;
+};
+
 type CallTreeOperation =
   | {
       kind: "frame";
@@ -1071,6 +1114,17 @@ const mutationRecordCount = (event: MutationEvent): number | undefined => {
   return undefined;
 };
 
+export const getTraceMutatedRowCount = (trace: RootTrace): number =>
+  trace.mutationEvents.reduce(
+    (total, event) => total + (mutationRecordCount(event) ?? 0),
+    0,
+  );
+
+const formatTraceMutatedRows = (trace: RootTrace): string => {
+  const mutatedRowCount = getTraceMutatedRowCount(trace);
+  return `${mutatedRowCount} ${mutatedRowCount === 1 ? "row" : "rows"}`;
+};
+
 const callTreeOperationRecordCount = (
   operation: CallTreeOperation,
 ): number | undefined => {
@@ -1081,6 +1135,68 @@ const callTreeOperationRecordCount = (
 
 const formatRowCount = (count: number): string =>
   `${count} ${count === 1 ? "row" : "rows"}`;
+
+type MutationEventPreview = Omit<
+  MutationEvent,
+  "ids" | "newValue" | "oldValue" | "rows"
+> & {
+  ids?: unknown[];
+  newValue?: unknown[];
+  oldValue?: unknown[];
+  rows?: unknown[];
+  idsPreview?: MutationValuePreview;
+  newValuePreview?: MutationValuePreview;
+  oldValuePreview?: MutationValuePreview;
+  rowsPreview?: MutationValuePreview;
+};
+
+type MutationValuePreview = {
+  shown: number;
+  total: number;
+  omitted: number;
+};
+
+const getMutationValuePreview = <Value,>(
+  value: Value[] | undefined,
+): { value?: unknown[]; preview?: MutationValuePreview } => {
+  if (value === undefined || value.length <= mutationValuePreviewSize) {
+    return { value };
+  }
+
+  return {
+    value: [...value.slice(0, mutationValuePreviewSize), "..."],
+    preview: {
+      shown: mutationValuePreviewSize,
+      total: value.length,
+      omitted: value.length - mutationValuePreviewSize,
+    },
+  };
+};
+
+export const getMutationEventPreview = (
+  event: MutationEvent,
+): MutationEventPreview => {
+  const rows = getMutationValuePreview(event.rows);
+  const ids = getMutationValuePreview(event.ids);
+  const oldValue = getMutationValuePreview(event.oldValue);
+  const newValue = getMutationValuePreview(event.newValue);
+
+  return {
+    ...event,
+    ...(rows.value !== undefined ? { rows: rows.value } : {}),
+    ...(rows.preview !== undefined ? { rowsPreview: rows.preview } : {}),
+    ...(ids.value !== undefined ? { ids: ids.value } : {}),
+    ...(ids.preview !== undefined ? { idsPreview: ids.preview } : {}),
+    ...(oldValue.value !== undefined ? { oldValue: oldValue.value } : {}),
+    ...(oldValue.preview !== undefined
+      ? { oldValuePreview: oldValue.preview }
+      : {}),
+    ...(newValue.value !== undefined ? { newValue: newValue.value } : {}),
+    ...(newValue.preview !== undefined
+      ? { newValuePreview: newValue.preview }
+      : {}),
+  };
+};
 
 export const getCallTreeOperationBadges = (
   operation: CallTreeOperation,
@@ -1097,11 +1213,9 @@ export const getCallTreeOperationBadges = (
   return badges;
 };
 
-const EventData = ({
-  event,
-}: {
-  event: SelectCommandEvent | MutationEvent;
-}) => <DataBlock>{renderSerialized(event)}</DataBlock>;
+const MutationEventData = ({ event }: { event: MutationEvent }) => (
+  <DataBlock>{renderSerialized(getMutationEventPreview(event))}</DataBlock>
+);
 
 const SelectEventData = ({ event }: { event: SelectCommandEvent }) => (
   <>
@@ -1127,13 +1241,20 @@ const TraceOverview = ({ trace }: { trace: RootTrace }) => (
         <strong>{trace.commandEvents.length}</strong>
       </Stat>
       <Stat>
-        <span>Mutations</span>
-        <strong>{trace.mutationEvents.length}</strong>
+        <span>Rows queried</span>
+        <strong>{formatTraceQueriedRows(trace)}</strong>
+      </Stat>
+      <Stat>
+        <span>Actions</span>
+        <strong>{getTraceActionCount(trace)}</strong>
+      </Stat>
+      <Stat>
+        <span>Rows mutated</span>
+        <strong>{formatTraceMutatedRows(trace)}</strong>
       </Stat>
     </Grid>
-    <DataBlock>
-      {renderSerialized({ args: trace.args, error: trace.error })}
-    </DataBlock>
+    <DataBlock>{renderSerialized(trace.arg)}</DataBlock>
+    {trace.error && <DataBlock>{renderSerialized(trace.error)}</DataBlock>}
   </>
 );
 
@@ -1162,24 +1283,93 @@ const SelectEvents = ({ events }: { events: SelectCommandEvent[] }) => {
   );
 };
 
-const MutationEvents = ({ events }: { events: MutationEvent[] }) => {
+const MutationEvents = ({
+  events,
+  scrollParentRef,
+}: {
+  events: MutationEvent[];
+  scrollParentRef: React.RefObject<HTMLDivElement | null>;
+}) => {
+  const [visibleCount, setVisibleCount] = useState(mutationEventBatchSize);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const hasMore = visibleCount < events.length;
+  const visibleEvents = events.slice(0, visibleCount);
+
+  useEffect(() => {
+    if (!hasMore) return;
+
+    const root = scrollParentRef.current;
+    const sentinel = sentinelRef.current;
+    const IntersectionObserverCtor = globalThis.IntersectionObserver;
+
+    if (!root || !sentinel || !IntersectionObserverCtor) return;
+
+    const observer = new IntersectionObserverCtor(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+
+        setVisibleCount((count) =>
+          Math.min(count + mutationEventBatchSize, events.length),
+        );
+      },
+      { root, rootMargin: "96px 0px" },
+    );
+
+    observer.observe(sentinel);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [events.length, hasMore, scrollParentRef, visibleCount]);
+
+  useEffect(() => {
+    if (!hasMore || globalThis.IntersectionObserver) return;
+
+    const root = scrollParentRef.current;
+    if (!root) return;
+
+    const loadWhenNearBottom = () => {
+      const distanceFromBottom =
+        root.scrollHeight - root.scrollTop - root.clientHeight;
+
+      if (distanceFromBottom > 96) return;
+
+      setVisibleCount((count) =>
+        Math.min(count + mutationEventBatchSize, events.length),
+      );
+    };
+
+    root.addEventListener("scroll", loadWhenNearBottom, { passive: true });
+    loadWhenNearBottom();
+
+    return () => {
+      root.removeEventListener("scroll", loadWhenNearBottom);
+    };
+  }, [events.length, hasMore, scrollParentRef, visibleCount]);
+
   if (events.length === 0) return <Empty>No mutations</Empty>;
 
   return (
     <>
-      {events.map((event) => (
+      {visibleEvents.map((event) => (
         <EventBlock key={event.id}>
           <EventHeader>
             <span>
               {event.kind} {event.tableName}
             </span>
-            <Badge tone={statusTone(event.status)}>
-              {formatDuration(event.durationMs)}
-            </Badge>
+            <RowMeta>
+              <span>{formatRowCount(mutationRecordCount(event) ?? 0)}</span>
+              <Badge tone={statusTone(event.status)}>
+                {formatDuration(event.durationMs)}
+              </Badge>
+            </RowMeta>
           </EventHeader>
-          <EventData event={event} />
+          <MutationEventData event={event} />
         </EventBlock>
       ))}
+      {hasMore ? (
+        <LoadMoreSentinel ref={sentinelRef} aria-hidden="true" />
+      ) : null}
     </>
   );
 };
@@ -1241,6 +1431,7 @@ const TraceDetails = ({ trace }: { trace: RootTrace }) => {
   const [tab, setTab] = useState<"overview" | "data" | "mutations" | "tree">(
     "overview",
   );
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setTab("overview");
@@ -1275,11 +1466,15 @@ const TraceDetails = ({ trace }: { trace: RootTrace }) => {
           Call Tree
         </Tab>
       </Tabs>
-      <Content>
+      <Content ref={contentRef}>
         {tab === "overview" && <TraceOverview trace={trace} />}
         {tab === "data" && <SelectEvents events={trace.commandEvents} />}
         {tab === "mutations" && (
-          <MutationEvents events={trace.mutationEvents} />
+          <MutationEvents
+            key={trace.id}
+            events={trace.mutationEvents}
+            scrollParentRef={contentRef}
+          />
         )}
         {tab === "tree" && <CallTree trace={trace} />}
       </Content>
@@ -1295,9 +1490,10 @@ const DevtoolsPanelInner = ({
   embedded = false,
   onClose,
 }: HyperDBDevtoolsPanelProps) => {
-  const currentDBInfo = useMemo(() => (db ? getTraceDBInfo(db) : undefined), [
-    db,
-  ]);
+  const currentDBInfo = useMemo(
+    () => (db ? getTraceDBInfo(db) : undefined),
+    [db],
+  );
   const traces = useTraces(maxTraces);
   const dbOptions = useMemo(() => getTraceDBOptions(traces), [traces]);
   const hasMultipleDBs = dbOptions.length > 1;
@@ -1408,8 +1604,9 @@ const DevtoolsPanelInner = ({
                   </RowTop>
                   <RowStats>
                     <RowMeta>
+                      <span>{formatTraceQueriedRows(trace)}</span>
                       <span>{trace.commandEvents.length} sel</span>
-                      <span>{trace.mutationEvents.length} mut</span>
+                      <span>{formatTraceActions(trace)}</span>
                       <span>{formatTime(trace.startedAt)}</span>
                     </RowMeta>
                   </RowStats>

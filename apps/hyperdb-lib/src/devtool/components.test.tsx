@@ -8,11 +8,18 @@ import {
   HyperDBDevtoolsPanel,
   formatCallTreeOperation,
   formatSelectQuery,
+  formatTraceQueriedRowCount,
   getCallTreeOperationBadges,
   getCallTreeOperations,
+  getMutationEventPreview,
+  getTraceActionCount,
+  getTraceMutatedRowCount,
+  getTraceQueriedRowCount,
 } from "./components";
 import {
+  beginSelectEvent,
   createTraceFrameMeta,
+  endSelectEventSuccess,
   endTraceSuccess,
   hyperDBTraceStore,
   startRootTrace,
@@ -49,7 +56,7 @@ describe("HyperDBDevtools", () => {
   it("renders selected trace details in the panel", () => {
     const unsubscribe = hyperDBTraceStore.subscribe(() => {});
     const context = startRootTrace(
-      createTraceFrameMeta("action", "sampleAction", ["arg"]),
+      createTraceFrameMeta("action", "sampleAction", { id: "task-1" }),
     )!;
     endTraceSuccess(context);
     unsubscribe();
@@ -60,18 +67,47 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("Overview");
   });
 
+  it("renders queried and mutated row totals in the trace list and overview", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const context = startRootTrace(
+      createTraceFrameMeta("selector", "largeSelector", undefined),
+    )!;
+    const event = beginSelectEvent(context, context.rootFrame, {
+      tableName: "tasks",
+      index: "byProject",
+      where: [],
+      bounds: [],
+    });
+    endSelectEventSuccess(context, event, [
+      { id: "task-1" },
+      { id: "task-2" },
+      { id: "task-3" },
+    ]);
+    endTraceSuccess(context);
+    unsubscribe();
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
+
+    expect(html).toContain("Rows queried");
+    expect(html).toContain("Actions");
+    expect(html).toContain("Rows mutated");
+    expect(html).toContain("3 rows");
+    expect(html).toContain("0 rows");
+    expect(html).toContain("0 actions");
+  });
+
   it("renders a database selector when traces come from multiple dbs", () => {
     const unsubscribe = hyperDBTraceStore.subscribe(() => {});
     const firstDB = createDB();
     const secondDB = createDB();
     const firstContext = startRootTrace(
-      createTraceFrameMeta("action", "firstDBAction", []),
+      createTraceFrameMeta("action", "firstDBAction", undefined),
       hyperDBTraceStore,
       firstDB,
     )!;
     endTraceSuccess(firstContext);
     const secondContext = startRootTrace(
-      createTraceFrameMeta("selector", "secondDBSelector", []),
+      createTraceFrameMeta("selector", "secondDBSelector", undefined),
       hyperDBTraceStore,
       secondDB,
     )!;
@@ -188,12 +224,147 @@ describe("HyperDBDevtools", () => {
     );
   });
 
+  it("limits mutation event preview arrays", () => {
+    const rows = Array.from({ length: 35 }, (_, index) => ({
+      id: `project-${index}`,
+    }));
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "insert",
+      tableName: "projects",
+      rows,
+      startedAt: 100,
+      status: "success",
+    };
+
+    const preview = getMutationEventPreview(event);
+
+    expect(preview.rows).toHaveLength(31);
+    expect(preview.rows?.at(29)).toEqual({ id: "project-29" });
+    expect(preview.rows?.at(30)).toBe("...");
+    expect(preview.rowsPreview).toEqual({
+      shown: 30,
+      total: 35,
+      omitted: 5,
+    });
+    expect(event.rows).toHaveLength(35);
+  });
+
+  it("aggregates queried, mutated, and action counts across a trace", () => {
+    const rootFrame: TraceFrame = {
+      id: "frame-1",
+      kind: "action",
+      name: "loadTasks",
+      arg: undefined,
+      startedAt: 100,
+      status: "running",
+      children: [
+        {
+          id: "frame-2",
+          parentId: "frame-1",
+          kind: "selector",
+          name: "getTasks",
+          arg: undefined,
+          startedAt: 110,
+          status: "running",
+          children: [
+            {
+              id: "frame-3",
+              parentId: "frame-2",
+              kind: "action",
+              name: "touchTask",
+              arg: undefined,
+              startedAt: 120,
+              status: "running",
+              children: [],
+              commandIds: [],
+              mutationIds: [],
+            },
+          ],
+          commandIds: [],
+          mutationIds: [],
+        },
+      ],
+      commandIds: [],
+      mutationIds: [],
+    };
+    const trace: RootTrace = {
+      id: "trace-1",
+      kind: "action",
+      name: "loadTasks",
+      arg: undefined,
+      startedAt: 100,
+      status: "running",
+      frames: [rootFrame],
+      commandEvents: [
+        {
+          id: "cmd-1",
+          frameId: "frame-1",
+          kind: "select",
+          tableName: "tasks",
+          index: "byProject",
+          where: [],
+          bounds: [],
+          startedAt: 110,
+          status: "success",
+          resultCount: 3,
+        },
+        {
+          id: "cmd-2",
+          frameId: "frame-1",
+          kind: "select",
+          tableName: "comments",
+          index: "byTask",
+          where: [],
+          bounds: [],
+          startedAt: 120,
+          status: "running",
+        },
+      ],
+      mutationEvents: [
+        {
+          id: "mutation-1",
+          frameId: "frame-3",
+          kind: "insert",
+          tableName: "tasks",
+          rows: [{ id: "task-1" }, { id: "task-2" }],
+          startedAt: 130,
+          status: "success",
+        },
+        {
+          id: "mutation-2",
+          frameId: "frame-3",
+          kind: "upsert",
+          tableName: "tasks",
+          newValue: [{ id: "task-3" }],
+          startedAt: 140,
+          status: "success",
+        },
+        {
+          id: "mutation-3",
+          frameId: "frame-3",
+          kind: "delete",
+          tableName: "tasks",
+          ids: ["task-4"],
+          startedAt: 150,
+          status: "success",
+        },
+      ],
+    };
+
+    expect(getTraceQueriedRowCount(trace)).toBe(3);
+    expect(formatTraceQueriedRowCount(trace)).toBe("3+");
+    expect(getTraceActionCount(trace)).toBe(2);
+    expect(getTraceMutatedRowCount(trace)).toBe(4);
+  });
+
   it("orders call tree operations within a frame", () => {
     const rootFrame: TraceFrame = {
       id: "frame-1",
       kind: "action",
       name: "insertProject",
-      args: [],
+      arg: undefined,
       startedAt: 100,
       durationMs: 200,
       status: "success",
@@ -203,7 +374,7 @@ describe("HyperDBDevtools", () => {
           parentId: "frame-1",
           kind: "action",
           name: "insertFirstTask",
-          args: [],
+          arg: undefined,
           startedAt: 140,
           durationMs: 50,
           status: "success",
@@ -256,7 +427,7 @@ describe("HyperDBDevtools", () => {
       id: "trace-1",
       kind: "action",
       name: "insertProject",
-      args: [],
+      arg: undefined,
       startedAt: 100,
       durationMs: 200,
       status: "success",

@@ -4,6 +4,7 @@ import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Row } from "../../core/primitives";
 import { isRowInRange } from "../../core/query/tuple";
+import type { InferObject, Validator } from "../../schema/values";
 import {
   isGeneratorFunction,
   wrapGeneratorWithTraceMeta,
@@ -55,6 +56,100 @@ export type SelectorFn<TReturn, TParams extends any[]> = (
   ...args: TParams
 ) => TReturn;
 
+export type SelectorArgsSchema = Record<string, Validator<any>>;
+
+export type ObjectSelector<
+  TReturn,
+  TSchema extends SelectorArgsSchema = SelectorArgsSchema,
+> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
+  readonly kind: "selector";
+  readonly name: string;
+  readonly args: TSchema;
+  readonly handler: (
+    args: InferObject<TSchema>,
+  ) => Generator<unknown, TReturn, unknown>;
+};
+
+export type AnyObjectSelector = ((
+  args: any,
+) => Generator<unknown, any, unknown>) & {
+  readonly kind: "selector";
+  readonly name: string;
+  readonly args: SelectorArgsSchema;
+  readonly handler: (args: any) => Generator<unknown, any, unknown>;
+};
+
+export type SelectorReturn<TSelector> = TSelector extends (
+  args: any,
+) => Generator<unknown, infer TReturn, unknown>
+  ? TReturn
+  : never;
+
+export type SelectorArgs<TSelector> = TSelector extends (
+  args: infer TArgs,
+) => Generator<unknown, any, unknown>
+  ? TArgs
+  : never;
+
+export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
+  name: string;
+  args: TSchema;
+  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
+};
+
+const defineSelectorMetadata = <
+  TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
+>(
+  fn: TFn,
+  metadata: {
+    name: string;
+    args?: SelectorArgsSchema;
+    handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
+  },
+): TFn => {
+  Object.defineProperties(fn, {
+    kind: {
+      value: "selector",
+      enumerable: true,
+      configurable: false,
+    },
+    name: {
+      value: metadata.name,
+      enumerable: false,
+      configurable: true,
+    },
+    args: {
+      value: metadata.args,
+      enumerable: true,
+      configurable: false,
+    },
+    handler: {
+      value: metadata.handler,
+      enumerable: true,
+      configurable: false,
+    },
+  });
+
+  return fn;
+};
+
+const positionalTraceArg = (args: unknown[]): unknown => {
+  if (args.length === 0) return undefined;
+  if (args.length === 1) return args[0];
+  return args;
+};
+
+const assertSelectorName = (name: unknown): string => {
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error("Selector name is required");
+  }
+
+  return name;
+};
+
+export function selector<TSchema extends SelectorArgsSchema, TReturn>(
+  definition: SelectorDefinition<TSchema, TReturn>,
+): ObjectSelector<TReturn, TSchema>;
 export function selector<TReturn, TParams extends any[]>(
   fn: SelectorGeneratorFn<TReturn, TParams>,
 ): SelectorGeneratorFn<TReturn, TParams>;
@@ -62,9 +157,31 @@ export function selector<TReturn, TParams extends any[]>(
   fn: SelectorFn<TReturn, TParams>,
 ): SelectorGeneratorFn<TReturn, TParams>;
 export function selector<TReturn, TParams extends any[]>(
-  fn: SelectorGeneratorFn<TReturn, TParams> | SelectorFn<TReturn, TParams>,
+  input:
+    | SelectorDefinition<SelectorArgsSchema, TReturn>
+    | SelectorGeneratorFn<TReturn, TParams>
+    | SelectorFn<TReturn, TParams>,
 ): SelectorGeneratorFn<TReturn, TParams> {
-  return (...args: TParams) => {
+  if (typeof input !== "function") {
+    const displayName = assertSelectorName(input.name);
+    const wrapped = ((args: InferObject<typeof input.args>) =>
+      wrapGeneratorWithTraceMeta(
+        input.handler(args),
+        "selector",
+        displayName,
+        args,
+      )) as ObjectSelector<TReturn, typeof input.args>;
+
+    return defineSelectorMetadata(wrapped, {
+      name: displayName,
+      args: input.args,
+      handler: input.handler,
+    }) as unknown as SelectorGeneratorFn<TReturn, TParams>;
+  }
+
+  const fn = input;
+  const displayName = fn.name || "anonymous selector";
+  const wrapped = ((...args: TParams) => {
     let generator: Generator<unknown, TReturn, unknown>;
 
     if (isGeneratorFunction(fn)) {
@@ -81,14 +198,22 @@ export function selector<TReturn, TParams extends any[]>(
     return wrapGeneratorWithTraceMeta(
       generator,
       "selector",
-      fn.name || "anonymous selector",
-      args,
+      displayName,
+      positionalTraceArg(args),
     );
-  };
+  }) as SelectorGeneratorFn<TReturn, TParams>;
+
+  return defineSelectorMetadata(wrapped, {
+    name: displayName,
+    handler: fn as SelectorGeneratorFn<unknown, any[]>,
+  }) as SelectorGeneratorFn<TReturn, TParams>;
 }
 
 // TODO: maybe range tree instead?
-export const isNeedToRerunRange = (cmds: SelectRangeCmd[], ops: Op[]): boolean => {
+export const isNeedToRerunRange = (
+  cmds: SelectRangeCmd[],
+  ops: Op[],
+): boolean => {
   for (const cmd of cmds) {
     for (const bound of cmd.bounds) {
       for (const op of ops) {
@@ -213,6 +338,277 @@ export function initSelector<TReturn>(
       };
     },
     getSnapshot: () => currentResult!,
+  };
+}
+
+type SelectorCacheEntry<TReturn> = {
+  argsKey: string;
+  db: SubscribableDB;
+  selector: object;
+  gen: () => Generator<unknown, TReturn, unknown>;
+  currentResult: TReturn;
+  currentRevision: number;
+  selectRangeCmds: SelectRangeCmd[];
+  subscribers: Set<() => void>;
+  dbUnsubscribe?: () => void;
+  gcTimer?: ReturnType<typeof setTimeout>;
+};
+
+type SelectorCacheStore<TReturn> = {
+  subscribe: (callback: () => void) => () => void;
+  getSnapshot: () => TReturn;
+};
+
+const selectorCache = new WeakMap<
+  SubscribableDB,
+  WeakMap<object, Map<string, SelectorCacheEntry<unknown>>>
+>();
+const DEFAULT_SELECTOR_CACHE_GC_TIME = 30_000;
+
+const isPlainSerializableObject = (
+  value: object,
+): value is Record<string, unknown> => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+const serializeStableValue = (
+  value: unknown,
+  stack: WeakSet<object>,
+  path: string,
+): string => {
+  if (value === null) return "null";
+
+  switch (typeof value) {
+    case "string":
+      return `string:${JSON.stringify(value)}`;
+    case "number":
+      if (!Number.isFinite(value)) {
+        throw new Error(
+          `Cannot serialize selector args at ${path}: number must be finite`,
+        );
+      }
+      return `number:${String(value)}`;
+    case "boolean":
+      return `boolean:${String(value)}`;
+    case "bigint":
+      return `bigint:${value.toString()}`;
+    case "undefined":
+      throw new Error(
+        `Cannot serialize selector args at ${path}: undefined is not supported`,
+      );
+    case "function":
+      throw new Error(
+        `Cannot serialize selector args at ${path}: functions are not supported`,
+      );
+    case "symbol":
+      throw new Error(
+        `Cannot serialize selector args at ${path}: symbols are not supported`,
+      );
+    case "object":
+      break;
+  }
+
+  if (stack.has(value)) {
+    throw new Error(
+      `Cannot serialize selector args at ${path}: circular reference`,
+    );
+  }
+
+  stack.add(value);
+
+  try {
+    if (Array.isArray(value)) {
+      const items: string[] = [];
+      for (let index = 0; index < value.length; index++) {
+        if (!(index in value)) {
+          throw new Error(
+            `Cannot serialize selector args at ${path}[${index}]: sparse arrays are not supported`,
+          );
+        }
+
+        items.push(
+          serializeStableValue(value[index], stack, `${path}[${index}]`),
+        );
+      }
+      return `array:[${items.join(",")}]`;
+    }
+
+    if (!isPlainSerializableObject(value)) {
+      throw new Error(
+        `Cannot serialize selector args at ${path}: unsupported object type`,
+      );
+    }
+
+    const symbols = Object.getOwnPropertySymbols(value);
+    if (symbols.length > 0) {
+      throw new Error(
+        `Cannot serialize selector args at ${path}: symbol keys are not supported`,
+      );
+    }
+
+    const keys = Object.keys(value).sort();
+    const entries = keys.map((key) => {
+      const serializedKey = JSON.stringify(key);
+      const serializedValue = serializeStableValue(
+        value[key],
+        stack,
+        `${path}.${key}`,
+      );
+      return `${serializedKey}:${serializedValue}`;
+    });
+
+    return `object:{${entries.join(",")}}`;
+  } finally {
+    stack.delete(value);
+  }
+};
+
+export const stableSerializeSelectorArgs = (args: unknown): string =>
+  serializeStableValue(args, new WeakSet(), "$");
+
+const getSelectorCacheMap = (
+  db: SubscribableDB,
+  selector: object,
+): Map<string, SelectorCacheEntry<unknown>> => {
+  let bySelector = selectorCache.get(db);
+  if (!bySelector) {
+    bySelector = new WeakMap();
+    selectorCache.set(db, bySelector);
+  }
+
+  let byArgs = bySelector.get(selector);
+  if (!byArgs) {
+    byArgs = new Map();
+    bySelector.set(selector, byArgs);
+  }
+
+  return byArgs;
+};
+
+const deleteSelectorCacheEntry = (entry: SelectorCacheEntry<unknown>) => {
+  entry.dbUnsubscribe?.();
+  entry.dbUnsubscribe = undefined;
+  if (entry.gcTimer) {
+    clearTimeout(entry.gcTimer);
+    entry.gcTimer = undefined;
+  }
+
+  const byArgs = selectorCache.get(entry.db)?.get(entry.selector);
+  if (byArgs?.get(entry.argsKey) === entry) {
+    byArgs.delete(entry.argsKey);
+  }
+};
+
+const rerunSelectorCacheEntry = <TReturn>(
+  entry: SelectorCacheEntry<TReturn>,
+) => {
+  entry.currentResult = runSelector(entry.db, entry.gen, entry.selectRangeCmds);
+  entry.currentRevision = entry.db.getRevision();
+};
+
+const ensureSelectorCacheEntrySubscribed = <TReturn>(
+  entry: SelectorCacheEntry<TReturn>,
+  debugKey?: string,
+) => {
+  if (entry.dbUnsubscribe) return;
+
+  entry.dbUnsubscribe = entry.db.subscribe((ops, _traits, revision) => {
+    if (!isNeedToRerunRange(entry.selectRangeCmds, ops)) {
+      entry.currentRevision = revision;
+      if (debugKey) {
+        console.log("selector no need to rerun", debugKey, ops);
+      }
+      return;
+    }
+
+    rerunSelectorCacheEntry(entry);
+    for (const subscriber of entry.subscribers) {
+      subscriber();
+    }
+
+    if (!debugKey) return;
+    console.log("selector callback", debugKey);
+  });
+};
+
+export function initCachedSelector<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  options: {
+    debugKey?: string;
+    gcTime?: number;
+  } = {},
+): SelectorCacheStore<SelectorReturn<TSelector>> {
+  const argsKey = stableSerializeSelectorArgs(args);
+  const byArgs = getSelectorCacheMap(db, selector);
+  let entry = byArgs.get(argsKey) as
+    | SelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
+
+  if (!entry) {
+    const selectRangeCmds: SelectRangeCmd[] = [];
+    const gen = () => selector(args);
+    const currentResult = runSelector(db, gen, selectRangeCmds);
+    entry = {
+      argsKey,
+      db,
+      selector,
+      gen,
+      currentResult,
+      currentRevision: db.getRevision(),
+      selectRangeCmds,
+      subscribers: new Set(),
+    };
+    byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
+  } else {
+    if (entry.gcTimer) {
+      clearTimeout(entry.gcTimer);
+      entry.gcTimer = undefined;
+    }
+
+    if (entry.currentRevision !== db.getRevision()) {
+      rerunSelectorCacheEntry(entry);
+    }
+  }
+
+  return {
+    subscribe: (callback: () => void) => {
+      entry.subscribers.add(callback);
+      if (entry.gcTimer) {
+        clearTimeout(entry.gcTimer);
+        entry.gcTimer = undefined;
+      }
+
+      ensureSelectorCacheEntrySubscribed(entry, options.debugKey);
+
+      if (entry.currentRevision !== db.getRevision()) {
+        rerunSelectorCacheEntry(entry);
+        callback();
+      }
+
+      return () => {
+        entry.subscribers.delete(callback);
+
+        if (entry.subscribers.size > 0) return;
+
+        entry.dbUnsubscribe?.();
+        entry.dbUnsubscribe = undefined;
+
+        const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
+        if (gcTime > 0) {
+          entry.gcTimer = setTimeout(() => {
+            deleteSelectorCacheEntry(entry as SelectorCacheEntry<unknown>);
+          }, gcTime);
+          (entry.gcTimer as { unref?: () => void }).unref?.();
+          return;
+        }
+
+        deleteSelectorCacheEntry(entry as SelectorCacheEntry<unknown>);
+      };
+    },
+    getSnapshot: () => entry.currentResult,
   };
 }
 

@@ -2,6 +2,7 @@ import { runCommandGenerator } from "../runner";
 import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Trait } from "../../core/primitives";
+import type { InferObject, Validator } from "../../schema/values";
 import type { ExtractSchema, TableDefinition } from "../../schema/table";
 import { wrapGeneratorWithTraceMeta } from "../../tracing/metadata";
 import {
@@ -22,16 +23,118 @@ export type ActionFn<TReturn, TParams extends any[]> = (
   ...args: TParams
 ) => Generator<unknown, TReturn, unknown>;
 
+export type ActionArgsSchema = Record<string, Validator<any>>;
+
+export type ObjectAction<
+  TReturn,
+  TSchema extends ActionArgsSchema = ActionArgsSchema,
+> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
+  readonly kind: "action";
+  readonly name: string;
+  readonly args: TSchema;
+  readonly handler: (
+    args: InferObject<TSchema>,
+  ) => Generator<unknown, TReturn, unknown>;
+};
+
+export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
+  name: string;
+  args: TSchema;
+  handler: (
+    args: InferObject<TSchema>,
+  ) => Generator<unknown, TReturn, unknown>;
+};
+
+const defineActionMetadata = <
+  TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
+>(
+  fn: TFn,
+  metadata: {
+    name: string;
+    args?: ActionArgsSchema;
+    handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
+  },
+): TFn => {
+  Object.defineProperties(fn, {
+    kind: {
+      value: "action",
+      enumerable: true,
+      configurable: false,
+    },
+    name: {
+      value: metadata.name,
+      enumerable: false,
+      configurable: true,
+    },
+    args: {
+      value: metadata.args,
+      enumerable: true,
+      configurable: false,
+    },
+    handler: {
+      value: metadata.handler,
+      enumerable: true,
+      configurable: false,
+    },
+  });
+
+  return fn;
+};
+
+const positionalTraceArg = (args: unknown[]): unknown => {
+  if (args.length === 0) return undefined;
+  if (args.length === 1) return args[0];
+  return args;
+};
+
+const assertActionName = (name: unknown): string => {
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error("Action name is required");
+  }
+
+  return name;
+};
+
+export function action<TSchema extends ActionArgsSchema, TReturn>(
+  definition: ActionDefinition<TSchema, TReturn>,
+): ObjectAction<TReturn, TSchema>;
 export function action<TReturn, TParams extends any[]>(
   fn: ActionFn<TReturn, TParams>,
+): ActionFn<TReturn, TParams>;
+export function action<TReturn, TParams extends any[]>(
+  input: ActionDefinition<ActionArgsSchema, TReturn> | ActionFn<TReturn, TParams>,
 ): ActionFn<TReturn, TParams> {
-  return ((...args: TParams) =>
+  if (typeof input !== "function") {
+    const displayName = assertActionName(input.name);
+    const wrapped = ((args: InferObject<typeof input.args>) =>
+      wrapGeneratorWithTraceMeta(
+        input.handler(args),
+        "action",
+        displayName,
+        args,
+      )) as ObjectAction<TReturn, typeof input.args>;
+
+    return defineActionMetadata(wrapped, {
+      name: displayName,
+      args: input.args,
+      handler: input.handler,
+    }) as unknown as ActionFn<TReturn, TParams>;
+  }
+
+  const fn = input;
+  const displayName = fn.name || "anonymous action";
+  const wrapped = ((...args: TParams) =>
     wrapGeneratorWithTraceMeta(
       fn(...args),
       "action",
-      fn.name || "anonymous action",
-      args,
+      displayName,
+      positionalTraceArg(args),
     )) as ActionFn<TReturn, TParams>;
+
+  return defineActionMetadata(wrapped, {
+    name: displayName,
+    handler: fn as ActionFn<unknown, any[]>,
+  }) as ActionFn<TReturn, TParams>;
 }
 
 export function* insert<TTable extends TableDefinition<any, any>>(

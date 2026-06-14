@@ -76,6 +76,7 @@ export interface TableDefinition<
   schemaFields?: ValidatorSchema;
   indexes: I;
   idIndexName: string;
+  v(): Validator<T>;
   index<
     const TName extends string,
     const TCols extends readonly IndexableColumn<T>[],
@@ -186,10 +187,19 @@ export function validateIndexes(
 }
 
 function addIndexMethod<T, I extends AnyIndexDefinitions>(
-  tableDef: Omit<TableDefinition<T, I>, "index">,
+  tableDef: Omit<TableDefinition<T, I>, "index" | "v">,
 ): TableDefinition<T, I> {
   return {
     ...tableDef,
+    v() {
+      if (!tableDef.schemaValidator) {
+        throw new Error(
+          `Table ${tableDef.tableName} does not have a schema validator`,
+        );
+      }
+
+      return tableDef.schemaValidator;
+    },
     index(
       name: string,
       columns: readonly IndexableColumn<T>[],

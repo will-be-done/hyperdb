@@ -12,8 +12,10 @@ const mocks = vi.hoisted(() => ({
   db: undefined as unknown as MockDB,
   refs: [] as { current: unknown }[],
   setResult: vi.fn(),
+  initCachedSelector: vi.fn(),
   runSelectorAsync: vi.fn(),
   isNeedToRerunRange: vi.fn(),
+  stableSerializeSelectorArgs: vi.fn(),
 }));
 
 vi.mock("react", () => ({
@@ -28,7 +30,7 @@ vi.mock("react", () => ({
     return ref;
   }),
   useState: vi.fn((initial) => [initial, mocks.setResult]),
-  useSyncExternalStore: vi.fn(),
+  useSyncExternalStore: vi.fn((_subscribe, getSnapshot) => getSnapshot()),
 }));
 
 vi.mock("./context", () => ({
@@ -36,14 +38,18 @@ vi.mock("./context", () => ({
 }));
 
 vi.mock("../hyperdb/commands/query/selector", () => ({
+  initCachedSelector: (...args: unknown[]) =>
+    mocks.initCachedSelector(...args),
   initSelector: vi.fn(),
   isNeedToRerunRange: (...args: unknown[]) =>
     mocks.isNeedToRerunRange(...args),
   runSelectorAsync: (...args: unknown[]) => mocks.runSelectorAsync(...args),
   select: vi.fn(),
+  stableSerializeSelectorArgs: (...args: unknown[]) =>
+    mocks.stableSerializeSelectorArgs(...args),
 }));
 
-import { useAsyncSelector } from "./hooks";
+import { useAsyncSelector, useSyncSelector } from "./hooks";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -90,8 +96,58 @@ describe("useAsyncSelector", () => {
     mocks.db = createMockDB();
     mocks.refs = [];
     mocks.setResult.mockReset();
+    mocks.initCachedSelector.mockReset();
     mocks.runSelectorAsync.mockReset();
     mocks.isNeedToRerunRange.mockReset();
+    mocks.stableSerializeSelectorArgs.mockReset();
+    mocks.stableSerializeSelectorArgs.mockReturnValue("args-key");
+  });
+
+  it("runs object-form sync selectors through the shared cache", () => {
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    const store = {
+      subscribe: vi.fn(() => vi.fn()),
+      getSnapshot: vi.fn(() => ["task-1"]),
+    };
+    mocks.initCachedSelector.mockReturnValue(store);
+
+    const result = useSyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+      debugKey: "projectTasks",
+      gcTime: 30_000,
+    });
+
+    expect(result).toEqual(["task-1"]);
+    expect(mocks.initCachedSelector).toHaveBeenCalledWith(
+      mocks.db,
+      selector,
+      { projectId: "project-1" },
+      {
+        debugKey: "projectTasks",
+        gcTime: 30_000,
+      },
+    );
+  });
+
+  it("returns default value for disabled sync selectors without creating cache entries", () => {
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+
+    const result = useSyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      enabled: false,
+      defaultValue: [],
+    });
+
+    expect(result).toEqual([]);
+    expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
+    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
   });
 
   it("collapses overlapping subscription reruns and applies only the latest async result", async () => {
@@ -179,5 +235,74 @@ describe("useAsyncSelector", () => {
 
     expect(mocks.setResult).not.toHaveBeenCalled();
     expect(selectRangeCmdsRef.current).toEqual([]);
+  });
+
+  it("returns default value for disabled async selectors without running or subscribing", () => {
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+
+    const result = useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      enabled: false,
+      defaultValue: [],
+      debugKey: "projectTasks",
+    });
+
+    expect(result).toEqual([]);
+    expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
+    expect(mocks.runSelectorAsync).not.toHaveBeenCalled();
+    expect(mocks.db.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("runs object-form async selectors with args", async () => {
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+
+    mocks.runSelectorAsync.mockImplementation((_db, gen) => {
+      gen();
+      return Promise.resolve(["task-1"]);
+    });
+
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+
+    await flushPromises();
+
+    expect(selector).toHaveBeenCalledWith({ projectId: "project-1" });
+    expect(mocks.runSelectorAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
+    expect(mocks.setResult).toHaveBeenCalledWith(["task-1"]);
+  });
+
+  it("resets object-form async selector result when args key changes", () => {
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+    mocks.runSelectorAsync.mockReturnValue(new Promise(() => {}));
+    mocks.stableSerializeSelectorArgs
+      .mockReturnValueOnce("project-1")
+      .mockReturnValueOnce("project-2");
+
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: ["loading-1"],
+    });
+    mocks.cleanup?.();
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-2" },
+      defaultValue: ["loading-2"],
+    });
+
+    expect(mocks.setResult).toHaveBeenCalledWith(["loading-1"]);
+    expect(mocks.setResult).toHaveBeenCalledWith(["loading-2"]);
+    expect(mocks.runSelectorAsync).toHaveBeenCalledTimes(2);
   });
 });
