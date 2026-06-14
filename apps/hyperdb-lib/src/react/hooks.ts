@@ -20,8 +20,8 @@ import {
   type SelectorArgs,
   type SelectorReturn,
 } from "../hyperdb/commands/query/selector";
+import { asyncDispatch, syncDispatch } from "../hyperdb/commands/action/builders";
 import { useDB } from "./context";
-import { asyncDispatch, syncDispatch } from "../hyperdb";
 
 type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;
@@ -65,7 +65,7 @@ const isObjectSelectorOptions = (
   value: unknown,
 ): value is {
   selector: AnyObjectSelector;
-  args: any;
+  args: SelectorArgs<AnyObjectSelector>;
   enabled?: boolean;
   defaultValue?: unknown;
   debugKey?: string;
@@ -95,8 +95,8 @@ export function useSyncSelector<TReturn>(
 export function useSyncSelector<TReturn>(
   input:
     | (() => Generator<unknown, TReturn, unknown>)
-    | SyncSelectorEnabledOptions<ObjectSelector<TReturn, any>>
-    | SyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn, any>>,
+    | SyncSelectorEnabledOptions<ObjectSelector<TReturn>>
+    | SyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn>>,
   deps: DependencyList = [],
   debugKey?: string,
 ): TReturn {
@@ -159,8 +159,8 @@ export function useAsyncSelector<TReturn>(
 export function useAsyncSelector<TReturn>(
   input:
     | (() => Generator<unknown, TReturn, unknown>)
-    | AsyncSelectorEnabledOptions<ObjectSelector<TReturn, any>>
-    | AsyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn, any>>,
+    | AsyncSelectorEnabledOptions<ObjectSelector<TReturn>>
+    | AsyncSelectorMaybeDisabledOptions<ObjectSelector<TReturn>>,
   deps: DependencyList = [],
   debugKey?: string,
 ): TReturn | undefined {
