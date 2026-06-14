@@ -1014,7 +1014,7 @@ export const getTraceActionCount = (trace: RootTrace): number =>
 
 const formatTraceActions = (trace: RootTrace): string => {
   const actionCount = getTraceActionCount(trace);
-  return `${actionCount} ${actionCount === 1 ? "action" : "actions"}`;
+  return `${actionCount} act`;
 };
 
 type CallTreeOperation =
@@ -1604,8 +1604,8 @@ const DevtoolsPanelInner = ({
                   </RowTop>
                   <RowStats>
                     <RowMeta>
-                      <span>{trace.commandEvents.length} sel</span>
                       <span>{formatTraceQueriedRows(trace)}</span>
+                      <span>{trace.commandEvents.length} sel</span>
                       <span>{formatTraceActions(trace)}</span>
                       <span>{formatTime(trace.startedAt)}</span>
                     </RowMeta>

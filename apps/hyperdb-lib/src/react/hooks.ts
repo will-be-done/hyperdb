@@ -187,6 +187,7 @@ export function useAsyncSelector<TReturn>(
     if (isObjectForm) {
       setResult(objectDefaultValue as TReturn | undefined);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [argsKey]);
 
   useEffect(() => {
