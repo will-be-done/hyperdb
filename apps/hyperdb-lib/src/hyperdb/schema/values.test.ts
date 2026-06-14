@@ -82,6 +82,27 @@ describe("validators", () => {
     });
   });
 
+  it("makes object validator fields shallowly optional", () => {
+    const validator = v.partial(
+      v.object({
+        id: v.string(),
+        count: v.number(),
+        done: v.boolean(),
+      }),
+    );
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({});
+    assertType<Value>({ count: 1 });
+
+    expect(assertValid(validator, { count: 1 })).toEqual({ count: 1 });
+    expect(assertValid(validator, {})).toEqual({});
+    expect(() => assertValid(validator, { count: "1" })).toThrow(
+      /expected finite number at count/,
+    );
+  });
+
   it("rejects undefined stored values, including inside arrays", () => {
     expect(() => assertValid(v.string(), undefined)).toThrow(
       /undefined is not a valid stored value at <root>/,
