@@ -29,7 +29,7 @@ describe("devtool tracing store", () => {
   it("does not store traces while inactive", () => {
     const store = new HyperDBTraceStore();
     const context = startRootTrace(
-      createTraceFrameMeta("action", "inactive", []),
+      createTraceFrameMeta("action", "inactive", undefined),
       store,
     );
 
@@ -43,7 +43,7 @@ describe("devtool tracing store", () => {
 
     for (const name of ["one", "two", "three"]) {
       const context = startRootTrace(
-        createTraceFrameMeta("action", name, []),
+        createTraceFrameMeta("action", name, undefined),
         store,
       );
       expect(context).toBeDefined();
@@ -83,7 +83,7 @@ describe("devtool tracing store", () => {
     });
 
     const context = startRootTrace(
-      createTraceFrameMeta("action", "coalesced", []),
+      createTraceFrameMeta("action", "coalesced", undefined),
       store,
     )!;
     endTraceSuccess(context);
@@ -103,7 +103,7 @@ describe("devtool tracing store", () => {
 
     for (const name of ["one", "two", "three"]) {
       const context = startRootTrace(
-        createTraceFrameMeta("action", name, []),
+        createTraceFrameMeta("action", name, undefined),
         store,
       );
       expect(context).toBeDefined();
@@ -126,13 +126,13 @@ describe("devtool tracing store", () => {
     const unsubscribe = store.subscribe(() => {});
 
     const success = startRootTrace(
-      createTraceFrameMeta("selector", "success", [1]),
+      createTraceFrameMeta("selector", "success", { id: "task-1" }),
       store,
     )!;
     endTraceSuccess(success);
 
     const failure = startRootTrace(
-      createTraceFrameMeta("action", "failure", []),
+      createTraceFrameMeta("action", "failure", undefined),
       store,
     )!;
     endTraceError(failure, new Error("boom"));
@@ -149,8 +149,10 @@ describe("devtool tracing store", () => {
   it("attaches nested frames under the active root", () => {
     const store = new HyperDBTraceStore();
     const unsubscribe = store.subscribe(() => {});
-    const rootMeta = createTraceFrameMeta("action", "root", []);
-    const childMeta = createTraceFrameMeta("selector", "child", ["arg"]);
+    const rootMeta = createTraceFrameMeta("action", "root", undefined);
+    const childMeta = createTraceFrameMeta("selector", "child", {
+      id: "task-1",
+    });
     const context = startRootTrace(rootMeta, store)!;
 
     enterFramePath(context, [rootMeta, childMeta]);
@@ -159,7 +161,7 @@ describe("devtool tracing store", () => {
     const trace = store.getSnapshot()[0]!;
     expect(trace.frames[0]?.children).toHaveLength(1);
     expect(trace.frames[0]?.children[0]?.name).toBe("child");
-    expect(trace.frames[0]?.children[0]?.args).toEqual(["arg"]);
+    expect(trace.frames[0]?.children[0]?.arg).toEqual({ id: "task-1" });
 
     unsubscribe();
   });

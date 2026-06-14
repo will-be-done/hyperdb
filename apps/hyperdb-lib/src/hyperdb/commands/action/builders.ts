@@ -80,6 +80,12 @@ const defineActionMetadata = <
   return fn;
 };
 
+const positionalTraceArg = (args: unknown[]): unknown => {
+  if (args.length === 0) return undefined;
+  if (args.length === 1) return args[0];
+  return args;
+};
+
 export function action<TSchema extends ActionArgsSchema, TReturn>(
   definition: ActionDefinition<TSchema, TReturn>,
 ): ObjectAction<InferObject<TSchema>, TReturn, TSchema>;
@@ -96,7 +102,7 @@ export function action<TReturn, TParams extends any[]>(
         input.handler(args),
         "action",
         displayName,
-        [args],
+        args,
       )) as ObjectAction<InferObject<typeof input.args>, TReturn, typeof input.args>;
 
     return defineActionMetadata(wrapped, {
@@ -113,7 +119,7 @@ export function action<TReturn, TParams extends any[]>(
       fn(...args),
       "action",
       displayName,
-      args,
+      positionalTraceArg(args),
     )) as ActionFn<TReturn, TParams>;
 
   return defineActionMetadata(wrapped, {

@@ -49,9 +49,9 @@ export const wrapGeneratorWithTraceMeta = <TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   kind: TraceKind,
   name: string,
-  args: unknown[],
+  arg: unknown,
 ): Generator<unknown, TReturn, unknown> => {
-  const meta = createTraceFrameMeta(kind, name, args);
+  const meta = createTraceFrameMeta(kind, name, arg);
 
   const annotateResult = (
     result: IteratorResult<unknown, TReturn>,

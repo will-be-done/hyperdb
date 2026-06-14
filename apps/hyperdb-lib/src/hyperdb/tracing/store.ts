@@ -16,7 +16,7 @@ export type TraceFrameMeta = {
   id: string;
   kind: TraceKind;
   name: string;
-  args: unknown[];
+  arg: unknown;
 };
 
 export type TraceFrame = {
@@ -24,7 +24,7 @@ export type TraceFrame = {
   parentId?: string;
   kind: TraceKind;
   name: string;
-  args: unknown[];
+  arg: unknown;
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
@@ -76,7 +76,7 @@ export type RootTrace = {
   dbLabel?: string;
   kind: TraceKind;
   name: string;
-  args: unknown[];
+  arg: unknown;
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
@@ -291,12 +291,12 @@ export type TraceContext = {
 export const createTraceFrameMeta = (
   kind: TraceKind,
   name: string,
-  args: unknown[],
+  arg: unknown,
 ): TraceFrameMeta => ({
   id: nextId("meta"),
   kind,
   name,
-  args,
+  arg,
 });
 
 const createFrame = (
@@ -308,7 +308,7 @@ const createFrame = (
   parentId,
   kind: meta.kind,
   name: meta.name,
-  args: meta.args,
+  arg: meta.arg,
   startedAt,
   status: "running",
   children: [],
@@ -349,7 +349,7 @@ export const startRootTrace = (
     dbLabel: dbInfo?.label,
     kind: meta.kind,
     name: meta.name,
-    args: meta.args,
+    arg: meta.arg,
     startedAt,
     status: "running",
     frames: [rootFrame],
@@ -554,6 +554,6 @@ export const endMutationEventError = (
 };
 
 export const anonymousTraceMeta = (): TraceFrameMeta =>
-  createTraceFrameMeta("unknown", "anonymous", []);
+  createTraceFrameMeta("unknown", "anonymous", undefined);
 
 export type SerializableTraceValue = string | number | boolean | null | Value;

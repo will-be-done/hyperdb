@@ -136,7 +136,7 @@ describe("action", () => {
     expect(createTask.name).toBe("createTask");
     expect(createTask.args).toBe(args);
     expect(traceMeta?.name).toBe("createTask");
-    expect(traceMeta?.args).toEqual([{ id: "task-1" }]);
+    expect(traceMeta?.arg).toEqual({ id: "task-1" });
   });
 
   it("should dispatch actions", () => {

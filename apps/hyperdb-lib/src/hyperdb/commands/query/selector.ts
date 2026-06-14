@@ -69,25 +69,22 @@ export type ObjectSelector<
   readonly handler: (args: TArgs) => Generator<unknown, TReturn, unknown>;
 };
 
-export type SelectorReturn<TSelector> =
-  TSelector extends (args: any) => Generator<unknown, infer TReturn, unknown>
-    ? TReturn
-    : never;
+export type SelectorReturn<TSelector> = TSelector extends (
+  args: any,
+) => Generator<unknown, infer TReturn, unknown>
+  ? TReturn
+  : never;
 
-export type SelectorArgs<TSelector> =
-  TSelector extends (args: infer TArgs) => Generator<unknown, any, unknown>
-    ? TArgs
-    : never;
+export type SelectorArgs<TSelector> = TSelector extends (
+  args: infer TArgs,
+) => Generator<unknown, any, unknown>
+  ? TArgs
+  : never;
 
-export type SelectorDefinition<
-  TSchema extends SelectorArgsSchema,
-  TReturn,
-> = {
+export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   name?: string;
   args: TSchema;
-  handler: (
-    args: InferObject<TSchema>,
-  ) => Generator<unknown, TReturn, unknown>;
+  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
 
 const defineSelectorMetadata = <
@@ -126,6 +123,12 @@ const defineSelectorMetadata = <
   return fn;
 };
 
+const positionalTraceArg = (args: unknown[]): unknown => {
+  if (args.length === 0) return undefined;
+  if (args.length === 1) return args[0];
+  return args;
+};
+
 export function selector<TSchema extends SelectorArgsSchema, TReturn>(
   definition: SelectorDefinition<TSchema, TReturn>,
 ): ObjectSelector<InferObject<TSchema>, TReturn, TSchema>;
@@ -149,7 +152,7 @@ export function selector<TReturn, TParams extends any[]>(
         input.handler(args),
         "selector",
         displayName,
-        [args],
+        args,
       )) as ObjectSelector<
       InferObject<typeof input.args>,
       TReturn,
@@ -183,7 +186,7 @@ export function selector<TReturn, TParams extends any[]>(
       generator,
       "selector",
       displayName,
-      args,
+      positionalTraceArg(args),
     );
   }) as SelectorGeneratorFn<TReturn, TParams>;
 
@@ -194,7 +197,10 @@ export function selector<TReturn, TParams extends any[]>(
 }
 
 // TODO: maybe range tree instead?
-export const isNeedToRerunRange = (cmds: SelectRangeCmd[], ops: Op[]): boolean => {
+export const isNeedToRerunRange = (
+  cmds: SelectRangeCmd[],
+  ops: Op[],
+): boolean => {
   for (const cmd of cmds) {
     for (const bound of cmd.bounds) {
       for (const op of ops) {
@@ -344,6 +350,7 @@ const selectorCache = new WeakMap<
   SubscribableDB,
   WeakMap<object, Map<string, SelectorCacheEntry<unknown>>>
 >();
+const DEFAULT_SELECTOR_CACHE_GC_TIME = 30_000;
 
 const isPlainSerializableObject = (
   value: object,
@@ -364,7 +371,9 @@ const serializeStableValue = (
       return `string:${JSON.stringify(value)}`;
     case "number":
       if (!Number.isFinite(value)) {
-        throw new Error(`Cannot serialize selector args at ${path}: number must be finite`);
+        throw new Error(
+          `Cannot serialize selector args at ${path}: number must be finite`,
+        );
       }
       return `number:${String(value)}`;
     case "boolean":
@@ -372,17 +381,25 @@ const serializeStableValue = (
     case "bigint":
       return `bigint:${value.toString()}`;
     case "undefined":
-      throw new Error(`Cannot serialize selector args at ${path}: undefined is not supported`);
+      throw new Error(
+        `Cannot serialize selector args at ${path}: undefined is not supported`,
+      );
     case "function":
-      throw new Error(`Cannot serialize selector args at ${path}: functions are not supported`);
+      throw new Error(
+        `Cannot serialize selector args at ${path}: functions are not supported`,
+      );
     case "symbol":
-      throw new Error(`Cannot serialize selector args at ${path}: symbols are not supported`);
+      throw new Error(
+        `Cannot serialize selector args at ${path}: symbols are not supported`,
+      );
     case "object":
       break;
   }
 
   if (stack.has(value)) {
-    throw new Error(`Cannot serialize selector args at ${path}: circular reference`);
+    throw new Error(
+      `Cannot serialize selector args at ${path}: circular reference`,
+    );
   }
 
   stack.add(value);
@@ -397,7 +414,9 @@ const serializeStableValue = (
           );
         }
 
-        items.push(serializeStableValue(value[index], stack, `${path}[${index}]`));
+        items.push(
+          serializeStableValue(value[index], stack, `${path}[${index}]`),
+        );
       }
       return `array:[${items.join(",")}]`;
     }
@@ -471,11 +490,7 @@ const deleteSelectorCacheEntry = (entry: SelectorCacheEntry<unknown>) => {
 const rerunSelectorCacheEntry = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
 ) => {
-  entry.currentResult = runSelector(
-    entry.db,
-    entry.gen,
-    entry.selectRangeCmds,
-  );
+  entry.currentResult = runSelector(entry.db, entry.gen, entry.selectRangeCmds);
   entry.currentRevision = entry.db.getRevision();
 };
 
@@ -568,11 +583,12 @@ export function initCachedSelector<TSelector extends ObjectSelector<any, any>>(
         entry.dbUnsubscribe?.();
         entry.dbUnsubscribe = undefined;
 
-        const gcTime = options.gcTime ?? 0;
+        const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
         if (gcTime > 0) {
           entry.gcTimer = setTimeout(() => {
             deleteSelectorCacheEntry(entry as SelectorCacheEntry<unknown>);
           }, gcTime);
+          (entry.gcTimer as { unref?: () => void }).unref?.();
           return;
         }
 

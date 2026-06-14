@@ -139,7 +139,7 @@ describe("selector", () => {
     expect(metadataSelector.name).toBe("metadataSelector");
     expect(metadataSelector.args).toBe(args);
     expect(traceMeta?.name).toBe("metadataSelector");
-    expect(traceMeta?.args).toEqual([{ id: "task-1" }]);
+    expect(traceMeta?.arg).toEqual({ id: "task-1" });
   });
 
   test("cached object-form selectors share one DB subscription for same args", () => {
@@ -256,6 +256,46 @@ describe("selector", () => {
     expect(snapshots).toEqual([["matching"]]);
 
     unsubscribe();
+  });
+
+  test("cached object-form selector keeps entries for 30 seconds by default", () => {
+    vi.useFakeTimers();
+
+    const defaultGcTasksTable = defineTable("defaultGcSelectorTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = createTestDB(defaultGcTasksTable);
+    let runCount = 0;
+
+    const defaultGcTasks = selector({
+      args: { projectId: v.string() },
+      handler: function* defaultGcTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(defaultGcTasksTable, "project").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    initCachedSelector(testDb, defaultGcTasks, {
+      projectId: "project-1",
+    }).subscribe(() => {})();
+
+    const cachedAgain = initCachedSelector(testDb, defaultGcTasks, {
+      projectId: "project-1",
+    });
+
+    expect(runCount).toBe(1);
+
+    cachedAgain.subscribe(() => {})();
+    vi.advanceTimersByTime(30_000);
+
+    initCachedSelector(testDb, defaultGcTasks, {
+      projectId: "project-1",
+    });
+
+    expect(runCount).toBe(2);
   });
 
   test("cached object-form selector keeps entries until gcTime expires", () => {
