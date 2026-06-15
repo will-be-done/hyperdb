@@ -25,7 +25,10 @@ import {
 } from "../tracing/metadata";
 import {
   anonymousTraceMeta,
+  beginMutationEvent,
   beginSelectEvent,
+  endMutationEventError,
+  endMutationEventSuccess,
   endSelectEventError,
   endSelectEventSuccess,
   endTraceError,
@@ -35,6 +38,7 @@ import {
   markTraceFrameCached,
   startRootTrace,
   type TraceContext,
+  type TraceFrame,
 } from "../tracing/store";
 
 export type ChildMemoEntry = {
@@ -56,6 +60,8 @@ export type CommandRunnerOptions = {
   allowWrites?: boolean;
   selectRangeCmds?: SelectRangeCmd[];
   traceContext?: TraceContext;
+  skipRootTrace?: boolean;
+  skipChildTrace?: boolean;
   // Ops that triggered this rerun. Undefined/empty on a first run, which forces
   // every nested selector to recompute.
   ops?: Op[];
@@ -148,6 +154,65 @@ const describeUnsupportedCommand = (cmd: unknown) => {
   }
 };
 
+type MutationTraceRecorder = {
+  recordsMutationTraceEvents?(): boolean;
+};
+
+const recordsMutationTraceEvents = (db: HyperDB): boolean =>
+  (db as MutationTraceRecorder).recordsMutationTraceEvents?.() === true;
+
+function* runMutationCommand(
+  db: HyperDB,
+  traceContext: TraceContext | undefined,
+  traceFrame: TraceFrame | undefined,
+  input:
+    | {
+        kind: "insert" | "upsert";
+        tableName: string;
+        rows: unknown[];
+        run: () => Generator<DBCmd, void, unknown>;
+      }
+    | {
+        kind: "delete";
+        tableName: string;
+        ids: string[];
+        run: () => Generator<DBCmd, void, unknown>;
+      },
+): Generator<DBCmd, void, unknown> {
+  const shouldRecordInRunner =
+    traceContext !== undefined &&
+    traceFrame !== undefined &&
+    !recordsMutationTraceEvents(db);
+  const mutationEvent = shouldRecordInRunner
+    ? beginMutationEvent(traceContext, traceFrame, {
+        kind: input.kind,
+        tableName: input.tableName,
+        ...(input.kind === "delete"
+          ? { ids: input.ids }
+          : { rows: input.rows, newValue: input.rows }),
+      })
+    : undefined;
+
+  try {
+    yield* input.run();
+  } catch (error) {
+    if (traceContext && mutationEvent) {
+      endMutationEventError(traceContext, mutationEvent, error);
+    }
+    throw error;
+  }
+
+  if (traceContext && mutationEvent) {
+    endMutationEventSuccess(
+      traceContext,
+      mutationEvent,
+      input.kind === "delete"
+        ? { ids: input.ids }
+        : { rows: input.rows, newValue: input.rows },
+    );
+  }
+}
+
 export function* runCommandGenerator<TReturn>(
   db: HyperDB,
   gen: Generator<unknown, TReturn, unknown>,
@@ -155,11 +220,13 @@ export function* runCommandGenerator<TReturn>(
 ): Generator<DBCmd, TReturn, unknown> {
   const traceContext =
     options.traceContext ??
-    startRootTrace(
-      getGeneratorTraceMeta(gen) ?? anonymousTraceMeta(),
-      undefined,
-      db,
-    );
+    (options.skipRootTrace
+      ? undefined
+      : startRootTrace(
+          getGeneratorTraceMeta(gen) ?? anonymousTraceMeta(),
+          undefined,
+          db,
+        ));
   const ownsTraceContext = traceContext !== undefined && !options.traceContext;
   const scopedDB = traceContext ? withTraceContextTrait(db, traceContext) : db;
 
@@ -169,7 +236,10 @@ export function* runCommandGenerator<TReturn>(
     while (!result.done) {
       const cmd = result.value;
       const traceFrame = traceContext
-        ? enterFramePath(traceContext, getCommandFramePath(cmd))
+        ? enterFramePath(
+            traceContext,
+            options.skipChildTrace ? undefined : getCommandFramePath(cmd),
+          )
         : undefined;
 
       if (isSelectRangeCmd(cmd)) {
@@ -232,7 +302,12 @@ export function* runCommandGenerator<TReturn>(
           // we did not rescan them this run. The entry (and its whole nested
           // childMemo) is preserved untouched.
           options.selectRangeCmds?.push(...memo.selectRangeCmds);
-          if (traceContext && traceFrame) {
+          if (
+            traceContext &&
+            traceFrame &&
+            !options.skipChildTrace &&
+            !cmd.skipTrace?.childTrace
+          ) {
             markTraceFrameCached(traceContext, traceFrame);
           }
           result = gen.next(memo.result);
@@ -263,6 +338,9 @@ export function* runCommandGenerator<TReturn>(
             childMemo: scopedMemo,
             visited: scopedVisited,
             traceContext,
+            skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
+            skipChildTrace:
+              options.skipChildTrace || cmd.skipTrace?.childTrace,
           });
 
           if (argsKey != null) {
@@ -287,19 +365,40 @@ export function* runCommandGenerator<TReturn>(
           throw new Error("Writes are disallowed for command: insert");
         }
 
-        result = gen.next(yield* scopedDB.insert(cmd.table, cmd.values));
+        result = gen.next(
+          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+            kind: "insert",
+            tableName: cmd.table.tableName,
+            rows: cmd.values,
+            run: () => scopedDB.insert(cmd.table, cmd.values),
+          }),
+        );
       } else if (isUpsertActionCmd(cmd)) {
         if (!options.allowWrites) {
           throw new Error("Writes are disallowed for command: upsert");
         }
 
-        result = gen.next(yield* scopedDB.upsert(cmd.table, cmd.values));
+        result = gen.next(
+          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+            kind: "upsert",
+            tableName: cmd.table.tableName,
+            rows: cmd.values,
+            run: () => scopedDB.upsert(cmd.table, cmd.values),
+          }),
+        );
       } else if (isDeleteActionCmd(cmd)) {
         if (!options.allowWrites) {
           throw new Error("Writes are disallowed for command: delete");
         }
 
-        result = gen.next(yield* scopedDB.delete(cmd.table, cmd.values));
+        result = gen.next(
+          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+            kind: "delete",
+            tableName: cmd.table.tableName,
+            ids: cmd.values,
+            run: () => scopedDB.delete(cmd.table, cmd.values),
+          }),
+        );
       } else if (isGetCurrentTraitsCmd(cmd)) {
         result = gen.next(scopedDB.getTraits());
       } else if (isDBCmd(cmd)) {

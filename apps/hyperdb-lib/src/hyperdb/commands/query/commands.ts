@@ -56,6 +56,10 @@ export type RunSelectorCmd = {
   makeBody: () => Generator<unknown, unknown, unknown>;
   // Display name for trace frames.
   name: string;
+  skipTrace?: {
+    childTrace: boolean;
+    rootTrace: boolean;
+  };
 };
 
 export const isRunSelectorCmd = (cmd: unknown): cmd is RunSelectorCmd =>

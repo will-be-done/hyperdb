@@ -14,6 +14,7 @@ import {
   type MutationEvent,
   type RootTrace,
   type SelectCommandEvent,
+  type TraceDBInfo,
   type TraceFrame,
   type TraceStatus,
 } from "../hyperdb/tracing/store";
@@ -97,6 +98,48 @@ const writeStoredListWidth = (width: number): void => {
   } catch {}
 };
 
+const panelHeightKey = "hyperdb-devtools-panel-height";
+const defaultPanelHeight = 460;
+const minPanelHeight = 280;
+
+const readStoredPanelHeight = (): number => {
+  try {
+    if (typeof globalThis.localStorage === "undefined")
+      return defaultPanelHeight;
+    const stored = globalThis.localStorage.getItem(panelHeightKey);
+    if (stored === null) return defaultPanelHeight;
+    const n = Number(stored);
+    return Number.isFinite(n) ? Math.max(minPanelHeight, n) : defaultPanelHeight;
+  } catch {
+    return defaultPanelHeight;
+  }
+};
+
+const writeStoredPanelHeight = (height: number): void => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return;
+    globalThis.localStorage.setItem(panelHeightKey, String(height));
+  } catch {}
+};
+
+const skipCachedKey = "hyperdb-devtools-skip-cached";
+
+const readStoredSkipCached = (): boolean => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return false;
+    return globalThis.localStorage.getItem(skipCachedKey) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const writeStoredSkipCached = (skipCached: boolean): void => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return;
+    globalThis.localStorage.setItem(skipCachedKey, String(skipCached));
+  } catch {}
+};
+
 const useTraces = (maxTraces: number): RootTrace[] => {
   useEffect(() => {
     hyperDBTraceStore.setMaxTraces(maxTraces);
@@ -138,6 +181,77 @@ const getTraceDBOptions = (traces: RootTrace[]): TraceDBOption[] => {
 
   return [...optionMap.values()];
 };
+
+const addCurrentDBOption = (
+  options: TraceDBOption[],
+  currentDBInfo: TraceDBInfo | undefined,
+): TraceDBOption[] => {
+  if (!currentDBInfo) return options;
+  if (!options.some((option) => option.id !== unassignedDBId)) return options;
+
+  let hasCurrentDB = false;
+  const nextOptions = options.map((option) => {
+    if (option.id !== currentDBInfo.id) return option;
+
+    hasCurrentDB = true;
+    return {
+      ...option,
+      label: currentDBInfo.label,
+    };
+  });
+
+  if (!hasCurrentDB) {
+    nextOptions.push({
+      id: currentDBInfo.id,
+      label: currentDBInfo.label,
+      traceCount: 0,
+    });
+  }
+
+  return nextOptions;
+};
+
+const mergeDBOptions = (
+  knownOptions: TraceDBOption[],
+  observedOptions: TraceDBOption[],
+): TraceDBOption[] => {
+  const observedById = new Map(
+    observedOptions.map((option) => [option.id, option]),
+  );
+  const mergedOptions: TraceDBOption[] = [];
+
+  for (const knownOption of knownOptions) {
+    const observedOption = observedById.get(knownOption.id);
+
+    mergedOptions.push(
+      observedOption ?? {
+        ...knownOption,
+        traceCount: 0,
+      },
+    );
+    observedById.delete(knownOption.id);
+  }
+
+  mergedOptions.push(...observedById.values());
+
+  return mergedOptions;
+};
+
+const areDBOptionsEqual = (
+  left: TraceDBOption[],
+  right: TraceDBOption[],
+): boolean =>
+  left.length === right.length &&
+  left.every((option, index) => {
+    const rightOption = right[index];
+
+    return (
+      rightOption !== undefined &&
+      option.id === rightOption.id &&
+      option.label === rightOption.label &&
+      option.traceCount === rightOption.traceCount
+    );
+  });
 
 const panelPositionStyle = (position: HyperDBDevtoolsPosition): string => {
   switch (position) {
@@ -350,6 +464,42 @@ const ResizeDivider = styled("div")`
   }
 `;
 
+const PanelResizeDivider = styled("div")<{
+  position: HyperDBDevtoolsPosition;
+}>`
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 8px;
+  cursor: row-resize;
+  z-index: 12;
+  ${({ position }) => (position === "top" ? "bottom: 0;" : "top: 0;")}
+  display: flex;
+  flex-direction: column;
+  justify-content: ${({ position }) =>
+    position === "top" ? "flex-end" : "flex-start"};
+
+  &::after {
+    content: "";
+    height: 1px;
+    background: var(--hdb-border);
+    transition:
+      height 150ms ease,
+      background 150ms ease;
+    border-radius: 1px;
+  }
+
+  &:hover::after {
+    height: 2px;
+    background: var(--hdb-blue);
+  }
+
+  &[data-dragging]::after {
+    height: 2px;
+    background: var(--hdb-blue);
+  }
+`;
+
 const Toolbar = styled("div")`
   min-height: 40px;
   display: flex;
@@ -466,6 +616,48 @@ const DBSelect = styled("select")`
 
   &:hover {
     border-color: var(--hdb-muted);
+  }
+`;
+
+const OptionsWrapper = styled("div")`
+  position: relative;
+  display: inline-flex;
+`;
+
+const OptionsPopup = styled("div")`
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  padding: 10px;
+  border: 1px solid var(--hdb-border);
+  border-radius: 8px;
+  background: var(--hdb-panel);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+`;
+
+const OptionLabel = styled("label")`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--hdb-text);
+  font:
+    600 11px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  letter-spacing: 0.02em;
+
+  input {
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    accent-color: var(--hdb-blue);
+    cursor: pointer;
   }
 `;
 
@@ -1051,9 +1243,7 @@ const TreeRow = styled("div")`
     Consolas,
     monospace;
 
-  & + & {
-    margin-top: 4px;
-  }
+  margin-top: 4px;
 `;
 
 const TreeLabel = styled("span")`
@@ -1742,8 +1932,16 @@ const DevtoolsPanelInner = ({
   onClose,
 }: HyperDBDevtoolsPanelProps) => {
   const [listWidth, setListWidth] = useState(readStoredListWidth);
+  const [panelHeight, setPanelHeight] = useState(readStoredPanelHeight);
+  const [skipCached, setSkipCached] = useState(readStoredSkipCached);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const isDraggingRef = useRef(false);
   const dividerRef = useRef<HTMLDivElement>(null);
+  const panelDividerRef = useRef<HTMLDivElement>(null);
+  const optionsRef = useRef<HTMLDivElement>(null);
+
+  const isVerticallyResizable =
+    !embedded && (position === "top" || position === "bottom");
 
   const handleDividerMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1777,12 +1975,58 @@ const DevtoolsPanelInner = ({
     document.addEventListener("mouseup", handleMouseUp);
   };
 
+  const handlePanelResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = panelHeight;
+    isDraggingRef.current = true;
+
+    if (panelDividerRef.current)
+      panelDividerRef.current.dataset.dragging = "true";
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      // Bottom panels grow upward, top panels grow downward.
+      const delta =
+        position === "top" ? ev.clientY - startY : startY - ev.clientY;
+      const maxHeight = (globalThis.window?.innerHeight ?? 1200) - 40;
+      const next = Math.max(
+        minPanelHeight,
+        Math.min(maxHeight, startHeight + delta),
+      );
+      setPanelHeight(next);
+      writeStoredPanelHeight(next);
+    };
+
+    const handleMouseUp = () => {
+      isDraggingRef.current = false;
+      if (panelDividerRef.current) delete panelDividerRef.current.dataset.dragging;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  };
+
   const currentDBInfo = useMemo(
     () => (db ? getTraceDBInfo(db) : undefined),
     [db],
   );
   const traces = useTraces(maxTraces);
-  const dbOptions = useMemo(() => getTraceDBOptions(traces), [traces]);
+  const observedDBOptions = useMemo(
+    () => addCurrentDBOption(getTraceDBOptions(traces), currentDBInfo),
+    [currentDBInfo, traces],
+  );
+  const [knownDBOptions, setKnownDBOptions] =
+    useState<TraceDBOption[]>(observedDBOptions);
+  const dbOptions = useMemo(
+    () => mergeDBOptions(knownDBOptions, observedDBOptions),
+    [knownDBOptions, observedDBOptions],
+  );
   const hasMultipleDBs = dbOptions.length > 1;
   const [selectedDBId, setSelectedDBId] = useState<string | undefined>(
     currentDBInfo?.id,
@@ -1801,10 +2045,12 @@ const DevtoolsPanelInner = ({
         : undefined;
   const visibleTraces = useMemo(
     () =>
-      activeDBId
-        ? traces.filter((trace) => traceDBId(trace) === activeDBId)
-        : traces,
-    [activeDBId, traces],
+      traces.filter(
+        (trace) =>
+          (!activeDBId || traceDBId(trace) === activeDBId) &&
+          (!skipCached || !isFullyCachedTrace(trace)),
+      ),
+    [activeDBId, skipCached, traces],
   );
   const selectedTrace = useMemo(
     () =>
@@ -1812,6 +2058,16 @@ const DevtoolsPanelInner = ({
       visibleTraces[0],
     [selectedTraceId, visibleTraces],
   );
+
+  useEffect(() => {
+    setKnownDBOptions((currentOptions) => {
+      const nextOptions = mergeDBOptions(currentOptions, observedDBOptions);
+
+      return areDBOptionsEqual(currentOptions, nextOptions)
+        ? currentOptions
+        : nextOptions;
+    });
+  }, [observedDBOptions]);
 
   useEffect(() => {
     if (!hasMultipleDBs) return;
@@ -1826,6 +2082,24 @@ const DevtoolsPanelInner = ({
       setSelectedTraceId(undefined);
     }
   }, [selectedTraceId, visibleTraces]);
+
+  useEffect(() => {
+    if (!optionsOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!optionsRef.current?.contains(event.target as Node)) {
+        setOptionsOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [optionsOpen]);
+
+  const toggleSkipCached = (next: boolean) => {
+    setSkipCached(next);
+    writeStoredSkipCached(next);
+  };
 
   const clearVisibleTraces = () => {
     if (hasMultipleDBs && activeDBId) {
@@ -1843,8 +2117,18 @@ const DevtoolsPanelInner = ({
       position={position}
       embedded={embedded}
       theme={theme}
-      style={{ gridTemplateColumns: `${listWidth}px minmax(0, 1fr)` }}
+      style={{
+        gridTemplateColumns: `${listWidth}px minmax(0, 1fr)`,
+        ...(isVerticallyResizable ? { height: `${panelHeight}px` } : {}),
+      }}
     >
+      {isVerticallyResizable ? (
+        <PanelResizeDivider
+          ref={panelDividerRef}
+          position={position}
+          onMouseDown={handlePanelResizeMouseDown}
+        />
+      ) : null}
       <TraceList>
         <ResizeDivider ref={dividerRef} onMouseDown={handleDividerMouseDown} />
         <Toolbar>
@@ -1870,6 +2154,29 @@ const DevtoolsPanelInner = ({
               </DBSelect>
             ) : null}
             <TraceCount>{visibleTraces.length} traces</TraceCount>
+            <OptionsWrapper ref={optionsRef}>
+              <Button
+                aria-haspopup="true"
+                aria-expanded={optionsOpen}
+                onClick={() => setOptionsOpen((open) => !open)}
+              >
+                Options
+              </Button>
+              {optionsOpen ? (
+                <OptionsPopup>
+                  <OptionLabel>
+                    <input
+                      type="checkbox"
+                      checked={skipCached}
+                      onChange={(event) =>
+                        toggleSkipCached(event.currentTarget.checked)
+                      }
+                    />
+                    Skip cached selectors
+                  </OptionLabel>
+                </OptionsPopup>
+              ) : null}
+            </OptionsWrapper>
             <Button onClick={clearVisibleTraces}>Clear</Button>
             {onClose ? (
               <Button aria-label="Close HyperDB Devtools" onClick={onClose}>

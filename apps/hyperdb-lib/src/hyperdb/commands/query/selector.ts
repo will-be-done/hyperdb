@@ -75,6 +75,12 @@ export type SelectorFn<TReturn, TParams extends any[]> = (
 ) => TReturn;
 
 export type SelectorArgsSchema = Record<string, Validator<any>>;
+export type SelectorTraceSkip =
+  | boolean
+  | {
+      childTrace: boolean;
+      rootTrace: boolean;
+    };
 
 export type ObjectSelector<
   TReturn,
@@ -83,6 +89,7 @@ export type ObjectSelector<
   readonly kind: "selector";
   readonly name: string;
   readonly args: TSchema;
+  readonly skipTrace?: SelectorTraceSkip;
   readonly handler: (
     args: InferObject<TSchema>,
   ) => Generator<unknown, TReturn, unknown>;
@@ -94,6 +101,7 @@ export type AnyObjectSelector = ((
   readonly kind: "selector";
   readonly name: string;
   readonly args: SelectorArgsSchema;
+  readonly skipTrace?: SelectorTraceSkip;
   readonly handler: (args: any) => Generator<unknown, any, unknown>;
 };
 
@@ -112,7 +120,30 @@ export type SelectorArgs<TSelector> = TSelector extends (
 export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
+  skipTrace?: SelectorTraceSkip;
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
+};
+
+type NormalizedSelectorTraceSkip = {
+  childTrace: boolean;
+  rootTrace: boolean;
+};
+
+const normalizeSelectorTraceSkip = (
+  skipTrace: SelectorTraceSkip | undefined,
+): NormalizedSelectorTraceSkip => {
+  if (skipTrace === true) {
+    return { childTrace: true, rootTrace: true };
+  }
+
+  if (!skipTrace) {
+    return { childTrace: false, rootTrace: false };
+  }
+
+  return {
+    childTrace: skipTrace.childTrace,
+    rootTrace: skipTrace.rootTrace,
+  };
 };
 
 const defineSelectorMetadata = <
@@ -122,10 +153,11 @@ const defineSelectorMetadata = <
   metadata: {
     name: string;
     args?: SelectorArgsSchema;
+    skipTrace?: SelectorTraceSkip;
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
 ): TFn => {
-  Object.defineProperties(fn, {
+  const descriptors: PropertyDescriptorMap = {
     kind: {
       value: "selector",
       enumerable: true,
@@ -146,7 +178,17 @@ const defineSelectorMetadata = <
       enumerable: true,
       configurable: false,
     },
-  });
+  };
+
+  if (metadata.skipTrace !== undefined) {
+    descriptors.skipTrace = {
+      value: metadata.skipTrace,
+      enumerable: true,
+      configurable: false,
+    };
+  }
+
+  Object.defineProperties(fn, descriptors);
 
   return fn;
 };
@@ -183,6 +225,7 @@ export function selector<TReturn, TParams extends any[]>(
   if (typeof input !== "function") {
     const definition = input;
     const displayName = assertSelectorName(definition.name);
+    const skipTrace = normalizeSelectorTraceSkip(definition.skipTrace);
     const wrapped = ((args: InferObject<typeof definition.args>) => {
       const body = (function* () {
         return (yield {
@@ -191,24 +234,27 @@ export function selector<TReturn, TParams extends any[]>(
           args,
           makeBody: () => definition.handler(args),
           name: displayName,
+          skipTrace,
         } satisfies RunSelectorCmd) as TReturn;
       })();
 
-      return wrapGeneratorWithTraceMeta(body, "selector", displayName, args);
+      return wrapGeneratorWithTraceMeta(body, "selector", displayName, args, {
+        skipChildTrace: skipTrace.childTrace,
+        skipRootTrace: skipTrace.rootTrace,
+      });
     }) as ObjectSelector<TReturn, typeof definition.args>;
 
     return defineSelectorMetadata(wrapped, {
       name: displayName,
       args: definition.args,
+      skipTrace: definition.skipTrace,
       handler: definition.handler,
     }) as unknown as SelectorGeneratorFn<TReturn, TParams>;
   }
 
   const fn = input;
   const displayName = fn.name || "anonymous selector";
-  const makeBody = (
-    args: TParams,
-  ): Generator<unknown, unknown, unknown> => {
+  const makeBody = (args: TParams): Generator<unknown, unknown, unknown> => {
     if (isGeneratorFunction(fn)) {
       return fn(...args) as Generator<unknown, unknown, unknown>;
     }
@@ -250,9 +296,8 @@ type RunSelectorOptions = Pick<CommandRunnerOptions, "ops" | "childMemo">;
 // When a childMemo is tracked, collect the selectors referenced this run so
 // entries that were not referenced can be pruned afterwards (correctness for
 // conditional branches, plus bounded memory).
-const makeVisited = (
-  options: RunSelectorOptions,
-): ChildVisited | undefined => (options.childMemo ? new Map() : undefined);
+const makeVisited = (options: RunSelectorOptions): ChildVisited | undefined =>
+  options.childMemo ? new Map() : undefined;
 
 export function runSelector<TReturn>(
   db: HyperDB,
@@ -366,7 +411,7 @@ const selectorCache = new WeakMap<
   SubscribableDB,
   WeakMap<object, Map<string, SelectorCacheEntry<unknown>>>
 >();
-const DEFAULT_SELECTOR_CACHE_GC_TIME = 30_000;
+const DEFAULT_SELECTOR_CACHE_GC_TIME = 3_000;
 
 const getSelectorCacheMap = (
   db: SubscribableDB,
@@ -408,12 +453,24 @@ const getSelectorTraceName = (selector: object): string => {
     : "anonymous selector";
 };
 
+const getSelectorTraceSkip = (
+  selector: object,
+): NormalizedSelectorTraceSkip => {
+  const skipTrace = (selector as { skipTrace?: SelectorTraceSkip }).skipTrace;
+  return normalizeSelectorTraceSkip(skipTrace);
+};
+
 const traceSelectorCacheHit = (entry: SelectorCacheEntry<unknown>): void => {
+  const skipTrace = getSelectorTraceSkip(entry.selector);
   recordCachedRootTrace(
     createTraceFrameMeta(
       "selector",
       getSelectorTraceName(entry.selector),
       entry.args,
+      {
+        skipChildTrace: skipTrace.childTrace,
+        skipRootTrace: skipTrace.rootTrace,
+      },
     ),
     entry.db,
   );
@@ -423,10 +480,15 @@ const rerunSelectorCacheEntry = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
   ops?: Op[],
 ) => {
-  entry.currentResult = runSelector(entry.db, entry.gen, entry.selectRangeCmds, {
-    ops,
-    childMemo: entry.childMemo,
-  });
+  entry.currentResult = runSelector(
+    entry.db,
+    entry.gen,
+    entry.selectRangeCmds,
+    {
+      ops,
+      childMemo: entry.childMemo,
+    },
+  );
   entry.currentRevision = entry.db.getRevision();
 };
 
@@ -459,7 +521,8 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
   } = {},
 ): SelectorCacheStore<SelectorReturn<TSelector>> {
   const argsKey = stableSerializeSelectorArgs(args);
-  const freezeArgs = options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+  const freezeArgs =
+    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
   const cachedArgs = freezeArgs ? deepFreeze(args) : args;
   const byArgs = getSelectorCacheMap(db, selector);
   let entry = byArgs.get(argsKey) as

@@ -129,6 +129,7 @@ describe("selector", () => {
     const metadataSelector = selector({
       name: "metadataSelector",
       args,
+      skipTrace: { childTrace: true, rootTrace: false },
       handler: function* ({ id }) {
         return id;
       },
@@ -140,8 +141,14 @@ describe("selector", () => {
     expect(metadataSelector.kind).toBe("selector");
     expect(metadataSelector.name).toBe("metadataSelector");
     expect(metadataSelector.args).toBe(args);
+    expect(metadataSelector.skipTrace).toEqual({
+      childTrace: true,
+      rootTrace: false,
+    });
     expect(traceMeta?.name).toBe("metadataSelector");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
+    expect(traceMeta?.skipChildTrace).toBe(true);
+    expect(traceMeta?.skipRootTrace).toBe(false);
   });
 
   test("object-form selector requires an explicit name", () => {

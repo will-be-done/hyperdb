@@ -142,6 +142,10 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getAutoTraceEnabled?.() ?? true;
   }
 
+  recordsMutationTraceEvents(): boolean {
+    return true;
+  }
+
   getOptions(): CodecOptions {
     return this.subDb.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }

@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DB, execSync } from "../db";
+import { DB, execAsync, execSync } from "../db";
+import { unwrap } from "../commands/async";
+import type { DBDriver, DBDriverTX } from "../core/driver";
+import type { Row, SelectOptions, WhereClause } from "../core/primitives";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { SubscribableDB } from "../runtime/subscribable-db";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import {
   action,
+  asyncDispatch,
   deleteRows,
   getCurrentTraits,
   insert,
@@ -27,6 +31,89 @@ type Task = {
   projectId: string;
 };
 
+class FakeAsyncDriverTx implements DBDriverTX {
+  constructor(private readonly tx: DBDriverTX) {}
+
+  *commit() {
+    yield* unwrap(Promise.resolve());
+    yield* this.tx.commit();
+  }
+
+  *rollback() {
+    yield* unwrap(Promise.resolve());
+    yield* this.tx.rollback();
+  }
+
+  *intervalScan(
+    table: string,
+    indexName: string,
+    clauses: WhereClause[],
+    selectOptions: SelectOptions,
+  ) {
+    yield* unwrap(Promise.resolve());
+    return yield* this.tx.intervalScan(table, indexName, clauses, selectOptions);
+  }
+
+  *insert(tableName: string, values: Row[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.tx.insert(tableName, values);
+  }
+
+  *upsert(tableName: string, values: Row[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.tx.upsert(tableName, values);
+  }
+
+  *delete(tableName: string, values: string[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.tx.delete(tableName, values);
+  }
+}
+
+class FakeAsyncDriver implements DBDriver {
+  private readonly driver = new BptreeInmemDriver();
+
+  *loadTables(tables: Parameters<DBDriver["loadTables"]>[0]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.driver.loadTables(tables);
+  }
+
+  *beginTx() {
+    yield* unwrap(Promise.resolve());
+    return new FakeAsyncDriverTx(yield* this.driver.beginTx());
+  }
+
+  *intervalScan(
+    table: string,
+    indexName: string,
+    clauses: WhereClause[],
+    selectOptions: SelectOptions,
+  ) {
+    yield* unwrap(Promise.resolve());
+    return yield* this.driver.intervalScan(
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    );
+  }
+
+  *insert(tableName: string, values: Row[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.driver.insert(tableName, values);
+  }
+
+  *upsert(tableName: string, values: Row[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.driver.upsert(tableName, values);
+  }
+
+  *delete(tableName: string, values: string[]) {
+    yield* unwrap(Promise.resolve());
+    yield* this.driver.delete(tableName, values);
+  }
+}
+
 const tasksTable = defineTable("devtoolTasks", {
   id: v.string(),
   title: v.string(),
@@ -45,6 +132,12 @@ const task = (overrides: Partial<Task> = {}): Task => ({
 const createDB = (): SubscribableDB => {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
   execSync(db.loadTables([tasksTable]));
+  return db;
+};
+
+const createAsyncDB = async (): Promise<DB> => {
+  const db = new DB(new FakeAsyncDriver());
+  await execAsync(db.loadTables([tasksTable]));
   return db;
 };
 
@@ -213,6 +306,45 @@ describe("devtool runtime tracing", () => {
     );
   });
 
+  it("skips root and child traces for object selectors with skipTrace true", () => {
+    const db = createDB();
+    execSync(db.insert(tasksTable, [task({ state: "done" })]));
+
+    const childSelector = selector({
+      name: "childOfSkippedSelector",
+      args: {},
+      handler: function* childOfSkippedSelector() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    });
+
+    const skippedSelector = selector({
+      name: "skippedSelector",
+      args: {},
+      skipTrace: true,
+      handler: function* skippedSelector() {
+        return yield* childSelector({});
+      },
+    });
+
+    expect(select(db, skippedSelector({}))).toEqual([task({ state: "done" })]);
+    expect(hyperDBTraceStore.getSnapshot()).toHaveLength(0);
+
+    const parentSelector = selector(function* skippedTraceParentSelector() {
+      return yield* skippedSelector({});
+    });
+
+    expect(select(db, parentSelector())).toEqual([task({ state: "done" })]);
+
+    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    expect(trace.name).toBe("skippedTraceParentSelector");
+    expect(trace.frames[0]?.children).toHaveLength(0);
+    expect(trace.commandEvents).toHaveLength(1);
+    expect(trace.commandEvents[0]?.frameId).toBe(trace.frames[0]?.id);
+  });
+
   it("records a non-generator selector success as a root trace", () => {
     const db = createDB();
 
@@ -288,6 +420,47 @@ describe("devtool runtime tracing", () => {
     expect(trace.mutationEvents[1]?.newValue).toEqual([updatedTask]);
     expect(trace.mutationEvents[2]?.ids).toEqual([updatedTask.id]);
     expect(trace.mutationEvents[2]?.oldValue).toEqual([updatedTask]);
+  });
+
+  it("records mutations from async plain DB transactions", async () => {
+    const db = await createAsyncDB();
+    const updatedTask = task({ title: "Updated async" });
+
+    const readTaskSelector = selector({
+      name: "readTaskBeforeAsyncMutation",
+      args: {},
+      handler: function* readTaskBeforeAsyncMutation() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    });
+
+    const mutateAfterSelect = action({
+      name: "mutateAfterSelect",
+      args: {},
+      handler: function* mutateAfterSelect() {
+        yield* readTaskSelector({});
+        yield* upsert(tasksTable, [updatedTask]);
+      },
+    });
+
+    await asyncDispatch(db, mutateAfterSelect({}));
+
+    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    expect(trace.name).toBe("mutateAfterSelect");
+    expect(trace.frames[0]?.children[0]?.name).toBe(
+      "readTaskBeforeAsyncMutation",
+    );
+    expect(trace.commandEvents).toHaveLength(1);
+    expect(trace.mutationEvents).toHaveLength(1);
+    expect(trace.mutationEvents[0]).toMatchObject({
+      kind: "upsert",
+      tableName: "devtoolTasks",
+      newValue: [updatedTask],
+      rows: [updatedTask],
+      status: "success",
+    });
   });
 
   it("passes the trace context through traits", () => {

@@ -35,6 +35,7 @@ const annotateCommand = (
   meta: TraceFrameMeta,
 ): unknown => {
   if (typeof cmd !== "object" || cmd === null) return cmd;
+  if (meta.skipChildTrace) return cmd;
 
   const existingPath = commandFramePath.get(cmd);
   if (existingPath?.[0]?.id === meta.id) {
@@ -93,8 +94,12 @@ export const wrapGeneratorWithTraceMeta = <TReturn>(
   kind: TraceKind,
   name: string,
   arg: unknown,
+  options: Pick<TraceFrameMeta, "skipRootTrace" | "skipChildTrace"> = {},
 ): Generator<unknown, TReturn, unknown> =>
-  wrapGeneratorWithExistingTraceMeta(gen, createTraceFrameMeta(kind, name, arg));
+  wrapGeneratorWithExistingTraceMeta(
+    gen,
+    createTraceFrameMeta(kind, name, arg, options),
+  );
 
 export const isGeneratorFunction = (fn: unknown): boolean => {
   if (typeof fn !== "function") return false;

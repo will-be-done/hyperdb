@@ -17,6 +17,8 @@ export type TraceFrameMeta = {
   kind: TraceKind;
   name: string;
   arg: unknown;
+  skipRootTrace?: boolean;
+  skipChildTrace?: boolean;
 };
 
 export type TraceFrame = {
@@ -308,11 +310,13 @@ export const createTraceFrameMeta = (
   kind: TraceKind,
   name: string,
   arg: unknown,
+  options: Pick<TraceFrameMeta, "skipRootTrace" | "skipChildTrace"> = {},
 ): TraceFrameMeta => ({
   id: nextId("meta"),
   kind,
   name,
   arg,
+  ...options,
 });
 
 const createFrame = (
@@ -354,6 +358,8 @@ export const startRootTrace = (
   store = hyperDBTraceStore,
   db?: object,
 ): TraceContext | undefined => {
+  if (meta.skipRootTrace) return undefined;
+
   if (
     !isTraceEnabledForDB(db) &&
     (!store.isActive() || !isAutoTraceEnabledForDB(db))

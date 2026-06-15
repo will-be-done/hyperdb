@@ -143,6 +143,26 @@ describe("HyperDBDevtools", () => {
     expect(html).not.toContain("secondDBSelector");
   });
 
+  it("keeps the current database option when it has no traces", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const firstDB = createDB();
+    const secondDB = createDB();
+    const secondContext = startRootTrace(
+      createTraceFrameMeta("selector", "secondDBSelector", undefined),
+      hyperDBTraceStore,
+      secondDB,
+    )!;
+    endTraceSuccess(secondContext);
+    unsubscribe();
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
+
+    expect(html).toContain("<select");
+    expect(html.match(/<option/g)).toHaveLength(2);
+    expect(html).toContain("No traces");
+    expect(html).not.toContain("secondDBSelector");
+  });
+
   it("respects localStorage open state", () => {
     vi.stubGlobal("localStorage", {
       getItem: () => "true",
