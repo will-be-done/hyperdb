@@ -20,11 +20,12 @@ TODO:
 1. DONE Rename selector -> query; action -> mutation?
 1. DONE better naming query/mutation. But if name query, then what is selectFrom() - . Actually maybe current naming is good. Action, selectors, query = selectFrom, mutation = insert/upsert/delete
 1. DONE Value - add bigint/arraybuffer support
+1. Move web to new useSyncSelector syntax
 1. Make sure that cache layer same as in reselect
 1. Turn on arguments validation
-1. Integrate to will be done
+1. DONE Integrate to will be done
 1. Maybe rename trait -> context?
-1. Refactor UI with claude code
+1. DONE Refactor UI with claude code
 1. Generate docs
 
 TODO for devtool:
@@ -37,6 +38,8 @@ TODO for devtool:
 1. Keep same tab open when change action/selector
 1. Ability to edit rows?
 1. newValue always dilsplay as "circualr". Maybe just display array of oldValue and newValues, without status/startedAt/
+1. Don't open new db traces inew db appeared. Just keep current selected db
+1. somehow always collect traces event when closed, if devtool is mounted(and not opened)
 
 Then:
 1. Nested index

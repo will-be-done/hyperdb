@@ -63,7 +63,7 @@ const scanAll = [
 describe("DB runtime validation and codec boundary", () => {
   it("validates writes before the driver sees them when runtime validation is enabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
 
     expect(() =>
       execSync(
@@ -82,7 +82,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("skips schema validation when disabled while preserving codec normalization", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: false });
+    const db = new DB(driver, { runtimeValidation: false });
 
     execSync(
       db.insert(docsTable, [
@@ -108,7 +108,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("enforces table object shape when runtime validation is disabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: false });
+    const db = new DB(driver, { runtimeValidation: false });
 
     expect(() =>
       execSync(
@@ -139,7 +139,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("rejects invalid codec values even when schema validation is disabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: false });
+    const db = new DB(driver, { runtimeValidation: false });
 
     expect(() =>
       execSync(
@@ -159,7 +159,7 @@ describe("DB runtime validation and codec boundary", () => {
   it("validates records after driver reads when runtime validation is enabled", () => {
     const driver = new RecordingDriver();
     driver.scanRows = [{ id: "doc-1", title: 123, payload: null }];
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
 
     expect(() => execSync(db.intervalScan(docsTable, "byTitle", scanAll))).toThrow(
       /Table docs record doc-1: expected string at title/,
@@ -170,7 +170,7 @@ describe("DB runtime validation and codec boundary", () => {
     const driver = new RecordingDriver();
     const bytes = new Uint8Array([1, 2, 3]);
     const buffer = new Uint8Array([4, 5]).buffer;
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
 
     execSync(
       db.insert(docsTable, [
@@ -204,7 +204,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("applies write validation through transactions", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
     const tx = execSync(db.beginTx());
 
     expect(() =>
@@ -226,7 +226,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("applies write validation through action dispatch", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
 
     function* writeInvalidDoc() {
       yield* actionInsert(docsTable, [
@@ -247,7 +247,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("treats empty write batches as no-ops", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, [docsTable], { runtimeValidation: true });
+    const db = new DB(driver, { runtimeValidation: true });
 
     execSync(db.insert(docsTable, []));
     execSync(db.upsert(docsTable, []));
@@ -262,7 +262,7 @@ describe("DB runtime validation and codec boundary", () => {
   ] as const) {
     it(`round-trips rich document values through ${name}`, async () => {
       const driver = await driverFactory();
-      const db = new SyncDB(new DB(driver, [docsTable], { runtimeValidation: true }));
+      const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
       db.loadTables([docsTable]);
 
       const bytes = new Uint8Array([8, 9, 10]);

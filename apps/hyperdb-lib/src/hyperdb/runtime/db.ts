@@ -21,6 +21,20 @@ import type {
 } from "../schema/table";
 import { DBTx } from "./db-tx";
 
+export type DBOptions = Partial<CodecOptions> & {
+  traits?: Trait[];
+  trace?: boolean;
+  autoTrace?: boolean;
+};
+
+type DBState = {
+  tables: TableDefinition<any, any>[];
+  options: CodecOptions;
+  id: string;
+  trace: boolean;
+  autoTrace: boolean;
+};
+
 let dbIdCounter = 0;
 
 const createDBId = (): string => {
@@ -30,6 +44,20 @@ const createDBId = (): string => {
 
   dbIdCounter += 1;
   return `db-${Date.now().toString(36)}-${dbIdCounter.toString(36)}`;
+};
+
+const createDBState = (options: DBOptions): DBState => {
+  const { trace = false, autoTrace = true } = options;
+
+  return {
+    tables: [],
+    options: {
+      runtimeValidation: options.runtimeValidation ?? false,
+    },
+    id: createDBId(),
+    trace,
+    autoTrace,
+  };
 };
 
 function* performScan(
@@ -104,36 +132,22 @@ function* performDelete(
 
 export class DB implements HyperDB {
   driver: DBDriver;
-  tables: TableDefinition<any, any>[] = [];
   traits: Trait[] = [];
-  options: CodecOptions;
-  private id: string;
+  private state: DBState;
 
-  constructor(
-    driver: DBDriver,
-    tables: TableDefinition<any, any>[] = [],
-    traitsOrOptions: Trait[] | Partial<CodecOptions> = [],
-    options: Partial<CodecOptions> = {},
-    id: string = createDBId(),
-  ) {
-    this.tables = tables;
-    this.traits = Array.isArray(traitsOrOptions) ? traitsOrOptions : [];
-    this.options = {
-      runtimeValidation: false,
-      ...(Array.isArray(traitsOrOptions) ? options : traitsOrOptions),
-    };
+  constructor(driver: DBDriver, options?: DBOptions);
+  constructor(driver: DBDriver, options: DBOptions = {}) {
     this.driver = driver;
-    this.id = id;
+    this.traits = options.traits ?? [];
+    this.state = createDBState(options);
   }
 
   withTraits(...traits: Trait[]): HyperDB {
-    return new DB(
-      this.driver,
-      this.tables,
-      [...this.traits, ...traits],
-      this.options,
-      this.id,
-    );
+    const db = new DB(this.driver, {
+      traits: [...this.traits, ...traits],
+    });
+    db.state = this.state;
+    return db;
   }
 
   getTraits(): Trait[] {
@@ -141,11 +155,27 @@ export class DB implements HyperDB {
   }
 
   getId(): string {
-    return this.id;
+    return this.state.id;
+  }
+
+  getTraceEnabled(): boolean {
+    return this.state.trace;
+  }
+
+  getAutoTraceEnabled(): boolean {
+    return this.state.autoTrace;
+  }
+
+  get options(): CodecOptions {
+    return this.state.options;
+  }
+
+  get tables(): TableDefinition<any, any>[] {
+    return this.state.tables;
   }
 
   *loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void> {
-    this.tables = tables;
+    this.state.tables = tables;
     yield* this.driver.loadTables(tables);
   }
 

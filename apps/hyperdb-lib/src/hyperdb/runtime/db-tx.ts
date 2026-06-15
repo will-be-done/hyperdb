@@ -24,6 +24,8 @@ type OriginalDB = {
   options: CodecOptions;
   getTraits(): Trait[];
   getId(): string;
+  getTraceEnabled(): boolean;
+  getAutoTraceEnabled(): boolean;
 };
 
 function* performScan(
@@ -140,6 +142,14 @@ export class DBTx implements HyperDBTx {
 
   getId(): string {
     return this.originalDB.getId();
+  }
+
+  getTraceEnabled(): boolean {
+    return this.originalDB.getTraceEnabled();
+  }
+
+  getAutoTraceEnabled(): boolean {
+    return this.originalDB.getAutoTraceEnabled();
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {

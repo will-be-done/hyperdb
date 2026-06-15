@@ -81,36 +81,61 @@ function removeSubscriber<T>(subscribers: T[], cb: T) {
   }
 }
 
+type SubscribableDBTxState = {
+  operations: Op[];
+  committed: RefVar<boolean>;
+  rollbacked: RefVar<boolean>;
+  txCounter: RefVar<number>;
+};
+
+const createSubscribableDBTxState = (): SubscribableDBTxState => ({
+  operations: [],
+  committed: refVar(false),
+  rollbacked: refVar(false),
+  txCounter: refVar(1),
+});
+
+type SubscribableDBState = {
+  subscribers: Subscriber[];
+  afterInsertSubscribers: AfterInsertSub[];
+  afterUpsertSubscribers: AfterUpsertSub[];
+  afterDeleteSubscribers: AfterDeleteSub[];
+  afterChangeSubscribers: AfterChangeSub[];
+  revision: RefVar<number>;
+};
+
+const createSubscribableDBState = (): SubscribableDBState => ({
+  subscribers: [],
+  afterInsertSubscribers: [],
+  afterUpsertSubscribers: [],
+  afterDeleteSubscribers: [],
+  afterChangeSubscribers: [],
+  revision: refVar(0),
+});
+
 export class SubscribableDBTx implements HyperDBTx {
   // NOTE: ops could be optimized bu zipping them + each tx type will be in insert, upsert, delete batches.
   // That will make async db tx apply very fast. Right now we need to wait each op of tx to finish
   // before applying next one. Cause otherwise if we will do in unordered way, we could get upsert before insert, for example.
-  operations: Op[];
-
   private subDb: SubscribableDB;
   private txDb: HyperDBTx;
-
-  private committed: RefVar<boolean>;
-  private rollbacked: RefVar<boolean>;
-  private txCounter: RefVar<number>;
+  private state: SubscribableDBTxState;
   private traits: Trait[];
 
   constructor(
     subDb: SubscribableDB,
     txDb: HyperDBTx,
-    ops: Op[] = [],
-    committed: RefVar<boolean> = refVar(false),
-    rollbacked: RefVar<boolean> = refVar(false),
-    txCounter: RefVar<number> = refVar(1),
+    state: SubscribableDBTxState = createSubscribableDBTxState(),
     traits: Trait[] = [],
   ) {
     this.subDb = subDb;
     this.txDb = txDb;
-    this.operations = ops;
-    this.committed = committed;
-    this.rollbacked = rollbacked;
-    this.txCounter = txCounter;
+    this.state = state;
     this.traits = traits;
+  }
+
+  get operations(): Op[] {
+    return this.state.operations;
   }
 
   getTraits(): Trait[] {
@@ -121,6 +146,14 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getId();
   }
 
+  getTraceEnabled(): boolean {
+    return this.subDb.getTraceEnabled?.() ?? false;
+  }
+
+  getAutoTraceEnabled(): boolean {
+    return this.subDb.getAutoTraceEnabled?.() ?? true;
+  }
+
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
@@ -129,16 +162,13 @@ export class SubscribableDBTx implements HyperDBTx {
     return new SubscribableDBTx(
       this.subDb,
       this.txDb,
-      this.operations,
-      this.committed,
-      this.rollbacked,
-      this.txCounter,
+      this.state,
       [...this.traits, ...traits],
     );
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
-    this.txCounter.val++;
+    this.state.txCounter.val++;
 
     return this;
   }
@@ -373,16 +403,16 @@ export class SubscribableDBTx implements HyperDBTx {
   *rollback(): Generator<DBCmd, void> {
     this.throwIfDone();
     yield* this.txDb.rollback();
-    this.rollbacked.val = true;
+    this.state.rollbacked.val = true;
   }
 
   *commit(): Generator<DBCmd, void> {
-    this.txCounter.val--;
-    if (this.txCounter.val !== 0) return;
+    this.state.txCounter.val--;
+    if (this.state.txCounter.val !== 0) return;
 
     this.throwIfDone();
     yield* this.txDb.commit();
-    this.committed.val = true;
+    this.state.committed.val = true;
     const traits = this.getTraits();
     const revision = this.subDb.incrementRevision();
     const subscribers = [...this.subDb.subscribers];
@@ -396,54 +426,60 @@ export class SubscribableDBTx implements HyperDBTx {
   }
 
   throwIfDone() {
-    if (this.committed.val) {
+    if (this.state.committed.val) {
       throw new Error("Cannot modify a committed tx");
     }
 
-    if (this.rollbacked.val) {
+    if (this.state.rollbacked.val) {
       throw new Error("Cannot modify a rollbacked tx");
     }
   }
 }
 
 export class SubscribableDB implements HyperDB {
-  subscribers: Subscriber[] = [];
   db: HyperDB;
 
-  afterInsertSubscribers: AfterInsertSub[] = [];
-  afterUpsertSubscribers: AfterUpsertSub[] = [];
-  afterDeleteSubscribers: AfterDeleteSub[] = [];
-  afterChangeSubscribers: AfterChangeSub[] = [];
   traits: Trait[] = [];
-  private revision: RefVar<number>;
+  private state: SubscribableDBState;
 
+  constructor(db: HyperDB);
   constructor(
     db: HyperDB,
-    subscribers: Subscriber[] = [],
-    afterInsertSubscribers: AfterInsertSub[] = [],
-    afterUpsertSubscribers: AfterUpsertSub[] = [],
-    afterDeleteSubscribers: AfterDeleteSub[] = [],
-    afterChangeSubscribers: AfterChangeSub[] = [],
+    state: SubscribableDBState = createSubscribableDBState(),
     traits: Trait[] = [],
-    revision: RefVar<number> = refVar(0),
   ) {
     this.db = db;
-    this.subscribers = subscribers;
-    this.afterInsertSubscribers = afterInsertSubscribers;
-    this.afterUpsertSubscribers = afterUpsertSubscribers;
-    this.afterDeleteSubscribers = afterDeleteSubscribers;
-    this.afterChangeSubscribers = afterChangeSubscribers;
     this.traits = traits;
-    this.revision = revision;
+    this.state = state;
+  }
+
+  get subscribers(): Subscriber[] {
+    return this.state.subscribers;
+  }
+
+  get afterInsertSubscribers(): AfterInsertSub[] {
+    return this.state.afterInsertSubscribers;
+  }
+
+  get afterUpsertSubscribers(): AfterUpsertSub[] {
+    return this.state.afterUpsertSubscribers;
+  }
+
+  get afterDeleteSubscribers(): AfterDeleteSub[] {
+    return this.state.afterDeleteSubscribers;
+  }
+
+  get afterChangeSubscribers(): AfterChangeSub[] {
+    return this.state.afterChangeSubscribers;
   }
 
   getRevision(): number {
-    return this.revision.val;
+    return this.state.revision.val;
   }
 
   incrementRevision(): number {
-    this.revision.val++;
-    return this.revision.val;
+    this.state.revision.val++;
+    return this.state.revision.val;
   }
 
   loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
@@ -454,23 +490,14 @@ export class SubscribableDB implements HyperDB {
     return new SubscribableDBTx(
       this,
       yield* this.db.beginTx(),
-      // this.subscribers,
-      // this.afterInsertSubscribers,
-      // this.traits,
     );
   }
 
   withTraits(...traits: Trait[]): HyperDB {
-    return new SubscribableDB(
-      this.db,
-      this.subscribers,
-      this.afterInsertSubscribers,
-      this.afterUpsertSubscribers,
-      this.afterDeleteSubscribers,
-      this.afterChangeSubscribers,
-      [...this.traits, ...traits],
-      this.revision,
-    );
+    const db = new SubscribableDB(this.db);
+    db.state = this.state;
+    db.traits = [...this.traits, ...traits];
+    return db;
   }
 
   getTraits(): Trait[] {
@@ -479,6 +506,14 @@ export class SubscribableDB implements HyperDB {
 
   getId(): string {
     return this.db.getId();
+  }
+
+  getTraceEnabled(): boolean {
+    return this.db.getTraceEnabled?.() ?? false;
+  }
+
+  getAutoTraceEnabled(): boolean {
+    return this.db.getAutoTraceEnabled?.() ?? true;
   }
 
   afterInsert(cb: AfterInsertSub): () => void {

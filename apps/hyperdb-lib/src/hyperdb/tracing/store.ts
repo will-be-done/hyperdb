@@ -103,6 +103,19 @@ type TraceDBIdentified = {
   getId?: () => string;
 };
 
+type TraceDBConfigured = {
+  getTraceEnabled?: () => boolean;
+  getAutoTraceEnabled?: () => boolean;
+};
+
+const isTraceEnabledForDB = (db: object | undefined): boolean =>
+  ((db as TraceDBConfigured | undefined)?.getTraceEnabled?.() ?? false) ===
+  true;
+
+const isAutoTraceEnabledForDB = (db: object | undefined): boolean =>
+  ((db as TraceDBConfigured | undefined)?.getAutoTraceEnabled?.() ?? true) ===
+  true;
+
 const nextId = (prefix: string): string => {
   idCounter += 1;
   return `${prefix}-${idCounter}`;
@@ -338,7 +351,12 @@ export const startRootTrace = (
   store = hyperDBTraceStore,
   db?: object,
 ): TraceContext | undefined => {
-  if (!store.isActive()) return undefined;
+  if (
+    !isTraceEnabledForDB(db) &&
+    (!store.isActive() || !isAutoTraceEnabledForDB(db))
+  ) {
+    return undefined;
+  }
 
   const startedAt = wallClockNow();
   const rootFrame = createFrame(meta, startedAt);

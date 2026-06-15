@@ -99,6 +99,46 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.bounds.length).toBeGreaterThan(0);
   });
 
+  it("records traces before the devtool opens when the db has trace enabled", () => {
+    unsubscribeTraceListener?.();
+    unsubscribeTraceListener = undefined;
+    const db = new SubscribableDB(
+      new DB(new BptreeInmemDriver(), { trace: true }),
+    );
+    execSync(db.loadTables([tasksTable]));
+    execSync(db.insert(tasksTable, [task()]));
+
+    const readTaskSelector = selector(function* readTaskBeforeDevtoolOpen() {
+      return yield* selectFrom(tasksTable, "projectState").where((q) =>
+        q.eq("projectId", "project-1"),
+      );
+    });
+
+    expect(select(db, readTaskSelector())).toEqual([task()]);
+
+    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    expect(trace.name).toBe("readTaskBeforeDevtoolOpen");
+    expect(trace.commandEvents).toHaveLength(1);
+  });
+
+  it("does not record devtool-open traces when db auto trace is disabled", () => {
+    const db = new SubscribableDB(
+      new DB(new BptreeInmemDriver(), { autoTrace: false }),
+    );
+    execSync(db.loadTables([tasksTable]));
+    execSync(db.insert(tasksTable, [task()]));
+    hyperDBTraceStore.clear();
+
+    const readTaskSelector = selector(function* autoTraceDisabledSelector() {
+      return yield* selectFrom(tasksTable, "projectState").where((q) =>
+        q.eq("projectId", "project-1"),
+      );
+    });
+
+    expect(select(db, readTaskSelector())).toEqual([task()]);
+    expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
+  });
+
   it("keeps the same db identity across traited wrappers", () => {
     const db = createDB();
     expect(db.withTraits({ type: "test.identity" }).getId()).toBe(db.getId());

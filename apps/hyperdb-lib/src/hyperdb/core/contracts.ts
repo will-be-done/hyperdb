@@ -31,6 +31,8 @@ export interface HyperDB {
   withTraits(...trait: Trait[]): HyperDB;
   getTraits(): Trait[];
   getId(): string;
+  getTraceEnabled?(): boolean;
+  getAutoTraceEnabled?(): boolean;
 
   beginTx(): Generator<DBCmd, HyperDBTx>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

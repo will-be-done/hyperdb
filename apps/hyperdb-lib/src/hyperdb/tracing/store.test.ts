@@ -37,6 +37,33 @@ describe("devtool tracing store", () => {
     expect(store.getSnapshot()).toEqual([]);
   });
 
+  it("stores traces without listeners when the db has trace enabled", () => {
+    const store = new HyperDBTraceStore();
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "traced", undefined),
+      store,
+      { getTraceEnabled: () => true },
+    );
+
+    expect(context).toBeDefined();
+    expect(store.getSnapshot()[0]?.name).toBe("traced");
+  });
+
+  it("does not store listener-activated traces when db auto trace is disabled", () => {
+    const store = new HyperDBTraceStore();
+    const unsubscribe = store.subscribe(() => {});
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "manual-only", undefined),
+      store,
+      { getAutoTraceEnabled: () => false },
+    );
+
+    expect(context).toBeUndefined();
+    expect(store.getSnapshot()).toEqual([]);
+
+    unsubscribe();
+  });
+
   it("keeps the newest traces within the retention cap", () => {
     const store = new HyperDBTraceStore(2);
     const unsubscribe = store.subscribe(() => {});
