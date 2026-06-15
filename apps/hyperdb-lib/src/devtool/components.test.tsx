@@ -11,7 +11,7 @@ import {
   formatTraceQueriedRowCount,
   getCallTreeOperationBadges,
   getCallTreeOperations,
-  getMutationEventPreview,
+  getMutationDisplay,
   getTraceActionCount,
   getTraceMutatedRowCount,
   getTraceQueriedRowCount,
@@ -265,7 +265,70 @@ describe("HyperDBDevtools", () => {
     );
   });
 
-  it("limits mutation event preview arrays", () => {
+  it("shows inserted rows for insert mutations", () => {
+    const rows = [{ id: "project-1" }, { id: "project-2" }];
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "insert",
+      tableName: "projects",
+      rows,
+      newValue: rows,
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      { variant: "rows", label: "Inserted", total: 2, rows },
+    ]);
+  });
+
+  it("shows deleted rows (or ids) for delete mutations", () => {
+    const oldValue = [{ id: "project-1" }];
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "delete",
+      tableName: "projects",
+      ids: ["project-1"],
+      oldValue,
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      { variant: "rows", label: "Deleted", total: 1, rows: oldValue },
+    ]);
+  });
+
+  it("splits upserts into old/new updates and inserts", () => {
+    const oldTask = { id: "task-1", state: "todo" };
+    const updatedTask = { id: "task-1", state: "done" };
+    const newTask = { id: "task-2", state: "todo" };
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "upsert",
+      tableName: "tasks",
+      rows: [updatedTask, newTask],
+      newValue: [updatedTask, newTask],
+      oldValue: [oldTask],
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      {
+        variant: "updates",
+        label: "Updated",
+        total: 1,
+        updates: [{ old: oldTask, new: updatedTask }],
+      },
+      { variant: "rows", label: "Inserted", total: 1, rows: [newTask] },
+    ]);
+  });
+
+  it("limits mutation display rows and reports the omitted count", () => {
     const rows = Array.from({ length: 35 }, (_, index) => ({
       id: `project-${index}`,
     }));
@@ -275,20 +338,17 @@ describe("HyperDBDevtools", () => {
       kind: "insert",
       tableName: "projects",
       rows,
+      newValue: rows,
       startedAt: 100,
       status: "success",
     };
 
-    const preview = getMutationEventPreview(event);
+    const [section] = getMutationDisplay(event);
 
-    expect(preview.rows).toHaveLength(31);
-    expect(preview.rows?.at(29)).toEqual({ id: "project-29" });
-    expect(preview.rows?.at(30)).toBe("...");
-    expect(preview.rowsPreview).toEqual({
-      shown: 30,
-      total: 35,
-      omitted: 5,
-    });
+    expect(section.variant).toBe("rows");
+    expect(section.total).toBe(35);
+    expect(section.variant === "rows" && section.rows).toHaveLength(30);
+    expect(section.preview).toEqual({ shown: 30, total: 35, omitted: 5 });
     expect(event.rows).toHaveLength(35);
   });
 

@@ -12,6 +12,7 @@ import {
   hyperDBTraceStore,
   safeSerialize,
   type MutationEvent,
+  type MutationEventKind,
   type RootTrace,
   type SelectCommandEvent,
   type TraceDBInfo,
@@ -109,7 +110,9 @@ const readStoredPanelHeight = (): number => {
     const stored = globalThis.localStorage.getItem(panelHeightKey);
     if (stored === null) return defaultPanelHeight;
     const n = Number(stored);
-    return Number.isFinite(n) ? Math.max(minPanelHeight, n) : defaultPanelHeight;
+    return Number.isFinite(n)
+      ? Math.max(minPanelHeight, n)
+      : defaultPanelHeight;
   } catch {
     return defaultPanelHeight;
   }
@@ -1002,7 +1005,7 @@ const DetailHeader = styled("header")`
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 6px 14px;
+  padding: 5px 14px;
   border-bottom: 1px solid var(--hdb-border);
   background: var(--hdb-surface);
   flex-shrink: 0;
@@ -1190,7 +1193,7 @@ const EventBlock = styled("article")`
 `;
 
 const EventBlockContent = styled("div")`
-  padding: 10px 10px 10px;
+  padding: 5px 10px 10px;
 `;
 
 const LoadMoreSentinel = styled("div")`
@@ -1302,6 +1305,16 @@ const SectionLabel = styled("div")`
   &:first-child {
     margin-top: 0;
   }
+`;
+
+const PreviewNote = styled("div")`
+  margin-top: 4px;
+  font:
+    10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  color: var(--hdb-muted);
 `;
 
 // ─── Pure logic (unchanged) ────────────────────────────────────────────────
@@ -1547,6 +1560,17 @@ const mutationRecordCount = (event: MutationEvent): number | undefined => {
   return undefined;
 };
 
+const mutationKindVerb = (kind: MutationEventKind): string => {
+  if (kind === "insert") return "inserted";
+  if (kind === "delete") return "deleted";
+  return "upserted";
+};
+
+const formatMutationSummary = (event: MutationEvent): string => {
+  const count = mutationRecordCount(event) ?? 0;
+  return `${count} ${count === 1 ? "row" : "rows"} ${mutationKindVerb(event.kind)}`;
+};
+
 export const getTraceMutatedRowCount = (trace: RootTrace): number =>
   trace.mutationEvents.reduce(
     (total, event) => total + (mutationRecordCount(event) ?? 0),
@@ -1564,35 +1588,37 @@ const callTreeOperationRecordCount = (
 const formatRowCount = (count: number): string =>
   `${count} ${count === 1 ? "row" : "rows"}`;
 
-type MutationEventPreview = Omit<
-  MutationEvent,
-  "ids" | "newValue" | "oldValue" | "rows"
-> & {
-  ids?: unknown[];
-  newValue?: unknown[];
-  oldValue?: unknown[];
-  rows?: unknown[];
-  idsPreview?: MutationValuePreview;
-  newValuePreview?: MutationValuePreview;
-  oldValuePreview?: MutationValuePreview;
-  rowsPreview?: MutationValuePreview;
-};
-
 type MutationValuePreview = {
   shown: number;
   total: number;
   omitted: number;
 };
 
-const getMutationValuePreview = <Value,>(
-  value: Value[] | undefined,
-): { value?: unknown[]; preview?: MutationValuePreview } => {
-  if (value === undefined || value.length <= mutationValuePreviewSize) {
-    return { value };
-  }
+type MutationUpdate = { old: unknown; new: unknown };
+
+export type MutationDisplaySection =
+  | {
+      variant: "rows";
+      label: string;
+      total: number;
+      rows: unknown[];
+      preview?: MutationValuePreview;
+    }
+  | {
+      variant: "updates";
+      label: string;
+      total: number;
+      updates: MutationUpdate[];
+      preview?: MutationValuePreview;
+    };
+
+const truncateRows = <Value,>(
+  value: Value[],
+): { rows: Value[]; preview?: MutationValuePreview } => {
+  if (value.length <= mutationValuePreviewSize) return { rows: value };
 
   return {
-    value: [...value.slice(0, mutationValuePreviewSize), "..."],
+    rows: value.slice(0, mutationValuePreviewSize),
     preview: {
       shown: mutationValuePreviewSize,
       total: value.length,
@@ -1601,29 +1627,77 @@ const getMutationValuePreview = <Value,>(
   };
 };
 
-export const getMutationEventPreview = (
-  event: MutationEvent,
-): MutationEventPreview => {
-  const rows = getMutationValuePreview(event.rows);
-  const ids = getMutationValuePreview(event.ids);
-  const oldValue = getMutationValuePreview(event.oldValue);
-  const newValue = getMutationValuePreview(event.newValue);
+const rowId = (row: unknown): string | undefined =>
+  typeof row === "object" &&
+  row !== null &&
+  typeof (row as { id?: unknown }).id === "string"
+    ? (row as { id: string }).id
+    : undefined;
 
-  return {
-    ...event,
-    ...(rows.value !== undefined ? { rows: rows.value } : {}),
-    ...(rows.preview !== undefined ? { rowsPreview: rows.preview } : {}),
-    ...(ids.value !== undefined ? { ids: ids.value } : {}),
-    ...(ids.preview !== undefined ? { idsPreview: ids.preview } : {}),
-    ...(oldValue.value !== undefined ? { oldValue: oldValue.value } : {}),
-    ...(oldValue.preview !== undefined
-      ? { oldValuePreview: oldValue.preview }
-      : {}),
-    ...(newValue.value !== undefined ? { newValue: newValue.value } : {}),
-    ...(newValue.preview !== undefined
-      ? { newValuePreview: newValue.preview }
-      : {}),
-  };
+const rowsSection = (
+  label: string,
+  value: unknown[],
+): MutationDisplaySection => {
+  const { rows, preview } = truncateRows(value);
+  return { variant: "rows", label, total: value.length, rows, preview };
+};
+
+// Turns a raw mutation event into the few sections worth reading: what was
+// inserted, what was deleted, and — for updates — old vs. new values. Avoids
+// the raw event dump where `rows`/`newValue` share a reference and serialize
+// as `[Circular]`.
+export const getMutationDisplay = (
+  event: MutationEvent,
+): MutationDisplaySection[] => {
+  if (event.kind === "delete") {
+    return [rowsSection("Deleted", event.oldValue ?? event.ids ?? [])];
+  }
+
+  if (event.kind === "insert") {
+    return [rowsSection("Inserted", event.newValue ?? event.rows ?? [])];
+  }
+
+  // upsert
+  const newRows = event.newValue ?? event.rows ?? [];
+
+  // While the event is still running we don't have prior values yet.
+  if (event.oldValue === undefined) {
+    return [rowsSection("Upserted", newRows)];
+  }
+
+  const oldById = new Map<string, unknown>();
+  for (const old of event.oldValue) {
+    const id = rowId(old);
+    if (id !== undefined) oldById.set(id, old);
+  }
+
+  const updates: MutationUpdate[] = [];
+  const inserts: unknown[] = [];
+  for (const next of newRows) {
+    const id = rowId(next);
+    const prev = id !== undefined ? oldById.get(id) : undefined;
+    if (prev !== undefined) updates.push({ old: prev, new: next });
+    else inserts.push(next);
+  }
+
+  const sections: MutationDisplaySection[] = [];
+  if (updates.length > 0) {
+    const { rows, preview } = truncateRows(updates);
+    sections.push({
+      variant: "updates",
+      label: "Updated",
+      total: updates.length,
+      updates: rows,
+      preview,
+    });
+  }
+  if (inserts.length > 0) {
+    sections.push(rowsSection("Inserted", inserts));
+  }
+  if (sections.length === 0) {
+    sections.push(rowsSection("Upserted", newRows));
+  }
+  return sections;
 };
 
 export const getCallTreeOperationBadges = (
@@ -1647,9 +1721,43 @@ export const getCallTreeOperationBadges = (
 
 // ─── Components ────────────────────────────────────────────────────────────
 
-const MutationEventData = ({ event }: { event: MutationEvent }) => (
-  <DataBlock>{renderSerialized(getMutationEventPreview(event))}</DataBlock>
-);
+const MutationEventData = ({ event }: { event: MutationEvent }) => {
+  const sections = getMutationDisplay(event);
+  // A single section is already described by the header summary ("1 row
+  // upserted"); only label when we split into multiple sections.
+  const showLabels = sections.length > 1;
+
+  return (
+    <>
+      {sections.map((section) => (
+        <React.Fragment key={section.label}>
+          {showLabels && (
+            <SectionLabel>
+              {section.label} ({section.total})
+            </SectionLabel>
+          )}
+          <DataBlock>
+            {section.variant === "updates"
+              ? renderSerialized(section.updates)
+              : renderSerialized(section.rows)}
+          </DataBlock>
+          {section.preview && (
+            <PreviewNote>
+              Showing first {section.preview.shown} of {section.preview.total} (
+              {section.preview.omitted} hidden)
+            </PreviewNote>
+          )}
+        </React.Fragment>
+      ))}
+      {event.error && (
+        <>
+          <SectionLabel>Error</SectionLabel>
+          <DataBlock>{renderSerialized(event.error)}</DataBlock>
+        </>
+      )}
+    </>
+  );
+};
 
 const SelectEventData = ({ event }: { event: SelectCommandEvent }) => (
   <>
@@ -1798,7 +1906,7 @@ const MutationEvents = ({
               </span>
             </EventHeaderLeft>
             <RowMeta>
-              <span>{formatRowCount(mutationRecordCount(event) ?? 0)}</span>
+              <span>{formatMutationSummary(event)}</span>
               <span>{formatDuration(event.durationMs)}</span>
             </RowMeta>
           </EventHeader>
@@ -2001,7 +2109,8 @@ const DevtoolsPanelInner = ({
 
     const handleMouseUp = () => {
       isDraggingRef.current = false;
-      if (panelDividerRef.current) delete panelDividerRef.current.dataset.dragging;
+      if (panelDividerRef.current)
+        delete panelDividerRef.current.dataset.dragging;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       document.removeEventListener("mousemove", handleMouseMove);

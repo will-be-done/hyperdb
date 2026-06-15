@@ -20,13 +20,13 @@ TODO:
 1. DONE Rename selector -> query; action -> mutation?
 1. DONE better naming query/mutation. But if name query, then what is selectFrom() - . Actually maybe current naming is good. Action, selectors, query = selectFrom, mutation = insert/upsert/delete
 1. DONE Value - add bigint/arraybuffer support
-1. Rename query -> select dir
 1. Make validation as param when insert/update/delete
 1. DONE Move web to new useSyncSelector syntax
 1. DONE Make sure that cache layer same as in reselect
-1. Turn on arguments validation with db options
 1. DONE Integrate to will be done
 1. DONE Refactor UI with claude code
+1. Turn on arguments validation with db options
+1. Rename query -> select dir
 1. rename autoTrace
 1. remove child cache? Only collect root cache?
 1. Generate docs
