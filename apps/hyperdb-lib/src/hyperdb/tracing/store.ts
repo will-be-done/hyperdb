@@ -219,7 +219,7 @@ export class HyperDBTraceStore {
   private notifyQueued = false;
   private maxTraces: number;
 
-  constructor(maxTraces = 200) {
+  constructor(maxTraces = 2000) {
     this.maxTraces = maxTraces;
   }
 
@@ -444,10 +444,7 @@ export const endTraceSuccess = (context: TraceContext): void => {
   context.store.notify();
 };
 
-export const endTraceError = (
-  context: TraceContext,
-  error: unknown,
-): void => {
+export const endTraceError = (context: TraceContext, error: unknown): void => {
   while (context.frameStack.length > 0) {
     const frame = context.frameStack.pop()!;
     context.frameMetas.pop();
@@ -550,7 +547,9 @@ export const beginMutationEvent = (
 export const endMutationEventSuccess = (
   context: TraceContext,
   event: MutationEvent,
-  patch: Partial<Pick<MutationEvent, "rows" | "ids" | "oldValue" | "newValue">> = {},
+  patch: Partial<
+    Pick<MutationEvent, "rows" | "ids" | "oldValue" | "newValue">
+  > = {},
 ): void => {
   Object.assign(event, patch);
   event.endedAt = wallClockNow();
