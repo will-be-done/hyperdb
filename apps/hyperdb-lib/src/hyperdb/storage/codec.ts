@@ -20,6 +20,14 @@ import {
 
 export type CodecOptions = {
   runtimeValidation: boolean;
+  freezeArgs: boolean;
+  freezeRows: boolean;
+};
+
+export const DEFAULT_CODEC_OPTIONS: CodecOptions = {
+  runtimeValidation: false,
+  freezeArgs: false,
+  freezeRows: false,
 };
 
 function sanitizeAny(

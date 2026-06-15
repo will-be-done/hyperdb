@@ -30,6 +30,9 @@ export type TraceFrame = {
   durationMs?: number;
   status: TraceStatus;
   error?: TraceError;
+  // Set when this selector frame was served from cache, i.e. its scans were
+  // skipped because no triggering op intersected its ranges.
+  cached?: boolean;
   children: TraceFrame[];
   commandIds: string[];
   mutationIds: string[];
@@ -434,6 +437,29 @@ export const enterFramePath = (
 
 export const getCurrentTraceFrame = (context: TraceContext): TraceFrame =>
   context.frameStack[context.frameStack.length - 1]!;
+
+export const getCurrentTraceFrameMeta = (
+  context: TraceContext,
+): TraceFrameMeta => context.frameMetas[context.frameMetas.length - 1]!;
+
+export const markTraceFrameCached = (
+  context: TraceContext,
+  frame: TraceFrame,
+): void => {
+  frame.cached = true;
+  context.store.notify();
+};
+
+export const recordCachedRootTrace = (
+  meta: TraceFrameMeta,
+  db?: object,
+): void => {
+  const context = startRootTrace(meta, hyperDBTraceStore, db);
+  if (!context) return;
+
+  markTraceFrameCached(context, context.rootFrame);
+  endTraceSuccess(context);
+};
 
 export const endTraceSuccess = (context: TraceContext): void => {
   enterFramePath(context, undefined);

@@ -80,6 +80,40 @@ describe("DB runtime validation and codec boundary", () => {
     expect(driver.inserted).toEqual([]);
   });
 
+  it("freezes insert and upsert rows when enabled", () => {
+    const driver = new RecordingDriver();
+    const db = new DB(driver, { freezeRows: true });
+    const inserted = {
+      id: "doc-1",
+      title: "hello",
+      payload: { nested: ["a"] },
+    };
+    const upserted = {
+      id: "doc-2",
+      title: "updated",
+      payload: { nested: ["b"] },
+    };
+
+    execSync(db.insert(docsTable, [inserted]));
+    execSync(db.upsert(docsTable, [upserted]));
+
+    expect(Object.isFrozen(inserted)).toBe(true);
+    expect(Object.isFrozen(inserted.payload)).toBe(true);
+    expect(Object.isFrozen(inserted.payload.nested)).toBe(true);
+    expect(Object.isFrozen(upserted)).toBe(true);
+    expect(Object.isFrozen(upserted.payload)).toBe(true);
+    expect(Object.isFrozen(upserted.payload.nested)).toBe(true);
+
+    const storedInsert = driver.inserted[0][0] as typeof inserted;
+    const storedUpsert = driver.upserted[0][0] as typeof upserted;
+    expect(Object.isFrozen(storedInsert)).toBe(true);
+    expect(Object.isFrozen(storedInsert.payload)).toBe(true);
+    expect(Object.isFrozen(storedInsert.payload.nested)).toBe(true);
+    expect(Object.isFrozen(storedUpsert)).toBe(true);
+    expect(Object.isFrozen(storedUpsert.payload)).toBe(true);
+    expect(Object.isFrozen(storedUpsert.payload.nested)).toBe(true);
+  });
+
   it("skips schema validation when disabled while preserving codec normalization", () => {
     const driver = new RecordingDriver();
     const db = new DB(driver, { runtimeValidation: false });

@@ -8,6 +8,7 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
+import { deepFreeze } from "../deep-freeze";
 import {
   normalizeRecordsForDriver,
   validateRecordsFromDriver,
@@ -26,6 +27,7 @@ type OriginalDB = {
   getId(): string;
   getTraceEnabled(): boolean;
   getAutoTraceEnabled(): boolean;
+  getOptions?(): CodecOptions;
 };
 
 function* performScan(
@@ -70,10 +72,13 @@ function* performInsert(
   options: CodecOptions,
 ) {
   if (records.length === 0) return;
-  yield* driver.insert(
-    table.tableName,
-    normalizeRecordsForDriver(table, records, options),
-  );
+  const normalizedRecords = normalizeRecordsForDriver(table, records, options);
+  yield* driver.insert(table.tableName, normalizedRecords);
+
+  if (options.freezeRows) {
+    deepFreeze(records);
+    deepFreeze(normalizedRecords);
+  }
 }
 
 function* performUpsert(
@@ -83,10 +88,13 @@ function* performUpsert(
   options: CodecOptions,
 ) {
   if (records.length === 0) return;
-  yield* driver.upsert(
-    table.tableName,
-    normalizeRecordsForDriver(table, records, options),
-  );
+  const normalizedRecords = normalizeRecordsForDriver(table, records, options);
+  yield* driver.upsert(table.tableName, normalizedRecords);
+
+  if (options.freezeRows) {
+    deepFreeze(records);
+    deepFreeze(normalizedRecords);
+  }
 }
 
 function* performDelete(
@@ -150,6 +158,10 @@ export class DBTx implements HyperDBTx {
 
   getAutoTraceEnabled(): boolean {
     return this.originalDB.getAutoTraceEnabled();
+  }
+
+  getOptions(): CodecOptions {
+    return this.options;
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {

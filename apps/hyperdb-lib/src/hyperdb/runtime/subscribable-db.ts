@@ -6,6 +6,10 @@ import type {
 import type { Row, SelectOptions, Trait, WhereClause } from "../core/primitives";
 import { runCommandGenerator } from "../commands/runner";
 import type { DBCmd } from "../commands/async";
+import {
+  DEFAULT_CODEC_OPTIONS,
+  type CodecOptions,
+} from "../storage/codec";
 // import { collectAll } from "../commands/async";
 import type { ExtractIndexes, ExtractSchema, TableDefinition } from "../schema/table";
 import { getTraceContextForDB } from "../tracing/context";
@@ -17,26 +21,10 @@ import {
 } from "../tracing/store";
 import { refVar, type RefVar } from "../utils";
 
-export type InsertOp = {
-  type: "insert";
-  table: TableDefinition;
-  newValue: Row;
-};
+export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
-export type UpsertOp = {
-  type: "upsert";
-  table: TableDefinition;
-  oldValue?: Row;
-  newValue: Row;
-};
+import type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
-export type DeleteOp = {
-  type: "delete";
-  table: TableDefinition;
-  oldValue: Row;
-};
-
-export type Op = InsertOp | UpsertOp | DeleteOp;
 type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
 
 type AfterInsertSub = (
@@ -152,6 +140,10 @@ export class SubscribableDBTx implements HyperDBTx {
 
   getAutoTraceEnabled(): boolean {
     return this.subDb.getAutoTraceEnabled?.() ?? true;
+  }
+
+  getOptions(): CodecOptions {
+    return this.subDb.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
   *loadTables(): Generator<DBCmd, void> {
@@ -514,6 +506,10 @@ export class SubscribableDB implements HyperDB {
 
   getAutoTraceEnabled(): boolean {
     return this.db.getAutoTraceEnabled?.() ?? true;
+  }
+
+  getOptions(): CodecOptions {
+    return this.db.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
   afterInsert(cb: AfterInsertSub): () => void {

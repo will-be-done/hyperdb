@@ -201,7 +201,7 @@ const ButtonElement = (
 
 const SpanElement = (
   props: React.HTMLAttributes<HTMLSpanElement> & {
-    tone?: "green" | "blue" | "red" | "amber" | "duration" | "rows";
+    tone?: "green" | "blue" | "red" | "amber" | "duration" | "rows" | "cached";
   },
 ) => {
   const { tone, ...domProps } = props;
@@ -655,7 +655,14 @@ const RowBody = styled("div")`
   align-content: center;
 `;
 
-const RowName = styled("div")`
+const RowTitle = styled("div")`
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`;
+
+const RowName = styled("span")`
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -664,6 +671,27 @@ const RowName = styled("div")`
   font-weight: 600;
   line-height: 1.3;
   color: var(--hdb-text);
+`;
+
+const TraceListCachedBadge = styled("span")`
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--hdb-blue);
+  color: var(--hdb-blue);
+  background: color-mix(in srgb, var(--hdb-blue) 10%, transparent);
+  font:
+    600 10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  font-size: 9px;
+  line-height: 1;
 `;
 
 const RowMeta = styled("div")`
@@ -970,7 +998,7 @@ const EventBlock = styled("article")`
 `;
 
 const EventBlockContent = styled("div")`
-  padding: 0 10px 10px;
+  padding: 10px 10px 10px;
 `;
 
 const LoadMoreSentinel = styled("div")`
@@ -1036,22 +1064,28 @@ const TreeLabel = styled("span")`
   color: var(--hdb-text);
 `;
 
-const TreeBadge = styled(SpanElement)<{ tone: "duration" | "rows" }>`
+const treeBadgeColor = (tone: "duration" | "rows" | "cached"): string => {
+  if (tone === "rows") return "var(--hdb-accent)";
+  if (tone === "cached") return "var(--hdb-blue)";
+  return "var(--hdb-border)";
+};
+
+const TreeBadge = styled(SpanElement)<{
+  tone: "duration" | "rows" | "cached";
+}>`
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   height: 16px;
   padding: 0 5px;
   border-radius: 4px;
-  border: 1px solid
-    ${({ tone }) =>
-      tone === "rows" ? "var(--hdb-accent)" : "var(--hdb-border)"};
+  border: 1px solid ${({ tone }) => treeBadgeColor(tone)};
   color: ${({ tone }) =>
-    tone === "rows" ? "var(--hdb-accent)" : "var(--hdb-muted)"};
+    tone === "duration" ? "var(--hdb-muted)" : treeBadgeColor(tone)};
   background: ${({ tone }) =>
-    tone === "rows"
-      ? "color-mix(in srgb, var(--hdb-accent) 10%, transparent)"
-      : "transparent"};
+    tone === "duration"
+      ? "transparent"
+      : `color-mix(in srgb, ${treeBadgeColor(tone)} 10%, transparent)`};
   font-size: 9px;
   line-height: 1;
   font-weight: 600;
@@ -1219,6 +1253,12 @@ const formatTraceActions = (trace: RootTrace): string => {
   const actionCount = getTraceActionCount(trace);
   return `${actionCount} act`;
 };
+
+const formatActionCount = (count: number): string =>
+  `${count} ${count === 1 ? "action" : "actions"}`;
+
+export const isFullyCachedTrace = (trace: RootTrace): boolean =>
+  trace.frames[0]?.cached === true;
 
 type CallTreeOperation =
   | {
@@ -1398,14 +1438,18 @@ export const getMutationEventPreview = (
 
 export const getCallTreeOperationBadges = (
   operation: CallTreeOperation,
-): { text: string; tone: "duration" | "rows" }[] => {
-  const badges: { text: string; tone: "duration" | "rows" }[] = [
+): { text: string; tone: "duration" | "rows" | "cached" }[] => {
+  const badges: { text: string; tone: "duration" | "rows" | "cached" }[] = [
     { text: callTreeOperationDuration(operation), tone: "duration" },
   ];
   const recordCount = callTreeOperationRecordCount(operation);
 
   if (recordCount !== undefined) {
     badges.push({ text: formatRowCount(recordCount), tone: "rows" });
+  }
+
+  if (operation.kind === "frame" && operation.frame.cached) {
+    badges.push({ text: "cached", tone: "cached" });
   }
 
   return badges;
@@ -1436,15 +1480,15 @@ const TraceOverview = ({ trace }: { trace: RootTrace }) => (
       </Stat>
       <Stat>
         <span>Rows queried</span>
-        <strong>{formatTraceQueriedRowCount(trace)}</strong>
+        <strong>{formatTraceQueriedRows(trace)}</strong>
       </Stat>
       <Stat>
         <span>Actions</span>
-        <strong>{getTraceActionCount(trace)}</strong>
+        <strong>{formatActionCount(getTraceActionCount(trace))}</strong>
       </Stat>
       <Stat>
         <span>Rows mutated</span>
-        <strong>{getTraceMutatedRowCount(trace)}</strong>
+        <strong>{formatRowCount(getTraceMutatedRowCount(trace))}</strong>
       </Stat>
     </Grid>
     <SectionLabel>Arguments</SectionLabel>
@@ -1859,7 +1903,12 @@ const DevtoolsPanelInner = ({
                   {traceKindLabel(trace.kind)}
                 </KindPill>
                 <RowBody>
-                  <RowName>{trace.name}</RowName>
+                  <RowTitle>
+                    <RowName>{trace.name}</RowName>
+                    {isFullyCachedTrace(trace) ? (
+                      <TraceListCachedBadge>cached</TraceListCachedBadge>
+                    ) : null}
+                  </RowTitle>
                   <RowMeta>
                     <span>{formatTraceQueriedRows(trace)}</span>
                     <RowMetaSep>·</RowMetaSep>

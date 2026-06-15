@@ -45,14 +45,10 @@ const annotateCommand = (
   return cmd;
 };
 
-export const wrapGeneratorWithTraceMeta = <TReturn>(
+export const wrapGeneratorWithExistingTraceMeta = <TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
-  kind: TraceKind,
-  name: string,
-  arg: unknown,
+  meta: TraceFrameMeta,
 ): Generator<unknown, TReturn, unknown> => {
-  const meta = createTraceFrameMeta(kind, name, arg);
-
   const annotateResult = (
     result: IteratorResult<unknown, TReturn>,
   ): IteratorResult<unknown, TReturn> =>
@@ -91,6 +87,14 @@ export const wrapGeneratorWithTraceMeta = <TReturn>(
 
   return traced;
 };
+
+export const wrapGeneratorWithTraceMeta = <TReturn>(
+  gen: Generator<unknown, TReturn, unknown>,
+  kind: TraceKind,
+  name: string,
+  arg: unknown,
+): Generator<unknown, TReturn, unknown> =>
+  wrapGeneratorWithExistingTraceMeta(gen, createTraceFrameMeta(kind, name, arg));
 
 export const isGeneratorFunction = (fn: unknown): boolean => {
   if (typeof fn !== "function") return false;

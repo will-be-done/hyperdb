@@ -15,6 +15,7 @@ import {
   getTraceActionCount,
   getTraceMutatedRowCount,
   getTraceQueriedRowCount,
+  isFullyCachedTrace,
 } from "./components";
 import {
   beginSelectEvent,
@@ -22,6 +23,7 @@ import {
   endSelectEventSuccess,
   endTraceSuccess,
   hyperDBTraceStore,
+  recordCachedRootTrace,
   startRootTrace,
 } from "../hyperdb/tracing/store";
 import type { SelectCommandEvent } from "../hyperdb/tracing/store";
@@ -94,6 +96,25 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("3 rows");
     expect(html).toContain("0 rows");
     expect(html).toContain("0 actions");
+  });
+
+  it("renders a cached label in the traces list for fully cached traces", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const db = createDB();
+    recordCachedRootTrace(
+      createTraceFrameMeta("selector", "cachedListSelector", {
+        projectId: "project-1",
+      }),
+      db,
+    );
+    unsubscribe();
+
+    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    const html = renderToString(<HyperDBDevtoolsPanel db={db} />);
+
+    expect(isFullyCachedTrace(trace)).toBe(true);
+    expect(html).toContain("cachedListSelector");
+    expect(html).toContain("[cached]");
   });
 
   it("renders a database selector when traces come from multiple dbs", () => {
@@ -465,5 +486,58 @@ describe("HyperDBDevtools", () => {
       ],
       [{ text: "50ms", tone: "duration" }],
     ]);
+  });
+
+  it("adds a cached badge for memoized selector frames", () => {
+    const cachedFrame: TraceFrame = {
+      id: "frame-cached",
+      kind: "selector",
+      name: "cachedChild",
+      arg: undefined,
+      startedAt: 100,
+      durationMs: 2,
+      status: "success",
+      cached: true,
+      children: [],
+      commandIds: [],
+      mutationIds: [],
+    };
+    const rootFrame: TraceFrame = {
+      id: "frame-root",
+      kind: "selector",
+      name: "parent",
+      arg: undefined,
+      startedAt: 90,
+      durationMs: 5,
+      status: "success",
+      children: [cachedFrame],
+      commandIds: [],
+      mutationIds: [],
+    };
+    const trace: RootTrace = {
+      id: "trace-cached",
+      kind: "selector",
+      name: "parent",
+      arg: undefined,
+      startedAt: 90,
+      durationMs: 5,
+      status: "success",
+      frames: [rootFrame],
+      commandEvents: [],
+      mutationEvents: [],
+    };
+
+    const operations = getCallTreeOperations(rootFrame, trace);
+    const cachedOperation = operations.find(
+      (operation) =>
+        operation.kind === "frame" && operation.frame.id === "frame-cached",
+    )!;
+
+    expect(getCallTreeOperationBadges(cachedOperation)).toEqual([
+      { text: "2ms", tone: "duration" },
+      { text: "cached", tone: "cached" },
+    ]);
+    // The label itself stays clean; the marker is a badge.
+    expect(formatCallTreeOperation(cachedOperation)).toBe("@cachedChild");
   });
 });

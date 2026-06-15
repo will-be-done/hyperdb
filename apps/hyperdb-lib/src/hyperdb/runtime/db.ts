@@ -9,7 +9,9 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
+import { deepFreeze } from "../deep-freeze";
 import {
+  DEFAULT_CODEC_OPTIONS,
   normalizeRecordsForDriver,
   validateRecordsFromDriver,
   type CodecOptions,
@@ -52,7 +54,10 @@ const createDBState = (options: DBOptions): DBState => {
   return {
     tables: [],
     options: {
+      ...DEFAULT_CODEC_OPTIONS,
       runtimeValidation: options.runtimeValidation ?? false,
+      freezeArgs: options.freezeArgs ?? false,
+      freezeRows: options.freezeRows ?? false,
     },
     id: createDBId(),
     trace,
@@ -102,10 +107,13 @@ function* performInsert(
   options: CodecOptions,
 ) {
   if (records.length === 0) return;
-  yield* driver.insert(
-    table.tableName,
-    normalizeRecordsForDriver(table, records, options),
-  );
+  const normalizedRecords = normalizeRecordsForDriver(table, records, options);
+  yield* driver.insert(table.tableName, normalizedRecords);
+
+  if (options.freezeRows) {
+    deepFreeze(records);
+    deepFreeze(normalizedRecords);
+  }
 }
 
 function* performUpsert(
@@ -115,10 +123,13 @@ function* performUpsert(
   options: CodecOptions,
 ) {
   if (records.length === 0) return;
-  yield* driver.upsert(
-    table.tableName,
-    normalizeRecordsForDriver(table, records, options),
-  );
+  const normalizedRecords = normalizeRecordsForDriver(table, records, options);
+  yield* driver.upsert(table.tableName, normalizedRecords);
+
+  if (options.freezeRows) {
+    deepFreeze(records);
+    deepFreeze(normalizedRecords);
+  }
 }
 
 function* performDelete(
@@ -167,6 +178,10 @@ export class DB implements HyperDB {
   }
 
   get options(): CodecOptions {
+    return this.state.options;
+  }
+
+  getOptions(): CodecOptions {
     return this.state.options;
   }
 

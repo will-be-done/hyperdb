@@ -20,26 +20,36 @@ TODO:
 1. DONE Rename selector -> query; action -> mutation?
 1. DONE better naming query/mutation. But if name query, then what is selectFrom() - . Actually maybe current naming is good. Action, selectors, query = selectFrom, mutation = insert/upsert/delete
 1. DONE Value - add bigint/arraybuffer support
-1. Move web to new useSyncSelector syntax
-1. Make sure that cache layer same as in reselect
+1. Rename query -> select dir
+1. Make validation as param when insert/update/delete
+1. DONE Move web to new useSyncSelector syntax
+1. DONE Make sure that cache layer same as in reselect
 1. Turn on arguments validation
 1. DONE Integrate to will be done
 1. Maybe rename trait -> context?
 1. DONE Refactor UI with claude code
+1. In devtool makr some selectors as [not cacheable]. Remove throws?
 1. Generate docs
 
 TODO for devtool:
 1. Polisj UI. Remove flickering. Maybe adopt UI from livestore
-2. Rename data -> query
-3. Mutation - show button display diff. Also, add pagination if too much mutations
-1. In devtool - maybe use db to store traces?
-4. Data diff/change?
-1. Display how much rows were selected during query in general list
-1. Keep same tab open when change action/selector
-1. Ability to edit rows?
+2. DONE Rename data -> query
+1. WONTFIX In devtool - maybe use db to store traces?
+1. DONE Display how much rows were selected during query in general list
+1. DONE Keep same tab open when change action/selector
 1. newValue always dilsplay as "circualr". Maybe just display array of oldValue and newValues, without status/startedAt/
-1. Don't open new db traces inew db appeared. Just keep current selected db
-1. somehow always collect traces event when closed, if devtool is mounted(and not opened)
+1. DONE Don't open new db traces inew db appeared. Just keep current selected db
+1. DONE somehow always collect traces event when closed, if devtool is mounted(and not opened)
+1. Devtool doens't work correctly with async flow
+1. Add ability to hide some selectors from devtools
+1. Vertical resize of devtool
+1. When clear events - db select still should be present
+1. Show any actions run, but if it was cached - show as cached
+
+devtool maybe:
+1. Mutation - show button display diff. Also, add pagination if too much mutations
+1. Data diff/change?
+1. Ability to edit rows?
 
 Then:
 1. Nested index
