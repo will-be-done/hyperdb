@@ -403,10 +403,10 @@ export class SubscribableDBTx implements HyperDBTx {
   }
 
   *commit(): Generator<DBCmd, void> {
+    this.throwIfDone();
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
-    this.throwIfDone();
     yield* this.txDb.commit();
     this.state.committed.val = true;
     const traits = this.getTraits();
