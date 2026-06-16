@@ -86,7 +86,11 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, input.selector, argsKey, enabled, input.defaultValue, input.gcTime]);
 
-  return useSyncExternalStore(selector.subscribe, selector.getSnapshot);
+  return useSyncExternalStore(
+    selector.subscribe,
+    selector.getSnapshot,
+    selector.getSnapshot,
+  );
 }
 
 export function useAsyncSelector<TSelector extends AnyObjectSelector>(

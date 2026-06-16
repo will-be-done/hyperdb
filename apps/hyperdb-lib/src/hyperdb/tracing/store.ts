@@ -1,96 +1,50 @@
 import type { QueryWhereClause } from "../commands/query/commands";
-import type { TupleScanOptions, Value } from "../core/primitives";
-
-export type TraceKind = "action" | "selector" | "unknown";
-export type TraceStatus = "running" | "success" | "error";
-export type CommandEventKind = "select";
-export type MutationEventKind = "insert" | "upsert" | "delete";
-
-export type TraceError = {
-  name?: string;
-  message: string;
-  stack?: string;
-};
-
-export type TraceFrameMeta = {
-  id: string;
-  kind: TraceKind;
-  name: string;
-  arg: unknown;
-  skipRootTrace?: boolean;
-  skipChildTrace?: boolean;
-};
-
-export type TraceFrame = {
-  id: string;
-  parentId?: string;
-  kind: TraceKind;
-  name: string;
-  arg: unknown;
-  startedAt: number;
-  endedAt?: number;
-  durationMs?: number;
-  status: TraceStatus;
-  error?: TraceError;
-  // Set when this selector frame was served from cache, i.e. its scans were
-  // skipped because no triggering op intersected its ranges.
-  cached?: boolean;
-  children: TraceFrame[];
-  commandIds: string[];
-  mutationIds: string[];
-};
-
-export type SelectCommandEvent = {
-  id: string;
-  frameId: string;
-  kind: CommandEventKind;
-  tableName: string;
-  index: string;
-  where: QueryWhereClause[];
-  bounds: TupleScanOptions[];
-  limit?: number;
-  order?: string;
-  resultCount?: number;
-  result?: unknown[];
-  startedAt: number;
-  endedAt?: number;
-  durationMs?: number;
-  status: TraceStatus;
-  error?: TraceError;
-};
-
-export type MutationEvent = {
-  id: string;
-  frameId: string;
-  kind: MutationEventKind;
-  tableName: string;
-  rows?: unknown[];
-  ids?: string[];
-  oldValue?: unknown[];
-  newValue?: unknown[];
-  startedAt: number;
-  endedAt?: number;
-  durationMs?: number;
-  status: TraceStatus;
-  error?: TraceError;
-};
-
-export type RootTrace = {
-  id: string;
-  dbId?: string;
-  dbLabel?: string;
-  kind: TraceKind;
-  name: string;
-  arg: unknown;
-  startedAt: number;
-  endedAt?: number;
-  durationMs?: number;
-  status: TraceStatus;
-  error?: TraceError;
-  frames: TraceFrame[];
-  commandEvents: SelectCommandEvent[];
-  mutationEvents: MutationEvent[];
-};
+import type { TupleScanOptions } from "../core/primitives";
+import { DB } from "../runtime/db";
+import { SubscribableDB } from "../runtime/subscribable-db";
+import { SyncDB } from "../runtime/sync-db";
+import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
+import {
+  defineTable,
+  type ExtractIndexes,
+  type ExtractSchema,
+  type TableDefinition,
+} from "../schema/table";
+import { v } from "../schema/values";
+import {
+  setDefaultHyperDBTracer,
+  type HyperDBTracer,
+  type MutationEvent,
+  type MutationEventKind,
+  type MutationTraceInput,
+  type MutationTracePatch,
+  type RootTrace,
+  type SelectTraceInput,
+  type SelectCommandEvent,
+  type TraceContext,
+  type TraceError,
+  type TraceFrame,
+  type TraceFrameMeta,
+  type TraceStatus,
+} from "../core/tracer";
+export {
+  anonymousTraceMeta,
+  createTraceFrameMeta,
+} from "../core/tracer";
+export type {
+  CommandEventKind,
+  MutationEvent,
+  MutationEventKind,
+  RootTrace,
+  SelectCommandEvent,
+  SerializableTraceValue,
+  TraceContext,
+  TraceError,
+  TraceFrame,
+  TraceFrameMeta,
+  TraceKind,
+  TraceStatus,
+} from "../core/tracer";
 
 export type SerializedValue = {
   text: string;
@@ -98,6 +52,44 @@ export type SerializedValue = {
 };
 
 type TraceListener = () => void;
+
+const traceRootsTable = defineTable("hyperdbTraceRoots", {
+  id: v.string(),
+  dbId: v.optional(v.string()),
+  dbLabel: v.optional(v.string()),
+  kind: v.union(v.literal("action"), v.literal("selector"), v.literal("unknown")),
+  name: v.string(),
+  startedAt: v.number(),
+  endedAt: v.optional(v.number()),
+  durationMs: v.optional(v.number()),
+  status: v.union(v.literal("running"), v.literal("success"), v.literal("error")),
+  createdSeq: v.number(),
+})
+  .index("byCreatedSeq", ["createdSeq"])
+  .index("byDbCreatedSeq", ["dbId", "createdSeq"])
+  .index("byStatusCreatedSeq", ["status", "createdSeq"])
+  .index("byKindCreatedSeq", ["kind", "createdSeq"])
+  .index("byStartedAt", ["startedAt"]);
+
+type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
+const traceRootsRuntimeTable = traceRootsTable as TableDefinition<
+  TraceRootRow,
+  ExtractIndexes<typeof traceRootsTable>,
+  unknown
+>;
+
+const traceMetaTable = defineTable("hyperdbTraceMeta", {
+  id: v.string(),
+  revision: v.number(),
+});
+
+type TraceMetaRow = ExtractSchema<typeof traceMetaTable>;
+export const traceMetaRuntimeTable = traceMetaTable as unknown as TableDefinition<
+  TraceMetaRow,
+  ExtractIndexes<typeof traceMetaTable>
+>;
+
+export const traceMetaId = "trace-meta";
 
 let idCounter = 0;
 let dbCounter = 0;
@@ -217,16 +209,41 @@ export const safeSerialize = (value: unknown): SerializedValue => {
   }
 };
 
-export class HyperDBTraceStore {
-  private traces: RootTrace[] = [];
+const omitUndefined = <T extends Record<string, unknown>>(value: T): T => {
+  const next: Record<string, unknown> = {};
+  for (const [key, fieldValue] of Object.entries(value)) {
+    if (fieldValue !== undefined) {
+      next[key] = fieldValue;
+    }
+  }
+  return next as T;
+};
+
+export class HyperDBTraceStore implements HyperDBTracer {
+  private subDb = new SubscribableDB(
+    new DB(new BptreeInmemDriver(), {
+      autoTrace: false,
+      tracer: null,
+    }),
+  );
+  private db = new SyncDB(this.subDb);
+  private snapshot: RootTrace[] = [];
+  private payloads = new Map<string, RootTrace>();
+  private createdSeqByTraceId = new Map<string, number>();
   private listeners = new Set<TraceListener>();
   private activeListenerCount = 0;
   private notifyQueued = false;
   private maxTraces: number;
+  private createdSeq = 0;
+  private revision = 0;
 
   constructor(maxTraces = 2000) {
     this.maxTraces = maxTraces;
+    this.db.loadTables([traceRootsRuntimeTable, traceMetaRuntimeTable]);
+    this.bumpRevision();
   }
+
+  getDB = (): SubscribableDB => this.subDb;
 
   subscribe = (listener: TraceListener): (() => void) => {
     this.listeners.add(listener);
@@ -239,7 +256,34 @@ export class HyperDBTraceStore {
     };
   };
 
-  getSnapshot = (): RootTrace[] => this.traces;
+  getSnapshot = (): RootTrace[] => this.snapshot;
+
+  getTraces = (
+    maxTraces: number,
+    kind?: "selector" | "action",
+  ): RootTrace[] => {
+    const n = Number(maxTraces);
+    const limit = Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+
+    const rows =
+      kind === undefined
+        ? this.db.intervalScan(
+            traceRootsRuntimeTable,
+            "byCreatedSeq",
+            [{}],
+            { order: "desc", limit },
+          )
+        : this.db.intervalScan(
+            traceRootsRuntimeTable,
+            "byKindCreatedSeq",
+            [{ eq: [{ col: "kind", val: kind }] }],
+            { order: "desc", limit },
+          );
+
+    return rows
+      .map((row) => this.payloads.get(row.id))
+      .filter((trace): trace is RootTrace => trace !== undefined);
+  };
 
   getListenerCount = (): number => this.activeListenerCount;
 
@@ -254,27 +298,119 @@ export class HyperDBTraceStore {
 
     this.maxTraces = nextMaxTraces;
     this.trim();
+    this.refreshSnapshot();
     this.notify();
   };
 
   clear = (): void => {
-    this.traces = [];
+    const ids = [...this.payloads.keys()];
+    if (ids.length > 0) {
+      this.db.delete(traceRootsRuntimeTable, ids);
+    }
+    this.payloads.clear();
+    this.createdSeqByTraceId.clear();
+    this.refreshSnapshot();
     this.notify();
   };
 
   clearDB = (dbId: string | undefined): void => {
-    const nextTraces = this.traces.filter((trace) => trace.dbId !== dbId);
-    if (nextTraces.length === this.traces.length) return;
+    const rows =
+      dbId === undefined
+        ? this.allRows().filter((row) => row.dbId === undefined)
+        : this.db.intervalScan(
+            traceRootsRuntimeTable,
+            "byDbCreatedSeq",
+            [{ eq: [{ col: "dbId", val: dbId }] }],
+          );
+    if (rows.length === 0) return;
 
-    this.traces = nextTraces;
+    const ids = rows.map((row) => row.id);
+    this.db.delete(traceRootsRuntimeTable, ids);
+    for (const id of ids) {
+      this.payloads.delete(id);
+      this.createdSeqByTraceId.delete(id);
+    }
+    this.refreshSnapshot();
     this.notify();
   };
 
   addTrace = (trace: RootTrace): void => {
-    this.traces = [trace, ...this.traces];
+    this.createdSeq += 1;
+    this.createdSeqByTraceId.set(trace.id, this.createdSeq);
+    this.payloads.set(trace.id, trace);
+    this.db.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
     this.trim();
+    this.refreshSnapshot();
     this.notify();
   };
+
+  updateTrace = (trace: RootTrace): void => {
+    if (!this.payloads.has(trace.id)) return;
+    this.db.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
+    this.refreshSnapshot();
+  };
+
+  startRootTrace = (
+    meta: TraceFrameMeta,
+    db?: object,
+  ): TraceContext | undefined => startRootTrace(meta, this, db);
+
+  enterFramePath = (
+    context: TraceContext,
+    path: TraceFrameMeta[] | undefined,
+  ): TraceFrame => enterFramePath(context, path);
+
+  getCurrentTraceFrame = (context: TraceContext): TraceFrame =>
+    getCurrentTraceFrame(context);
+
+  getCurrentTraceFrameMeta = (context: TraceContext): TraceFrameMeta =>
+    getCurrentTraceFrameMeta(context);
+
+  markTraceFrameCached = (
+    context: TraceContext,
+    frame: TraceFrame,
+  ): void => markTraceFrameCached(context, frame);
+
+  endTraceSuccess = (context: TraceContext): void => endTraceSuccess(context);
+
+  endTraceError = (context: TraceContext, error: unknown): void =>
+    endTraceError(context, error);
+
+  beginSelectEvent = (
+    context: TraceContext,
+    frame: TraceFrame,
+    input: SelectTraceInput,
+  ): SelectCommandEvent => beginSelectEvent(context, frame, input);
+
+  endSelectEventSuccess = (
+    context: TraceContext,
+    event: SelectCommandEvent,
+    result: unknown[],
+  ): void => endSelectEventSuccess(context, event, result);
+
+  endSelectEventError = (
+    context: TraceContext,
+    event: SelectCommandEvent,
+    error: unknown,
+  ): void => endSelectEventError(context, event, error);
+
+  beginMutationEvent = (
+    context: TraceContext,
+    frame: TraceFrame,
+    input: MutationTraceInput,
+  ): MutationEvent => beginMutationEvent(context, frame, input);
+
+  endMutationEventSuccess = (
+    context: TraceContext,
+    event: MutationEvent,
+    patch: MutationTracePatch = {},
+  ): void => endMutationEventSuccess(context, event, patch);
+
+  endMutationEventError = (
+    context: TraceContext,
+    event: MutationEvent,
+    error: unknown,
+  ): void => endMutationEventError(context, event, error);
 
   notify = (): void => {
     if (this.notifyQueued) return;
@@ -282,6 +418,7 @@ export class HyperDBTraceStore {
     this.notifyQueued = true;
     queueMicrotask(() => {
       this.notifyQueued = false;
+      this.bumpRevision();
 
       for (const listener of [...this.listeners]) {
         listener();
@@ -289,35 +426,67 @@ export class HyperDBTraceStore {
     });
   };
 
+  private bumpRevision(): void {
+    this.revision += 1;
+    this.db.upsert(traceMetaTable, [
+      {
+        id: traceMetaId,
+        revision: this.revision,
+      },
+    ]);
+  }
+
   private trim(): void {
-    if (this.traces.length <= this.maxTraces) return;
-    this.traces = this.traces.slice(0, this.maxTraces);
+    const rows = this.allRows();
+    if (rows.length <= this.maxTraces) return;
+
+    const ids = rows.slice(this.maxTraces).map((row) => row.id);
+    this.db.delete(traceRootsRuntimeTable, ids);
+    for (const id of ids) {
+      this.payloads.delete(id);
+      this.createdSeqByTraceId.delete(id);
+    }
+  }
+
+  private allRows(): TraceRootRow[] {
+    return this.db.intervalScan(
+      traceRootsRuntimeTable,
+      "byCreatedSeq",
+      [{}],
+      { order: "desc" },
+    );
+  }
+
+  private refreshSnapshot(): void {
+    this.snapshot = this.db
+      .intervalScan(
+        traceRootsRuntimeTable,
+        "byCreatedSeq",
+        [{}],
+        { order: "desc", limit: this.maxTraces },
+      )
+      .map((row) => this.payloads.get(row.id))
+      .filter((trace): trace is RootTrace => trace !== undefined);
+  }
+
+  private rowFromTrace(trace: RootTrace): TraceRootRow {
+    return omitUndefined({
+      id: trace.id,
+      dbId: trace.dbId,
+      dbLabel: trace.dbLabel,
+      kind: trace.kind,
+      name: trace.name,
+      startedAt: trace.startedAt,
+      endedAt: trace.endedAt,
+      durationMs: trace.durationMs,
+      status: trace.status,
+      createdSeq: this.createdSeqByTraceId.get(trace.id) ?? 0,
+    });
   }
 }
 
 export const hyperDBTraceStore = new HyperDBTraceStore();
-
-export type TraceContext = {
-  trace: RootTrace;
-  rootFrame: TraceFrame;
-  frameStack: TraceFrame[];
-  frameMetas: TraceFrameMeta[];
-  rootMetaId?: string;
-  store: HyperDBTraceStore;
-};
-
-export const createTraceFrameMeta = (
-  kind: TraceKind,
-  name: string,
-  arg: unknown,
-  options: Pick<TraceFrameMeta, "skipRootTrace" | "skipChildTrace"> = {},
-): TraceFrameMeta => ({
-  id: nextId("meta"),
-  kind,
-  name,
-  arg,
-  ...options,
-});
+setDefaultHyperDBTracer(hyperDBTraceStore);
 
 const createFrame = (
   meta: TraceFrameMeta,
@@ -391,6 +560,7 @@ export const startRootTrace = (
     frameMetas: [meta],
     rootMetaId: meta.id,
     store,
+    tracer: store,
   };
 
   store.addTrace(trace);
@@ -473,6 +643,9 @@ export const endTraceSuccess = (context: TraceContext): void => {
   context.trace.endedAt = context.rootFrame.endedAt;
   context.trace.durationMs = context.rootFrame.durationMs;
   context.trace.status = "success";
+  if (context.store instanceof HyperDBTraceStore) {
+    context.store.updateTrace(context.trace);
+  }
   context.store.notify();
 };
 
@@ -487,6 +660,9 @@ export const endTraceError = (context: TraceContext, error: unknown): void => {
   context.trace.durationMs = finishDuration(context.trace.startedAt);
   context.trace.status = "error";
   context.trace.error = summarizeError(error);
+  if (context.store instanceof HyperDBTraceStore) {
+    context.store.updateTrace(context.trace);
+  }
   context.store.notify();
 };
 
@@ -499,7 +675,7 @@ export const beginSelectEvent = (
     where: QueryWhereClause[];
     bounds: TupleScanOptions[];
     limit?: number;
-    order?: string;
+    order?: SelectCommandEvent["order"];
   },
 ): SelectCommandEvent => {
   const event: SelectCommandEvent = {
@@ -601,8 +777,3 @@ export const endMutationEventError = (
   event.error = summarizeError(error);
   context.store.notify();
 };
-
-export const anonymousTraceMeta = (): TraceFrameMeta =>
-  createTraceFrameMeta("unknown", "anonymous", undefined);
-
-export type SerializableTraceValue = string | number | boolean | null | Value;

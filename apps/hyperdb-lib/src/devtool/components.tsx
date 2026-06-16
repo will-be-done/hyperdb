@@ -1,11 +1,6 @@
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { css, setup, styled } from "goober";
+import { DBProvider, useDispatch, useSyncSelector } from "../react";
 import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
 import {
   getTraceDBInfo,
@@ -19,6 +14,12 @@ import {
   type TraceFrame,
   type TraceStatus,
 } from "../hyperdb/tracing/store";
+import {
+  clearTraceStore,
+  clearTraceStoreDB,
+  setTraceStoreMaxTraces,
+  traceStoreTraces,
+} from "./traces";
 
 setup(React.createElement);
 
@@ -96,7 +97,9 @@ const writeStoredListWidth = (width: number): void => {
   try {
     if (typeof globalThis.localStorage === "undefined") return;
     globalThis.localStorage.setItem(listWidthKey, String(width));
-  } catch {}
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
 };
 
 const panelHeightKey = "hyperdb-devtools-panel-height";
@@ -122,7 +125,9 @@ const writeStoredPanelHeight = (height: number): void => {
   try {
     if (typeof globalThis.localStorage === "undefined") return;
     globalThis.localStorage.setItem(panelHeightKey, String(height));
-  } catch {}
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
 };
 
 const skipCachedKey = "hyperdb-devtools-skip-cached";
@@ -140,19 +145,91 @@ const writeStoredSkipCached = (skipCached: boolean): void => {
   try {
     if (typeof globalThis.localStorage === "undefined") return;
     globalThis.localStorage.setItem(skipCachedKey, String(skipCached));
-  } catch {}
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
 };
 
-const useTraces = (maxTraces: number): RootTrace[] => {
-  useEffect(() => {
-    hyperDBTraceStore.setMaxTraces(maxTraces);
-  }, [maxTraces]);
+type TraceKindFilter = "all" | "selector" | "action";
 
-  return useSyncExternalStore(
-    hyperDBTraceStore.subscribe,
-    hyperDBTraceStore.getSnapshot,
-    hyperDBTraceStore.getSnapshot,
-  );
+const kindFilterKey = "hyperdb-devtools-kind-filter";
+
+const isTraceKindFilter = (value: string | null): value is TraceKindFilter =>
+  value === "all" || value === "selector" || value === "action";
+
+const readStoredKindFilter = (): TraceKindFilter => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return "all";
+    const stored = globalThis.localStorage.getItem(kindFilterKey);
+    return isTraceKindFilter(stored) ? stored : "all";
+  } catch {
+    return "all";
+  }
+};
+
+const writeStoredKindFilter = (kind: TraceKindFilter): void => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return;
+    globalThis.localStorage.setItem(kindFilterKey, kind);
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
+};
+
+const kindFilterOptions: {
+  value: TraceKindFilter;
+  label: string;
+  dot?: "selector" | "action";
+}[] = [
+  { value: "all", label: "All" },
+  { value: "selector", label: "Sel", dot: "selector" },
+  { value: "action", label: "Act", dot: "action" },
+];
+
+type TraceSortField = "created" | "duration";
+type TraceSortDir = "asc" | "desc";
+
+const sortFieldKey = "hyperdb-devtools-sort-field";
+const sortDirKey = "hyperdb-devtools-sort-dir";
+
+const readStoredSortField = (): TraceSortField => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return "created";
+    return globalThis.localStorage.getItem(sortFieldKey) === "duration"
+      ? "duration"
+      : "created";
+  } catch {
+    return "created";
+  }
+};
+
+const writeStoredSortField = (field: TraceSortField): void => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return;
+    globalThis.localStorage.setItem(sortFieldKey, field);
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
+};
+
+const readStoredSortDir = (): TraceSortDir => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return "desc";
+    return globalThis.localStorage.getItem(sortDirKey) === "asc"
+      ? "asc"
+      : "desc";
+  } catch {
+    return "desc";
+  }
+};
+
+const writeStoredSortDir = (dir: TraceSortDir): void => {
+  try {
+    if (typeof globalThis.localStorage === "undefined") return;
+    globalThis.localStorage.setItem(sortDirKey, dir);
+  } catch {
+    // Ignore unavailable or blocked localStorage writes.
+  }
 };
 
 type TraceDBOption = {
@@ -585,6 +662,165 @@ const Button = styled("button")`
     background: var(--hdb-soft);
     color: var(--hdb-text);
     border-color: var(--hdb-border);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--hdb-border-strong);
+    outline-offset: 2px;
+  }
+`;
+
+const FilterBar = styled("div")`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 6px 14px;
+  border-bottom: 1px solid var(--hdb-border);
+  background: var(--hdb-panel);
+  flex-shrink: 0;
+`;
+
+const SegmentedControl = styled("div")`
+  display: flex;
+  flex: 0 0 auto;
+  width: 168px;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--hdb-border);
+  border-radius: 8px;
+  background: var(--hdb-surface);
+`;
+
+const Segment = styled(ButtonElement)<{ selected: boolean }>`
+  flex: 1 1 0;
+  min-width: 0;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font:
+    700 10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: ${({ selected }) =>
+    selected ? "var(--hdb-text)" : "var(--hdb-muted)"};
+  background: ${({ selected }) =>
+    selected ? "var(--hdb-lift)" : "transparent"};
+  box-shadow: ${({ selected }) =>
+    selected ? "0 1px 2px rgba(0, 0, 0, 0.25)" : "none"};
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+
+  &:hover {
+    color: var(--hdb-text);
+    background: ${({ selected }) =>
+      selected ? "var(--hdb-lift)" : "var(--hdb-soft)"};
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--hdb-border-strong);
+    outline-offset: -2px;
+  }
+`;
+
+const SegmentDot = styled("span")<{ kind: "selector" | "action" }>`
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: ${({ kind }) =>
+    kind === "action" ? "var(--hdb-accent)" : "var(--hdb-blue)"};
+`;
+
+const SortControls = styled("div")`
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  min-width: 0;
+`;
+
+const SortButton = styled(ButtonElement)`
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--hdb-border);
+  border-radius: 6px;
+  background: var(--hdb-surface);
+  color: var(--hdb-text);
+  font:
+    600 10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+
+  &:hover {
+    background: var(--hdb-soft);
+    border-color: var(--hdb-muted);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--hdb-border-strong);
+    outline-offset: 2px;
+  }
+`;
+
+const SortButtonLabel = styled("span")`
+  color: var(--hdb-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+`;
+
+const SortButtonValue = styled("span")`
+  color: var(--hdb-blue);
+  text-transform: uppercase;
+`;
+
+const SortDirButton = styled(ButtonElement)`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--hdb-border);
+  border-radius: 6px;
+  background: var(--hdb-surface);
+  color: var(--hdb-muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+
+  &:hover {
+    background: var(--hdb-soft);
+    border-color: var(--hdb-muted);
+    color: var(--hdb-text);
   }
 
   &:focus-visible {
@@ -1463,6 +1699,26 @@ const formatActionCount = (count: number): string =>
 export const isFullyCachedTrace = (trace: RootTrace): boolean =>
   trace.frames[0]?.cached === true;
 
+const compareTraces = (
+  left: RootTrace,
+  right: RootTrace,
+  field: TraceSortField,
+): number =>
+  field === "duration"
+    ? (left.durationMs ?? 0) - (right.durationMs ?? 0)
+    : left.startedAt - right.startedAt;
+
+export const sortTraces = (
+  traces: RootTrace[],
+  field: TraceSortField,
+  dir: TraceSortDir,
+): RootTrace[] => {
+  const sorted = [...traces].sort((left, right) =>
+    compareTraces(left, right, field),
+  );
+  return dir === "desc" ? sorted.reverse() : sorted;
+};
+
 type CallTreeOperation =
   | {
       kind: "frame";
@@ -2042,11 +2298,17 @@ const DevtoolsPanelInner = ({
   const [listWidth, setListWidth] = useState(readStoredListWidth);
   const [panelHeight, setPanelHeight] = useState(readStoredPanelHeight);
   const [skipCached, setSkipCached] = useState(readStoredSkipCached);
+  const [kindFilter, setKindFilter] =
+    useState<TraceKindFilter>(readStoredKindFilter);
+  const [sortField, setSortField] =
+    useState<TraceSortField>(readStoredSortField);
+  const [sortDir, setSortDir] = useState<TraceSortDir>(readStoredSortDir);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const isDraggingRef = useRef(false);
   const dividerRef = useRef<HTMLDivElement>(null);
   const panelDividerRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
+  const dispatch = useDispatch();
 
   const isVerticallyResizable =
     !embedded && (position === "top" || position === "bottom");
@@ -2125,7 +2387,16 @@ const DevtoolsPanelInner = ({
     () => (db ? getTraceDBInfo(db) : undefined),
     [db],
   );
-  const traces = useTraces(maxTraces);
+  const traces = useSyncSelector({
+    selector: traceStoreTraces,
+    args: { maxTraces, kind: kindFilter },
+    defaultValue: [],
+  });
+
+  useEffect(() => {
+    dispatch(setTraceStoreMaxTraces({ maxTraces }));
+  }, [dispatch, maxTraces]);
+
   const observedDBOptions = useMemo(
     () => addCurrentDBOption(getTraceDBOptions(traces), currentDBInfo),
     [currentDBInfo, traces],
@@ -2161,11 +2432,15 @@ const DevtoolsPanelInner = ({
       ),
     [activeDBId, skipCached, traces],
   );
+  const sortedTraces = useMemo(
+    () => sortTraces(visibleTraces, sortField, sortDir),
+    [visibleTraces, sortField, sortDir],
+  );
   const selectedTrace = useMemo(
     () =>
-      visibleTraces.find((trace) => trace.id === selectedTraceId) ??
-      visibleTraces[0],
-    [selectedTraceId, visibleTraces],
+      sortedTraces.find((trace) => trace.id === selectedTraceId) ??
+      sortedTraces[0],
+    [selectedTraceId, sortedTraces],
   );
 
   useEffect(() => {
@@ -2210,15 +2485,36 @@ const DevtoolsPanelInner = ({
     writeStoredSkipCached(next);
   };
 
+  const selectKindFilter = (next: TraceKindFilter) => {
+    setKindFilter(next);
+    writeStoredKindFilter(next);
+    setSelectedTraceId(undefined);
+  };
+
+  const toggleSortField = () => {
+    const next: TraceSortField =
+      sortField === "created" ? "duration" : "created";
+    setSortField(next);
+    writeStoredSortField(next);
+  };
+
+  const toggleSortDir = () => {
+    const next: TraceSortDir = sortDir === "desc" ? "asc" : "desc";
+    setSortDir(next);
+    writeStoredSortDir(next);
+  };
+
   const clearVisibleTraces = () => {
     if (hasMultipleDBs && activeDBId) {
-      hyperDBTraceStore.clearDB(
-        activeDBId === unassignedDBId ? undefined : activeDBId,
+      dispatch(
+        clearTraceStoreDB({
+          dbId: activeDBId === unassignedDBId ? undefined : activeDBId,
+        }),
       );
       return;
     }
 
-    hyperDBTraceStore.clear();
+    dispatch(clearTraceStore({}));
   };
 
   return (
@@ -2294,11 +2590,46 @@ const DevtoolsPanelInner = ({
             ) : null}
           </ToolbarActions>
         </Toolbar>
+        <FilterBar>
+          <SegmentedControl role="tablist" aria-label="Filter traces by kind">
+            {kindFilterOptions.map((option) => (
+              <Segment
+                key={option.value}
+                role="tab"
+                aria-selected={kindFilter === option.value}
+                selected={kindFilter === option.value}
+                onClick={() => selectKindFilter(option.value)}
+              >
+                {option.dot ? <SegmentDot kind={option.dot} /> : null}
+                {option.label}
+              </Segment>
+            ))}
+          </SegmentedControl>
+          <SortControls>
+            <SortButton
+              onClick={toggleSortField}
+              title="Toggle sort field"
+              aria-label={`Sort by ${sortField}. Click to change.`}
+            >
+              <SortButtonLabel>Sort</SortButtonLabel>
+              <SortButtonValue>{sortField}</SortButtonValue>
+            </SortButton>
+            <SortDirButton
+              onClick={toggleSortDir}
+              title={`Sort ${sortDir === "desc" ? "descending" : "ascending"}`}
+              aria-label={`Sort direction ${
+                sortDir === "desc" ? "descending" : "ascending"
+              }. Click to change.`}
+            >
+              {sortDir === "desc" ? "↓" : "↑"}
+            </SortDirButton>
+          </SortControls>
+        </FilterBar>
         <Rows>
-          {visibleTraces.length === 0 ? (
+          {sortedTraces.length === 0 ? (
             <Empty>No traces</Empty>
           ) : (
-            visibleTraces.map((trace) => (
+            sortedTraces.map((trace) => (
               <TraceRow
                 key={trace.id}
                 selected={trace.id === selectedTrace?.id}
@@ -2352,22 +2683,31 @@ const DevtoolsPanelInner = ({
   );
 };
 
+const DevtoolsTraceDBProvider = ({
+  children,
+}: {
+  children: React.ReactNode;
+}) => <DBProvider value={hyperDBTraceStore.getDB()}>{children}</DBProvider>;
+
 const ContextPanel = (props: Omit<HyperDBDevtoolsPanelProps, "db">) => {
   return <DevtoolsPanelInner {...props} />;
 };
 
-export const HyperDBDevtoolsPanel = (props: HyperDBDevtoolsPanelProps) =>
-  props.db ? (
-    <DevtoolsPanelInner {...props} />
-  ) : (
-    <ContextPanel
-      maxTraces={props.maxTraces}
-      theme={props.theme}
-      position={props.position}
-      embedded={props.embedded}
-      onClose={props.onClose}
-    />
-  );
+export const HyperDBDevtoolsPanel = (props: HyperDBDevtoolsPanelProps) => (
+  <DevtoolsTraceDBProvider>
+    {props.db ? (
+      <DevtoolsPanelInner {...props} />
+    ) : (
+      <ContextPanel
+        maxTraces={props.maxTraces}
+        theme={props.theme}
+        position={props.position}
+        embedded={props.embedded}
+        onClose={props.onClose}
+      />
+    )}
+  </DevtoolsTraceDBProvider>
+);
 
 export const HyperDBDevtools = ({
   db,
