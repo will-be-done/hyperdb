@@ -349,13 +349,13 @@ export function* runCommandGenerator<TReturn>(
           if (argsKey != null) {
             // Drop descendants not referenced by this body run (conditional
             // branches / changed args), keeping the rest cached.
-            if (scopedVisited) {
+            if (scopedVisited && scopedMemo) {
               pruneChildMemo(scopedMemo, scopedVisited);
             }
             storeChildEntry(options.childMemo, cmd.selector, argsKey, {
               selectRangeCmds: childRanges,
               result: value,
-              childMemo: scopedMemo,
+              childMemo: scopedMemo ?? new Map(),
             });
           }
           // Bubble child ranges up so the root subscription reruns on changes

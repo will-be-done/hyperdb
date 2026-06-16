@@ -219,6 +219,7 @@ describe("selector", () => {
     expect(() => validated({ id: 123 } as never)).toThrow(
       "expected string at id",
     );
+    expect(() => validated({ id: "task-1" })).not.toThrow();
     expect(() => loose({ id: 123 } as never)).not.toThrow();
   });
 
