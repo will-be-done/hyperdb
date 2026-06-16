@@ -343,8 +343,7 @@ export function* runCommandGenerator<TReturn>(
             visited: scopedVisited,
             traceContext,
             skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
-            skipChildTrace:
-              options.skipChildTrace || cmd.skipTrace?.childTrace,
+            skipChildTrace: options.skipChildTrace || cmd.skipTrace?.childTrace,
           });
 
           if (argsKey != null) {
@@ -370,12 +369,18 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
-            kind: "insert",
-            tableName: cmd.table.tableName,
-            rows: cmd.values,
-            run: () => scopedDB.insert(cmd.table, cmd.values),
-          }),
+          yield* runMutationCommand(
+            scopedDB,
+            tracer,
+            traceContext,
+            traceFrame,
+            {
+              kind: "insert",
+              tableName: cmd.table.tableName,
+              rows: cmd.values,
+              run: () => scopedDB.insert(cmd.table, cmd.values),
+            },
+          ),
         );
       } else if (isUpsertActionCmd(cmd)) {
         if (!options.allowWrites) {
@@ -383,12 +388,18 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
-            kind: "upsert",
-            tableName: cmd.table.tableName,
-            rows: cmd.values,
-            run: () => scopedDB.upsert(cmd.table, cmd.values),
-          }),
+          yield* runMutationCommand(
+            scopedDB,
+            tracer,
+            traceContext,
+            traceFrame,
+            {
+              kind: "upsert",
+              tableName: cmd.table.tableName,
+              rows: cmd.values,
+              run: () => scopedDB.upsert(cmd.table, cmd.values),
+            },
+          ),
         );
       } else if (isDeleteActionCmd(cmd)) {
         if (!options.allowWrites) {
@@ -396,12 +407,18 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
-            kind: "delete",
-            tableName: cmd.table.tableName,
-            ids: cmd.values,
-            run: () => scopedDB.delete(cmd.table, cmd.values),
-          }),
+          yield* runMutationCommand(
+            scopedDB,
+            tracer,
+            traceContext,
+            traceFrame,
+            {
+              kind: "delete",
+              tableName: cmd.table.tableName,
+              ids: cmd.values,
+              run: () => scopedDB.delete(cmd.table, cmd.values),
+            },
+          ),
         );
       } else if (isGetCurrentTraitsCmd(cmd)) {
         result = gen.next(scopedDB.getTraits());

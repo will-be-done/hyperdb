@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DB, execSync } from "../../db";
-import { selector, initSelector, initCachedSelector, select } from "./selector";
+import {
+  createSelector,
+  initSelector,
+  initCachedSelector,
+  select,
+} from "./selector";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
@@ -17,6 +22,7 @@ type Task = {
   projectId: string;
   orderToken: string;
 };
+const selector = createSelector();
 
 const tasksTable = defineTable("tasks", {
   type: v.literal("task"),
@@ -58,7 +64,9 @@ const specificTask = selector(function* (id: string) {
   return tasks[0];
 });
 
-const createTestDB = (...tables: Parameters<SubscribableDB["loadTables"]>[0]) => {
+const createTestDB = (
+  ...tables: Parameters<SubscribableDB["loadTables"]>[0]
+) => {
   const testDb = new SubscribableDB(new DB(new BptreeInmemDriver()));
   execSync(testDb.loadTables(tables));
   return testDb;
@@ -125,7 +133,9 @@ describe("selector", () => {
       },
     });
 
-    expect(select(testDb, doneProjectTasks({ projectId: "project-1" }))).toEqual([
+    expect(
+      select(testDb, doneProjectTasks({ projectId: "project-1" })),
+    ).toEqual([
       {
         id: "task-1",
         title: "Task 1",
@@ -156,6 +166,9 @@ describe("selector", () => {
       childTrace: true,
       rootTrace: false,
     });
+    expect(metadataSelector.trace).toBe(false);
+    expect(metadataSelector.autoTrace).toBe(true);
+    expect(metadataSelector.validateArgs).toBe(false);
     expect(traceMeta?.name).toBe("metadataSelector");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
     expect(traceMeta?.skipChildTrace).toBe(true);
@@ -181,6 +194,32 @@ describe("selector", () => {
         },
       }),
     ).toThrow("Selector name is required");
+  });
+
+  test("createSelector can enable and disable object args validation", () => {
+    const validatingSelector = createSelector({ validateArgs: true });
+    const looseSelector = createSelector({ validateArgs: false });
+
+    const validated = validatingSelector({
+      name: "validatedArgsSelector",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+    const loose = looseSelector({
+      name: "looseArgsSelector",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    expect(validated.validateArgs).toBe(true);
+    expect(() => validated({ id: 123 } as never)).toThrow(
+      "expected string at id",
+    );
+    expect(() => loose({ id: 123 } as never)).not.toThrow();
   });
 
   test("cached object-form selectors share one DB subscription for same args", () => {

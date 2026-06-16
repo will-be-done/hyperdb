@@ -23,6 +23,8 @@ export type TraceFrameMeta = {
   kind: TraceKind;
   name: string;
   arg: unknown;
+  trace?: boolean;
+  autoTrace?: boolean;
   skipRootTrace?: boolean;
   skipChildTrace?: boolean;
 };
@@ -190,7 +192,10 @@ export const createTraceFrameMeta = (
   kind: TraceKind,
   name: string,
   arg: unknown,
-  options: Pick<TraceFrameMeta, "skipRootTrace" | "skipChildTrace"> = {},
+  options: Pick<
+    TraceFrameMeta,
+    "trace" | "autoTrace" | "skipRootTrace" | "skipChildTrace"
+  > = {},
 ): TraceFrameMeta => ({
   id: nextMetaId(),
   kind,

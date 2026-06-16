@@ -128,14 +128,6 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getId();
   }
 
-  getTraceEnabled(): boolean {
-    return this.subDb.getTraceEnabled?.() ?? false;
-  }
-
-  getAutoTraceEnabled(): boolean {
-    return this.subDb.getAutoTraceEnabled?.() ?? true;
-  }
-
   getTracer(): HyperDBTracer | null | undefined {
     return this.subDb.getTracer?.();
   }
@@ -524,14 +516,6 @@ export class SubscribableDB implements HyperDB {
 
   getId(): string {
     return this.db.getId();
-  }
-
-  getTraceEnabled(): boolean {
-    return this.db.getTraceEnabled?.() ?? false;
-  }
-
-  getAutoTraceEnabled(): boolean {
-    return this.db.getAutoTraceEnabled?.() ?? true;
   }
 
   getTracer(): HyperDBTracer | null | undefined {

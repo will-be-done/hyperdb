@@ -1,6 +1,6 @@
+import { createSelector } from "../hyperdb";
 import { action } from "../hyperdb/commands/action/builders";
 import { selectFrom } from "../hyperdb/commands/query/builder";
-import { selector } from "../hyperdb/commands/query/selector";
 import { v } from "../hyperdb/schema/values";
 import {
   hyperDBTraceStore,
@@ -8,15 +8,13 @@ import {
   traceMetaRuntimeTable,
 } from "../hyperdb/tracing/store";
 
+const selector = createSelector();
+
 export const traceStoreTraces = selector({
   name: "traceStoreTraces",
   args: {
     maxTraces: v.number(),
-    kind: v.union(
-      v.literal("all"),
-      v.literal("selector"),
-      v.literal("action"),
-    ),
+    kind: v.union(v.literal("all"), v.literal("selector"), v.literal("action")),
   },
   handler: function* ({ maxTraces, kind }) {
     yield* selectFrom(traceMetaRuntimeTable, "byId").where((q) =>

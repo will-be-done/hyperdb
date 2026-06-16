@@ -33,8 +33,6 @@ export interface HyperDB {
   withTraits(...trait: Trait[]): HyperDB;
   getTraits(): Trait[];
   getId(): string;
-  getTraceEnabled?(): boolean;
-  getAutoTraceEnabled?(): boolean;
   getTracer?(): HyperDBTracer | undefined | null;
   getOptions?(): CodecOptions;
 

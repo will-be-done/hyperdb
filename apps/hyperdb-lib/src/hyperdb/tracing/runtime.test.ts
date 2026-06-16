@@ -18,6 +18,7 @@ import {
 } from "../commands/action/builders";
 import { selectFrom } from "../commands/query/builder";
 import {
+  createSelector,
   select,
   selector,
 } from "../commands/query/selector";
@@ -192,16 +193,15 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.bounds.length).toBeGreaterThan(0);
   });
 
-  it("records traces before the devtool opens when the db has trace enabled", () => {
+  it("records traces before the devtool opens when selector trace is enabled", () => {
     unsubscribeTraceListener?.();
     unsubscribeTraceListener = undefined;
-    const db = new SubscribableDB(
-      new DB(new BptreeInmemDriver(), { trace: true }),
-    );
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
 
-    const readTaskSelector = selector(function* readTaskBeforeDevtoolOpen() {
+    const tracedSelector = createSelector({ trace: true });
+    const readTaskSelector = tracedSelector(function* readTaskBeforeDevtoolOpen() {
       return yield* selectFrom(tasksTable, "projectState").where((q) =>
         q.eq("projectId", "project-1"),
       );
@@ -214,19 +214,20 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents).toHaveLength(1);
   });
 
-  it("does not record devtool-open traces when db auto trace is disabled", () => {
-    const db = new SubscribableDB(
-      new DB(new BptreeInmemDriver(), { autoTrace: false }),
-    );
+  it("does not record devtool-open traces when selector auto trace is disabled", () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
     hyperDBTraceStore.clear();
 
-    const readTaskSelector = selector(function* autoTraceDisabledSelector() {
-      return yield* selectFrom(tasksTable, "projectState").where((q) =>
-        q.eq("projectId", "project-1"),
-      );
-    });
+    const manualOnlySelector = createSelector({ autoTrace: false });
+    const readTaskSelector = manualOnlySelector(
+      function* autoTraceDisabledSelector() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    );
 
     expect(select(db, readTaskSelector())).toEqual([task()]);
     expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
