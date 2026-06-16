@@ -41,6 +41,11 @@ export const isSelectRangeCmd = (cmd: unknown): cmd is SelectRangeCmd =>
 
 const runSelectorType = "runSelector";
 
+export type SelectorMemoization = {
+  root: boolean;
+  selfChild: boolean;
+};
+
 /**
  * Marker yielded by a `selector()` wrapper so the runner can decide whether to
  * run the selector body or reuse a memoized result. The body is created lazily
@@ -56,6 +61,7 @@ export type RunSelectorCmd = {
   makeBody: () => Generator<unknown, unknown, unknown>;
   // Display name for trace frames.
   name: string;
+  memoization?: SelectorMemoization;
   skipTrace?: {
     childTrace: boolean;
     rootTrace: boolean;

@@ -279,8 +279,11 @@ export function* runCommandGenerator<TReturn>(
           throw error;
         }
       } else if (isRunSelectorCmd(cmd)) {
+        const memoizesSelf = cmd.memoization?.selfChild === true;
         const argsKey =
-          options.childMemo !== undefined ? argsKeyOf(cmd.args) : undefined;
+          options.childMemo !== undefined && memoizesSelf
+            ? argsKeyOf(cmd.args)
+            : undefined;
         if (db.getOptions?.().freezeArgs) {
           deepFreeze(cmd.args);
         }
@@ -317,10 +320,18 @@ export function* runCommandGenerator<TReturn>(
           // when the node itself recomputes, its unaffected descendants stay
           // cached. Non-serializable nodes can't be persisted, so their subtree
           // memo is a throwaway scope (ephemeral, recomputed each run).
-          const scopedMemo: ChildMemo =
-            argsKey != null ? (memo?.childMemo ?? new Map()) : new Map();
+          const scopedMemo: ChildMemo | undefined =
+            options.childMemo === undefined
+              ? undefined
+              : memoizesSelf
+                ? argsKey != null
+                  ? (memo?.childMemo ?? new Map())
+                  : new Map()
+                : options.childMemo;
           const scopedVisited: ChildVisited | undefined = options.visited
-            ? new Map()
+            ? memoizesSelf && argsKey != null
+              ? new Map()
+              : options.visited
             : undefined;
           // Re-wrap the freshly created body with the selector frame's own meta
           // so its scans nest under this frame instead of spawning a duplicate.

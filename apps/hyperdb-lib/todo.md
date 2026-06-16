@@ -29,7 +29,9 @@ TODO:
 1. Rename query -> select dir
 1. rename autoTrace
 1. remove child cache? Only collect root cache?
+1. Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
 1. Generate docs
+
 
 TODO for devtool:
 1. DONE Polisj UI. Remove flickering. Maybe adopt UI from livestore
@@ -45,6 +47,8 @@ TODO for devtool:
 1. DONE Vertical resize of devtool
 1. DONE When clear events - db select still should be present
 1. DONE Show any actions run, but if it was cached - show as cached
+1. Use hyperdb for traces
+1. Add selectors | actions tabs
 
 devtool maybe:
 1. Mutation - show button display diff. Also, add pagination if too much mutations
