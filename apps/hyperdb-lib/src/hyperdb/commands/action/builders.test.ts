@@ -3,7 +3,6 @@ import { defineTable } from "../../schema/table";
 import { DB, execSync } from "../../db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import {
-  action,
   createAction,
   deleteRows,
   syncDispatch,
@@ -13,6 +12,8 @@ import {
 import { selectFrom } from "../query/builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
+
+const action = createAction();
 
 type Task = {
   type: "task";

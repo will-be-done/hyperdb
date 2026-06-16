@@ -1,5 +1,4 @@
-import { createSelector } from "../hyperdb";
-import { action } from "../hyperdb/commands/action/builders";
+import { createAction, createSelector } from "../hyperdb";
 import { selectFrom } from "../hyperdb/commands/query/builder";
 import { v } from "../hyperdb/schema/values";
 import {
@@ -8,6 +7,7 @@ import {
   traceMetaRuntimeTable,
 } from "../hyperdb/tracing/store";
 
+const action = createAction();
 const selector = createSelector();
 
 export const traceStoreTraces = selector({

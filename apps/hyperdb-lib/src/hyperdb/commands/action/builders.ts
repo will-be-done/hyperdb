@@ -2,7 +2,12 @@ import { runCommandGenerator } from "../runner";
 import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Trait } from "../../core/primitives";
-import { assertValid, v, type InferObject, type Validator } from "../../schema/values";
+import {
+  assertValid,
+  v,
+  type InferObject,
+  type Validator,
+} from "../../schema/values";
 import type { ExtractSchema, TableDefinition } from "../../schema/table";
 import { wrapGeneratorWithTraceMeta } from "../../tracing/metadata";
 import {
@@ -15,8 +20,6 @@ import {
   type InsertActionCmd,
   type UpsertActionCmd,
 } from "./commands";
-
-export * from "./commands";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type ActionFn<TReturn, TParams extends any[]> = (
@@ -48,9 +51,7 @@ export type ObjectAction<
 export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
-  handler: (
-    args: InferObject<TSchema>,
-  ) => Generator<unknown, TReturn, unknown>;
+  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
 
 const defineActionMetadata = <
@@ -136,7 +137,9 @@ const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
   validateArgs: false,
 };
 
-export function createAction(options: ActionFactoryOptions = {}): ActionBuilder {
+export function createAction(
+  options: ActionFactoryOptions = {},
+): ActionBuilder {
   const factoryOptions = {
     ...defaultActionFactoryOptions,
     ...options,
@@ -202,8 +205,6 @@ export function createAction(options: ActionFactoryOptions = {}): ActionBuilder 
 
   return buildAction as ActionBuilder;
 }
-
-export const action = createAction();
 
 export function* insert<TTable extends TableDefinition<any, any>>(
   table: TTable,
