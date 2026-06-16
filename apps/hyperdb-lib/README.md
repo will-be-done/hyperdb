@@ -148,6 +148,7 @@ executor.
 import {
   BptreeInmemDriver,
   DB,
+  hyperDBTraceStore,
   SubscribableDB,
 } from "@will-be-done/hyperdb-lib";
 
@@ -157,11 +158,12 @@ const baseDb = new DB(new BptreeInmemDriver(), {
   freezeRows: false,
   trace: true,
   autoTrace: true,
+  tracer: hyperDBTraceStore,
 });
 
 const db = new SubscribableDB(baseDb);
 
-syncDb.loadTables([tasksTable]);
+db.loadTables([tasksTable]);
 ```
 
 Runtime options:
@@ -173,6 +175,8 @@ Runtime options:
 - `traits`: initial metadata traits attached to the DB.
 - `trace`: record traces even before the devtool is open.
 - `autoTrace`: allow listener/devtool-activated tracing. Defaults to `true`.
+- `tracer`: per-DB tracer implementation used to configure tracing behavior for
+  this database instead of using the global default tracer.
 
 Runtime types:
 

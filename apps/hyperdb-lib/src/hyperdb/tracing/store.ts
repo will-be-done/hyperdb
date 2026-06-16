@@ -347,6 +347,7 @@ export class HyperDBTraceStore implements HyperDBTracer {
   updateTrace = (trace: RootTrace): void => {
     if (!this.payloads.has(trace.id)) return;
     this.db.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
+    this.payloads.set(trace.id, trace);
     this.refreshSnapshot();
   };
 

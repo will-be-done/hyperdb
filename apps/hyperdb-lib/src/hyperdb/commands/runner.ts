@@ -322,7 +322,7 @@ export function* runCommandGenerator<TReturn>(
                   : new Map()
                 : options.childMemo;
           const scopedVisited: ChildVisited | undefined = options.visited
-            ? memoizesSelf && argsKey != null
+            ? memoizesSelf
               ? new Map()
               : options.visited
             : undefined;

@@ -283,7 +283,7 @@ export function selector<TReturn, TParams extends any[]>(
 
   const fn = input;
   const displayName = fn.name || "anonymous selector";
-  const memoization = defaultSelectorMemoization;
+  const memoization = normalizeSelectorMemoization(undefined);
   const makeBody = (args: TParams): Generator<unknown, unknown, unknown> => {
     if (isGeneratorFunction(fn)) {
       return fn(...args) as Generator<unknown, unknown, unknown>;
