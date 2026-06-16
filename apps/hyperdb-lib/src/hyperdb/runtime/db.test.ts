@@ -398,11 +398,11 @@ describe("db", async () => {
   //       ];
   //
   //       expect(() => {
-  //         const db = new DB(driver, [tasksTable]);
+  //         const db = new DB(driver);
   //         db.insert(tasksTable, tasks);
   //       }).toThrow();
   //
-  //       const db = new DB(driver, [tasksTable]);
+  //       const db = new DB(driver);
   //       db.insert(tasksTable, [justTask]);
   //       expect(() => {
   //         db.insert(tasksTable, [justTask]);
@@ -623,7 +623,7 @@ describe("Database Operations Edge Cases", async () => {
         );
 
         const db = new SyncDB(
-          new DB(driver, [docsTable], { runtimeValidation: true }),
+          new DB(driver, { runtimeValidation: true }),
         );
         db.loadTables([docsTable]);
 
@@ -710,7 +710,7 @@ describe("Database Operations Edge Cases", async () => {
           .index("byPostTitleSlug", ["title", "slug"]);
 
         const db = new SyncDB(
-          new DB(driver, [documentsTable], { runtimeValidation: true }),
+          new DB(driver, { runtimeValidation: true }),
         );
         db.loadTables([documentsTable]);
 

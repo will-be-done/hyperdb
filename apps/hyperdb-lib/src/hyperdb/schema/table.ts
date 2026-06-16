@@ -2,6 +2,7 @@
 import {
   type Infer,
   type InferObject,
+  type ObjectValidator,
   type Validator,
   isIndexableValueValidator,
   v,
@@ -69,6 +70,7 @@ export type InferTableSchema<TSchema extends ValidatorSchema> =
 export interface TableDefinition<
   T = any,
   I extends AnyIndexDefinitions = AnyIndexDefinitions,
+  TSchema = undefined,
 > {
   tableName: string;
   schema: T;
@@ -76,7 +78,7 @@ export interface TableDefinition<
   schemaFields?: ValidatorSchema;
   indexes: I;
   idIndexName: string;
-  v(): Validator<T>;
+  v(): TSchema extends ValidatorSchema ? ObjectValidator<TSchema> : Validator<T>;
   index<
     const TName extends string,
     const TCols extends readonly IndexableColumn<T>[],
@@ -90,7 +92,8 @@ export interface TableDefinition<
         type: "btree";
         cols: TCols;
       };
-    }
+    },
+    TSchema
   >;
   index<
     const TName extends string,
@@ -106,7 +109,8 @@ export interface TableDefinition<
         type: "btree";
         cols: TCols;
       };
-    }
+    },
+    TSchema
   >;
   index<const TName extends string, const TCol extends IndexableColumn<T>>(
     name: TName,
@@ -119,15 +123,16 @@ export interface TableDefinition<
         type: "hash";
         cols: readonly [TCol];
       };
-    }
+    },
+    TSchema
   >;
 }
 
 export type ExtractSchema<TTable> =
-  TTable extends TableDefinition<infer T, any> ? T : never;
+  TTable extends TableDefinition<infer T, any, any> ? T : never;
 
 export type ExtractIndexes<TTable> =
-  TTable extends TableDefinition<any, infer I> ? I : never;
+  TTable extends TableDefinition<any, infer I, any> ? I : never;
 
 function validateKey(key: string, kind: string, tableName: string): void {
   if (key === "" || key.startsWith("$")) {
@@ -186,9 +191,9 @@ export function validateIndexes(
   }
 }
 
-function addIndexMethod<T, I extends AnyIndexDefinitions>(
-  tableDef: Omit<TableDefinition<T, I>, "index" | "v">,
-): TableDefinition<T, I> {
+function addIndexMethod<T, I extends AnyIndexDefinitions, TSchema = undefined>(
+  tableDef: Omit<TableDefinition<T, I, TSchema>, "index" | "v">,
+): TableDefinition<T, I, TSchema> {
   return {
     ...tableDef,
     v() {
@@ -198,7 +203,7 @@ function addIndexMethod<T, I extends AnyIndexDefinitions>(
         );
       }
 
-      return tableDef.schemaValidator;
+      return tableDef.schemaValidator as any;
     },
     index(
       name: string,
@@ -218,7 +223,7 @@ function addIndexMethod<T, I extends AnyIndexDefinitions>(
         indexes: nextIndexes,
       }) as any;
     },
-  };
+  } as any;
 }
 
 function validateSchemaFields(
@@ -344,7 +349,8 @@ export function defineTable<const TSchema extends ValidatorSchemaWithId>(
       type: "hash";
       cols: readonly ["id"];
     };
-  }
+  },
+  TSchema
 >;
 export function defineTable<const TValidator extends Validator<{ id: string }>>(
   tableName: string,

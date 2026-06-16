@@ -17,6 +17,8 @@ export type TraceFrameMeta = {
   kind: TraceKind;
   name: string;
   arg: unknown;
+  skipRootTrace?: boolean;
+  skipChildTrace?: boolean;
 };
 
 export type TraceFrame = {
@@ -30,6 +32,9 @@ export type TraceFrame = {
   durationMs?: number;
   status: TraceStatus;
   error?: TraceError;
+  // Set when this selector frame was served from cache, i.e. its scans were
+  // skipped because no triggering op intersected its ranges.
+  cached?: boolean;
   children: TraceFrame[];
   commandIds: string[];
   mutationIds: string[];
@@ -102,6 +107,19 @@ const dbLabels = new Map<string, string>();
 type TraceDBIdentified = {
   getId?: () => string;
 };
+
+type TraceDBConfigured = {
+  getTraceEnabled?: () => boolean;
+  getAutoTraceEnabled?: () => boolean;
+};
+
+const isTraceEnabledForDB = (db: object | undefined): boolean =>
+  ((db as TraceDBConfigured | undefined)?.getTraceEnabled?.() ?? false) ===
+  true;
+
+const isAutoTraceEnabledForDB = (db: object | undefined): boolean =>
+  ((db as TraceDBConfigured | undefined)?.getAutoTraceEnabled?.() ?? true) ===
+  true;
 
 const nextId = (prefix: string): string => {
   idCounter += 1;
@@ -206,7 +224,7 @@ export class HyperDBTraceStore {
   private notifyQueued = false;
   private maxTraces: number;
 
-  constructor(maxTraces = 200) {
+  constructor(maxTraces = 2000) {
     this.maxTraces = maxTraces;
   }
 
@@ -292,11 +310,13 @@ export const createTraceFrameMeta = (
   kind: TraceKind,
   name: string,
   arg: unknown,
+  options: Pick<TraceFrameMeta, "skipRootTrace" | "skipChildTrace"> = {},
 ): TraceFrameMeta => ({
   id: nextId("meta"),
   kind,
   name,
   arg,
+  ...options,
 });
 
 const createFrame = (
@@ -338,7 +358,14 @@ export const startRootTrace = (
   store = hyperDBTraceStore,
   db?: object,
 ): TraceContext | undefined => {
-  if (!store.isActive()) return undefined;
+  if (meta.skipRootTrace) return undefined;
+
+  if (
+    !isTraceEnabledForDB(db) &&
+    (!store.isActive() || !isAutoTraceEnabledForDB(db))
+  ) {
+    return undefined;
+  }
 
   const startedAt = wallClockNow();
   const rootFrame = createFrame(meta, startedAt);
@@ -417,6 +444,29 @@ export const enterFramePath = (
 export const getCurrentTraceFrame = (context: TraceContext): TraceFrame =>
   context.frameStack[context.frameStack.length - 1]!;
 
+export const getCurrentTraceFrameMeta = (
+  context: TraceContext,
+): TraceFrameMeta => context.frameMetas[context.frameMetas.length - 1]!;
+
+export const markTraceFrameCached = (
+  context: TraceContext,
+  frame: TraceFrame,
+): void => {
+  frame.cached = true;
+  context.store.notify();
+};
+
+export const recordCachedRootTrace = (
+  meta: TraceFrameMeta,
+  db?: object,
+): void => {
+  const context = startRootTrace(meta, hyperDBTraceStore, db);
+  if (!context) return;
+
+  markTraceFrameCached(context, context.rootFrame);
+  endTraceSuccess(context);
+};
+
 export const endTraceSuccess = (context: TraceContext): void => {
   enterFramePath(context, undefined);
   finishFrame(context.rootFrame, "success");
@@ -426,10 +476,7 @@ export const endTraceSuccess = (context: TraceContext): void => {
   context.store.notify();
 };
 
-export const endTraceError = (
-  context: TraceContext,
-  error: unknown,
-): void => {
+export const endTraceError = (context: TraceContext, error: unknown): void => {
   while (context.frameStack.length > 0) {
     const frame = context.frameStack.pop()!;
     context.frameMetas.pop();
@@ -532,7 +579,9 @@ export const beginMutationEvent = (
 export const endMutationEventSuccess = (
   context: TraceContext,
   event: MutationEvent,
-  patch: Partial<Pick<MutationEvent, "rows" | "ids" | "oldValue" | "newValue">> = {},
+  patch: Partial<
+    Pick<MutationEvent, "rows" | "ids" | "oldValue" | "newValue">
+  > = {},
 ): void => {
   Object.assign(event, patch);
   event.endedAt = wallClockNow();

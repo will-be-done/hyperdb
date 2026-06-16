@@ -128,6 +128,19 @@ describe("SubscribableDB", async () => {
         unsubscribe();
       });
 
+      it("throws when committing an already committed transaction", async () => {
+        const db = new DB(await driver());
+        const subscribableDB = new SubscribableDB(db);
+
+        const syncDB = new SyncDB(subscribableDB);
+        syncDB.loadTables([tasksTable]);
+
+        const tx = syncDB.beginTx();
+        tx.commit();
+
+        expect(() => tx.commit()).toThrow("Cannot modify a committed tx");
+      });
+
       it("should handle multiple subscribers correctly", async () => {
         const db = new DB(await driver());
         const subscribableDB = new SubscribableDB(db);

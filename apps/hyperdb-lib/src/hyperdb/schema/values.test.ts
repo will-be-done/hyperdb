@@ -82,6 +82,87 @@ describe("validators", () => {
     });
   });
 
+  it("makes object validator fields shallowly optional", () => {
+    const validator = v.partial(
+      v.object({
+        id: v.string(),
+        count: v.number(),
+        done: v.boolean(),
+      }),
+    );
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({});
+    assertType<Value>({ count: 1 });
+    assertType<Value>({ id: "1", count: 1, done: false });
+
+    expect(assertValid(validator, { count: 1 })).toEqual({ count: 1 });
+    expect(assertValid(validator, {})).toEqual({});
+    expect(assertValid(validator, { id: "x", count: 2, done: true })).toEqual({
+      id: "x",
+      count: 2,
+      done: true,
+    });
+    expect(() => assertValid(validator, { count: "1" })).toThrow(
+      /expected finite number at count/,
+    );
+  });
+
+  it("makes specified fields required, leaving others optional", () => {
+    const base = v.object({
+      id: v.string(),
+      count: v.number(),
+      done: v.boolean(),
+    });
+
+    const validator = v.required(v.partial(base), ["id", "count"]);
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({ id: "1", count: 1 });
+    assertType<Value>({ id: "1", count: 1, done: false });
+
+    expect(assertValid(validator, { id: "1", count: 1 })).toEqual({
+      id: "1",
+      count: 1,
+    });
+    expect(assertValid(validator, { id: "1", count: 1, done: true })).toEqual({
+      id: "1",
+      count: 1,
+      done: true,
+    });
+
+    expect(() => assertValid(validator, { id: "1" })).toThrow(
+      /missing required field at count/,
+    );
+    expect(() => assertValid(validator, { count: 1 })).toThrow(
+      /missing required field at id/,
+    );
+    expect(() => assertValid(validator, {})).toThrow(/missing required field/);
+    expect(() => assertValid(validator, { id: 1, count: 1 })).toThrow(
+      /expected string at id/,
+    );
+  });
+
+  it("v.required is a no-op on already-required fields", () => {
+    const base = v.object({
+      id: v.string(),
+      title: v.optional(v.string()),
+    });
+
+    const validator = v.required(base, ["id"]);
+
+    expect(assertValid(validator, { id: "1" })).toEqual({ id: "1" });
+    expect(assertValid(validator, { id: "1", title: "hi" })).toEqual({
+      id: "1",
+      title: "hi",
+    });
+    expect(() => assertValid(validator, { title: "hi" })).toThrow(
+      /missing required field at id/,
+    );
+  });
+
   it("rejects undefined stored values, including inside arrays", () => {
     expect(() => assertValid(v.string(), undefined)).toThrow(
       /undefined is not a valid stored value at <root>/,

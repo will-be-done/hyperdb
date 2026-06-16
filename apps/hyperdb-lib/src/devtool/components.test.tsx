@@ -11,10 +11,11 @@ import {
   formatTraceQueriedRowCount,
   getCallTreeOperationBadges,
   getCallTreeOperations,
-  getMutationEventPreview,
+  getMutationDisplay,
   getTraceActionCount,
   getTraceMutatedRowCount,
   getTraceQueriedRowCount,
+  isFullyCachedTrace,
 } from "./components";
 import {
   beginSelectEvent,
@@ -22,6 +23,7 @@ import {
   endSelectEventSuccess,
   endTraceSuccess,
   hyperDBTraceStore,
+  recordCachedRootTrace,
   startRootTrace,
 } from "../hyperdb/tracing/store";
 import type { SelectCommandEvent } from "../hyperdb/tracing/store";
@@ -96,6 +98,25 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("0 actions");
   });
 
+  it("renders a cached label in the traces list for fully cached traces", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const db = createDB();
+    recordCachedRootTrace(
+      createTraceFrameMeta("selector", "cachedListSelector", {
+        projectId: "project-1",
+      }),
+      db,
+    );
+    unsubscribe();
+
+    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    const html = renderToString(<HyperDBDevtoolsPanel db={db} />);
+
+    expect(isFullyCachedTrace(trace)).toBe(true);
+    expect(html).toContain("cachedListSelector");
+    expect(html).toContain("[cached]");
+  });
+
   it("renders a database selector when traces come from multiple dbs", () => {
     const unsubscribe = hyperDBTraceStore.subscribe(() => {});
     const firstDB = createDB();
@@ -119,6 +140,26 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("<select");
     expect(html).toContain("<option");
     expect(html).toContain("firstDBAction");
+    expect(html).not.toContain("secondDBSelector");
+  });
+
+  it("keeps the current database option when it has no traces", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const firstDB = createDB();
+    const secondDB = createDB();
+    const secondContext = startRootTrace(
+      createTraceFrameMeta("selector", "secondDBSelector", undefined),
+      hyperDBTraceStore,
+      secondDB,
+    )!;
+    endTraceSuccess(secondContext);
+    unsubscribe();
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
+
+    expect(html).toContain("<select");
+    expect(html.match(/<option/g)).toHaveLength(2);
+    expect(html).toContain("No traces");
     expect(html).not.toContain("secondDBSelector");
   });
 
@@ -224,7 +265,70 @@ describe("HyperDBDevtools", () => {
     );
   });
 
-  it("limits mutation event preview arrays", () => {
+  it("shows inserted rows for insert mutations", () => {
+    const rows = [{ id: "project-1" }, { id: "project-2" }];
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "insert",
+      tableName: "projects",
+      rows,
+      newValue: rows,
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      { variant: "rows", label: "Inserted", total: 2, rows },
+    ]);
+  });
+
+  it("shows deleted rows (or ids) for delete mutations", () => {
+    const oldValue = [{ id: "project-1" }];
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "delete",
+      tableName: "projects",
+      ids: ["project-1"],
+      oldValue,
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      { variant: "rows", label: "Deleted", total: 1, rows: oldValue },
+    ]);
+  });
+
+  it("splits upserts into old/new updates and inserts", () => {
+    const oldTask = { id: "task-1", state: "todo" };
+    const updatedTask = { id: "task-1", state: "done" };
+    const newTask = { id: "task-2", state: "todo" };
+    const event: MutationEvent = {
+      id: "mutation-1",
+      frameId: "frame-1",
+      kind: "upsert",
+      tableName: "tasks",
+      rows: [updatedTask, newTask],
+      newValue: [updatedTask, newTask],
+      oldValue: [oldTask],
+      startedAt: 100,
+      status: "success",
+    };
+
+    expect(getMutationDisplay(event)).toEqual([
+      {
+        variant: "updates",
+        label: "Updated",
+        total: 1,
+        updates: [{ old: oldTask, new: updatedTask }],
+      },
+      { variant: "rows", label: "Inserted", total: 1, rows: [newTask] },
+    ]);
+  });
+
+  it("limits mutation display rows and reports the omitted count", () => {
     const rows = Array.from({ length: 35 }, (_, index) => ({
       id: `project-${index}`,
     }));
@@ -234,20 +338,17 @@ describe("HyperDBDevtools", () => {
       kind: "insert",
       tableName: "projects",
       rows,
+      newValue: rows,
       startedAt: 100,
       status: "success",
     };
 
-    const preview = getMutationEventPreview(event);
+    const [section] = getMutationDisplay(event);
 
-    expect(preview.rows).toHaveLength(31);
-    expect(preview.rows?.at(29)).toEqual({ id: "project-29" });
-    expect(preview.rows?.at(30)).toBe("...");
-    expect(preview.rowsPreview).toEqual({
-      shown: 30,
-      total: 35,
-      omitted: 5,
-    });
+    expect(section.variant).toBe("rows");
+    expect(section.total).toBe(35);
+    expect(section.variant === "rows" && section.rows).toHaveLength(30);
+    expect(section.preview).toEqual({ shown: 30, total: 35, omitted: 5 });
     expect(event.rows).toHaveLength(35);
   });
 
@@ -465,5 +566,58 @@ describe("HyperDBDevtools", () => {
       ],
       [{ text: "50ms", tone: "duration" }],
     ]);
+  });
+
+  it("adds a cached badge for memoized selector frames", () => {
+    const cachedFrame: TraceFrame = {
+      id: "frame-cached",
+      kind: "selector",
+      name: "cachedChild",
+      arg: undefined,
+      startedAt: 100,
+      durationMs: 2,
+      status: "success",
+      cached: true,
+      children: [],
+      commandIds: [],
+      mutationIds: [],
+    };
+    const rootFrame: TraceFrame = {
+      id: "frame-root",
+      kind: "selector",
+      name: "parent",
+      arg: undefined,
+      startedAt: 90,
+      durationMs: 5,
+      status: "success",
+      children: [cachedFrame],
+      commandIds: [],
+      mutationIds: [],
+    };
+    const trace: RootTrace = {
+      id: "trace-cached",
+      kind: "selector",
+      name: "parent",
+      arg: undefined,
+      startedAt: 90,
+      durationMs: 5,
+      status: "success",
+      frames: [rootFrame],
+      commandEvents: [],
+      mutationEvents: [],
+    };
+
+    const operations = getCallTreeOperations(rootFrame, trace);
+    const cachedOperation = operations.find(
+      (operation) =>
+        operation.kind === "frame" && operation.frame.id === "frame-cached",
+    )!;
+
+    expect(getCallTreeOperationBadges(cachedOperation)).toEqual([
+      { text: "2ms", tone: "duration" },
+      { text: "cached", tone: "cached" },
+    ]);
+    // The label itself stays clean; the marker is a badge.
+    expect(formatCallTreeOperation(cachedOperation)).toBe("@cachedChild");
   });
 });

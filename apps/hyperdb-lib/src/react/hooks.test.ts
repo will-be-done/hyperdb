@@ -117,7 +117,6 @@ describe("useAsyncSelector", () => {
       selector,
       args: { projectId: "project-1" },
       defaultValue: [],
-      debugKey: "projectTasks",
       gcTime: 30_000,
     });
 
@@ -127,7 +126,6 @@ describe("useAsyncSelector", () => {
       selector,
       { projectId: "project-1" },
       {
-        debugKey: "projectTasks",
         gcTime: 30_000,
       },
     );
@@ -170,9 +168,12 @@ describe("useAsyncSelector", () => {
       },
     );
 
-    useAsyncSelector(function* selector() {
-      return "unused";
-    }, []);
+    useAsyncSelector({
+      selector: function* selector() {
+        return "unused";
+      },
+      args: {},
+    });
 
     expect(mocks.runSelectorAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
@@ -219,9 +220,12 @@ describe("useAsyncSelector", () => {
       },
     );
 
-    useAsyncSelector(function* selector() {
-      return "unused";
-    }, []);
+    useAsyncSelector({
+      selector: function* selector() {
+        return "unused";
+      },
+      args: {},
+    });
 
     const selectRangeCmdsRef = mocks.refs[0];
     expect(mocks.db.subscriberCount()).toBe(1);
@@ -247,7 +251,6 @@ describe("useAsyncSelector", () => {
       args: { projectId: "project-1" },
       enabled: false,
       defaultValue: [],
-      debugKey: "projectTasks",
     });
 
     expect(result).toEqual([]);

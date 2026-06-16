@@ -1,4 +1,5 @@
 import type { DBCmd } from "../commands/async";
+import type { CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
   ExtractSchema,
@@ -31,6 +32,9 @@ export interface HyperDB {
   withTraits(...trait: Trait[]): HyperDB;
   getTraits(): Trait[];
   getId(): string;
+  getTraceEnabled?(): boolean;
+  getAutoTraceEnabled?(): boolean;
+  getOptions?(): CodecOptions;
 
   beginTx(): Generator<DBCmd, HyperDBTx>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -7,6 +7,7 @@ import { defineTable } from "../../schema/table";
 import { selectFrom } from "./builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
+import { hyperDBTraceStore, type TraceFrame } from "../../tracing/store";
 
 type Task = {
   type: "task";
@@ -128,6 +129,7 @@ describe("selector", () => {
     const metadataSelector = selector({
       name: "metadataSelector",
       args,
+      skipTrace: { childTrace: true, rootTrace: false },
       handler: function* ({ id }) {
         return id;
       },
@@ -139,8 +141,14 @@ describe("selector", () => {
     expect(metadataSelector.kind).toBe("selector");
     expect(metadataSelector.name).toBe("metadataSelector");
     expect(metadataSelector.args).toBe(args);
+    expect(metadataSelector.skipTrace).toEqual({
+      childTrace: true,
+      rootTrace: false,
+    });
     expect(traceMeta?.name).toBe("metadataSelector");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
+    expect(traceMeta?.skipChildTrace).toBe(true);
+    expect(traceMeta?.skipRootTrace).toBe(false);
   });
 
   test("object-form selector requires an explicit name", () => {
@@ -202,6 +210,40 @@ describe("selector", () => {
     expect(testDb.subscribers).toHaveLength(0);
   });
 
+  test("cached object-form selector freezes args when enabled", () => {
+    const freezeArgsTasksTable = defineTable("freezeArgsTasks", {
+      id: v.string(),
+      projectId: v.string(),
+    }).index("project", ["projectId"]);
+    const testDb = new SubscribableDB(
+      new DB(new BptreeInmemDriver(), { freezeArgs: true }),
+    );
+    execSync(testDb.loadTables([freezeArgsTasksTable]));
+
+    const args = {
+      filter: {
+        projectId: "project-1",
+      },
+    };
+    const freezeArgsTasks = selector({
+      name: "freezeArgsTasks",
+      args: { filter: v.object({ projectId: v.string() }) },
+      handler: function* freezeArgsTasks({ filter }) {
+        return yield* selectFrom(freezeArgsTasksTable, "project").where((q) =>
+          q.eq("projectId", filter.projectId),
+        );
+      },
+    });
+
+    initCachedSelector(testDb, freezeArgsTasks, args);
+
+    expect(Object.isFrozen(args)).toBe(true);
+    expect(Object.isFrozen(args.filter)).toBe(true);
+    expect(() => {
+      args.filter.projectId = "project-2";
+    }).toThrow(TypeError);
+  });
+
   test("cached object-form selector args normalize nested object key order", () => {
     const orderedTasksTable = defineTable("orderedSelectorTasks", {
       id: v.string(),
@@ -245,6 +287,58 @@ describe("selector", () => {
     unsubscribeSecond();
   });
 
+  test("cached object-form selector args distinguish negative zero", () => {
+    const testDb = createTestDB();
+    let runCount = 0;
+
+    const signedZero = selector({
+      name: "signedZeroSelector",
+      args: { value: v.number() },
+      handler: function* signedZeroSelector({ value }) {
+        runCount++;
+        return Object.is(value, -0) ? "negative zero" : "positive zero";
+      },
+    });
+
+    const negative = initCachedSelector(testDb, signedZero, { value: -0 });
+    const positive = initCachedSelector(testDb, signedZero, { value: 0 });
+
+    expect(negative.getSnapshot()).toBe("negative zero");
+    expect(positive.getSnapshot()).toBe("positive zero");
+    expect(runCount).toBe(2);
+  });
+
+  test("cached object-form selector args support ArrayBuffer values", () => {
+    const testDb = createTestDB();
+    let runCount = 0;
+    const buffer = (...bytes: number[]) =>
+      new Uint8Array(bytes).buffer as ArrayBuffer;
+
+    const binarySelector = selector({
+      name: "binaryArgSelector",
+      args: { bytes: v.arrayBuffer() },
+      handler: function* binaryArgSelector({ bytes }) {
+        runCount++;
+        return Array.from(new Uint8Array(bytes)).join(",");
+      },
+    });
+
+    const first = initCachedSelector(testDb, binarySelector, {
+      bytes: buffer(1, 2),
+    });
+    const equivalent = initCachedSelector(testDb, binarySelector, {
+      bytes: buffer(1, 2),
+    });
+    const different = initCachedSelector(testDb, binarySelector, {
+      bytes: buffer(2, 1),
+    });
+
+    expect(first.getSnapshot()).toBe("1,2");
+    expect(equivalent.getSnapshot()).toBe("1,2");
+    expect(different.getSnapshot()).toBe("2,1");
+    expect(runCount).toBe(2);
+  });
+
   test("cached object-form selector rejects unsupported serialized args", () => {
     const rejectedArgsTasksTable = defineTable("rejectedArgsSelectorTasks", {
       id: v.string(),
@@ -262,6 +356,8 @@ describe("selector", () => {
     });
     const circular: Record<string, unknown> = {};
     circular.self = circular;
+    const arrayWithProp = ["project-1"] as string[] & { extra?: string };
+    arrayWithProp.extra = "value";
 
     expect(() =>
       initCachedSelector(testDb, rejectedArgsTasks, {
@@ -276,6 +372,11 @@ describe("selector", () => {
     expect(() =>
       initCachedSelector(testDb, rejectedArgsTasks, circular as never),
     ).toThrow(/circular reference/);
+    expect(() =>
+      initCachedSelector(testDb, rejectedArgsTasks, {
+        projectId: arrayWithProp,
+      } as never),
+    ).toThrow(/array properties are not supported/);
     expect(testDb.subscribers).toHaveLength(0);
   });
 
@@ -358,6 +459,95 @@ describe("selector", () => {
     expect(snapshots).toEqual([["matching"]]);
 
     unsubscribe();
+  });
+
+  test("cached object-form selector reuse is recorded as cached in the trace", () => {
+    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+    hyperDBTraceStore.clear();
+
+    try {
+      const cachedTraceTasksTable = defineTable("cachedTraceTasks", {
+        id: v.string(),
+        projectId: v.string(),
+      }).index("project", ["projectId"]);
+      const testDb = createTestDB(cachedTraceTasksTable);
+      let runCount = 0;
+
+      const cachedTasks = selector({
+        name: "cachedTraceSelector",
+        args: { projectId: v.string() },
+        handler: function* cachedTraceSelector({ projectId }) {
+          runCount++;
+          return yield* selectFrom(cachedTraceTasksTable, "project").where(
+            (q) => q.eq("projectId", projectId),
+          );
+        },
+      });
+
+      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      hyperDBTraceStore.clear();
+
+      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+
+      expect(runCount).toBe(1);
+      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      expect(trace.name).toBe("cachedTraceSelector");
+      expect(trace.commandEvents).toHaveLength(0);
+      expect(trace.frames[0]?.cached).toBe(true);
+    } finally {
+      unsubscribeTrace();
+      hyperDBTraceStore.clear();
+    }
+  });
+
+  test("cached object-form selector range misses are recorded as cached in the trace", () => {
+    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+    let unsubscribeSelector: (() => void) | undefined;
+    hyperDBTraceStore.clear();
+
+    try {
+      const rangeMissTraceTasksTable = defineTable("rangeMissTraceTasks", {
+        id: v.string(),
+        projectId: v.string(),
+        orderToken: v.string(),
+      }).index("projectOrder", ["projectId", "orderToken"]);
+      const testDb = createTestDB(rangeMissTraceTasksTable);
+      let runCount = 0;
+
+      const projectTasks = selector({
+        name: "rangeMissTraceSelector",
+        args: { projectId: v.string() },
+        handler: function* rangeMissTraceSelector({ projectId }) {
+          runCount++;
+          return yield* selectFrom(
+            rangeMissTraceTasksTable,
+            "projectOrder",
+          ).where((q) => q.eq("projectId", projectId));
+        },
+      });
+
+      const cached = initCachedSelector(testDb, projectTasks, {
+        projectId: "project-1",
+      });
+      unsubscribeSelector = cached.subscribe(() => {});
+      hyperDBTraceStore.clear();
+
+      execSync(
+        testDb.insert(rangeMissTraceTasksTable, [
+          { id: "other", projectId: "project-2", orderToken: "a" },
+        ]),
+      );
+
+      expect(runCount).toBe(1);
+      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      expect(trace.name).toBe("rangeMissTraceSelector");
+      expect(trace.commandEvents).toHaveLength(0);
+      expect(trace.frames[0]?.cached).toBe(true);
+    } finally {
+      unsubscribeSelector?.();
+      unsubscribeTrace();
+      hyperDBTraceStore.clear();
+    }
   });
 
   test("cached object-form selector keeps entries for 30 seconds by default", () => {
@@ -636,6 +826,657 @@ describe("selector", () => {
     expect(project2Results).toHaveLength(2);
     expect(project1Results[2]).toHaveLength(1);
     expect(project2Results[1]).toHaveLength(1);
+  });
+
+  test("nested selectors reuse memoized children when ops miss their ranges", () => {
+    const itemsTable = defineTable("nestedMemoItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    let runA = 0;
+    let runB = 0;
+
+    const groupItems = selector({
+      name: "nestedGroupItems",
+      args: { group: v.string() },
+      handler: function* nestedGroupItems({ group }) {
+        if (group === "a") runA++;
+        else runB++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+
+    const parent = selector({
+      name: "nestedMemoParent",
+      args: {},
+      handler: function* nestedMemoParent() {
+        const a = yield* groupItems({ group: "a" });
+        const b = yield* groupItems({ group: "b" });
+        return { a: a.map((item) => item.id), b: b.map((item) => item.id) };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const snapshots: unknown[] = [];
+    const unsubscribe = cached.subscribe(() => {
+      snapshots.push(cached.getSnapshot());
+    });
+
+    expect(runA).toBe(1);
+    expect(runB).toBe(1);
+    expect(cached.getSnapshot()).toEqual({ a: [], b: [] });
+
+    // Op lands in child A's range -> A recomputes, B served from memo.
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+
+    expect(runA).toBe(2);
+    expect(runB).toBe(1);
+    expect(cached.getSnapshot()).toEqual({ a: ["a1"], b: [] });
+
+    // Op lands in child B's range -> B recomputes, A served from memo.
+    execSync(
+      testDb.insert(itemsTable, [{ id: "b1", group: "b", orderToken: "a" }]),
+    );
+
+    expect(runA).toBe(2);
+    expect(runB).toBe(2);
+    expect(cached.getSnapshot()).toEqual({ a: ["a1"], b: ["b1"] });
+
+    expect(snapshots).toEqual([
+      { a: ["a1"], b: [] },
+      { a: ["a1"], b: ["b1"] },
+    ]);
+
+    unsubscribe();
+  });
+
+  test("nested selectors do not recompute when ops miss all child ranges", () => {
+    const itemsTable = defineTable("nestedMissItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    let runA = 0;
+    let runB = 0;
+
+    const groupItems = selector({
+      name: "nestedMissGroupItems",
+      args: { group: v.string() },
+      handler: function* nestedMissGroupItems({ group }) {
+        if (group === "a") runA++;
+        else runB++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+
+    const parent = selector({
+      name: "nestedMissParent",
+      args: {},
+      handler: function* nestedMissParent() {
+        const a = yield* groupItems({ group: "a" });
+        const b = yield* groupItems({ group: "b" });
+        return { a: a.length, b: b.length };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const snapshots: unknown[] = [];
+    const unsubscribe = cached.subscribe(() => {
+      snapshots.push(cached.getSnapshot());
+    });
+
+    expect(runA).toBe(1);
+    expect(runB).toBe(1);
+
+    // Op in an unrelated group -> root never reruns, no child recomputes.
+    execSync(
+      testDb.insert(itemsTable, [{ id: "c1", group: "c", orderToken: "a" }]),
+    );
+
+    expect(runA).toBe(1);
+    expect(runB).toBe(1);
+    expect(snapshots).toEqual([]);
+
+    unsubscribe();
+  });
+
+  test("nested selector with non-serializable args runs inline and uncached", () => {
+    const itemsTable = defineTable("nonSerializableArgsItems", {
+      id: v.string(),
+      group: v.string(),
+    }).index("group", ["group"]);
+    const testDb = createTestDB(itemsTable);
+
+    let childRuns = 0;
+
+    const child = selector(function* nonSerializableChild(filter: {
+      match: (id: string) => boolean;
+    }) {
+      childRuns++;
+      const items = yield* selectFrom(itemsTable, "group").where((q) =>
+        q.eq("group", "a"),
+      );
+      return items.filter((item) => filter.match(item.id));
+    });
+
+    const parent = selector({
+      name: "nonSerializableParent",
+      args: {},
+      handler: function* nonSerializableParent() {
+        return yield* child({ match: (id) => id.startsWith("keep") });
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(childRuns).toBe(1);
+    expect(cached.getSnapshot()).toEqual([]);
+
+    execSync(
+      testDb.insert(itemsTable, [
+        { id: "keep-1", group: "a" },
+        { id: "drop-1", group: "a" },
+      ]),
+    );
+
+    expect(cached.getSnapshot().map((item) => item.id)).toEqual(["keep-1"]);
+    // Non-serializable args -> no memo entry -> always runs inline on rerun.
+    expect(childRuns).toBe(2);
+
+    unsubscribe();
+  });
+
+  test("memo-skipped nested selector is marked cached in the trace", () => {
+    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+    hyperDBTraceStore.clear();
+
+    try {
+      const itemsTable = defineTable("cachedMarkerItems", {
+        id: v.string(),
+        group: v.string(),
+        orderToken: v.string(),
+      }).index("groupOrder", ["group", "orderToken"]);
+      const testDb = createTestDB(itemsTable);
+
+      const groupItems = selector({
+        name: "cachedMarkerGroupItems",
+        args: { group: v.string() },
+        handler: function* cachedMarkerGroupItems({ group }) {
+          return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+            q.eq("group", group),
+          );
+        },
+      });
+
+      const parent = selector({
+        name: "cachedMarkerParent",
+        args: {},
+        handler: function* cachedMarkerParent() {
+          const a = yield* groupItems({ group: "a" });
+          const b = yield* groupItems({ group: "b" });
+          return { a: a.length, b: b.length };
+        },
+      });
+
+      const cached = initCachedSelector(testDb, parent, {});
+      const unsubscribe = cached.subscribe(() => {});
+
+      hyperDBTraceStore.clear();
+
+      // Op in child A's range: B is served from memo and should be marked cached.
+      execSync(
+        testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+      );
+
+      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      const findFrame = (
+        frame: TraceFrame,
+        name: string,
+      ): TraceFrame | undefined => {
+        if (frame.name === name) return frame;
+        for (const childFrame of frame.children) {
+          const found = findFrame(childFrame, name);
+          if (found) return found;
+        }
+        return undefined;
+      };
+
+      const root = trace.frames[0]!;
+      const frameA = findFrame(root, "cachedMarkerGroupItems");
+      expect(frameA?.cached).toBeFalsy();
+      // The second child (B) was skipped and has no scan children.
+      const cachedFrames: TraceFrame[] = [];
+      const collect = (frame: TraceFrame) => {
+        if (frame.cached) cachedFrames.push(frame);
+        frame.children.forEach(collect);
+      };
+      collect(root);
+      expect(cachedFrames).toHaveLength(1);
+      expect(cachedFrames[0]?.commandIds).toHaveLength(0);
+
+      unsubscribe();
+    } finally {
+      unsubscribeTrace();
+      hyperDBTraceStore.clear();
+    }
+  });
+
+  test("nested child invalidates when a row moves between ranges or is deleted", () => {
+    const itemsTable = defineTable("moveMemoItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+    execSync(
+      testDb.insert(itemsTable, [{ id: "x", group: "a", orderToken: "a" }]),
+    );
+
+    let runA = 0;
+    let runB = 0;
+    const groupItems = selector({
+      name: "moveMemoGroupItems",
+      args: { group: v.string() },
+      handler: function* moveMemoGroupItems({ group }) {
+        if (group === "a") runA++;
+        else runB++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const parent = selector({
+      name: "moveMemoParent",
+      args: {},
+      handler: function* moveMemoParent() {
+        const a = yield* groupItems({ group: "a" });
+        const b = yield* groupItems({ group: "b" });
+        return { a: a.map((item) => item.id), b: b.map((item) => item.id) };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(cached.getSnapshot()).toEqual({ a: ["x"], b: [] });
+    expect(runA).toBe(1);
+    expect(runB).toBe(1);
+
+    // Upsert moves x out of A (oldValue) and into B (newValue): both recompute.
+    execSync(
+      testDb.upsert(itemsTable, [{ id: "x", group: "b", orderToken: "a" }]),
+    );
+
+    expect(cached.getSnapshot()).toEqual({ a: [], b: ["x"] });
+    expect(runA).toBe(2);
+    expect(runB).toBe(2);
+
+    // Delete x (now in B): only B recomputes.
+    execSync(testDb.delete(itemsTable, ["x"]));
+
+    expect(cached.getSnapshot()).toEqual({ a: [], b: [] });
+    expect(runA).toBe(2);
+    expect(runB).toBe(3);
+
+    unsubscribe();
+  });
+
+  test("memo-skipped nested child reuses the exact result reference", () => {
+    const itemsTable = defineTable("refMemoItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    const groupItems = selector({
+      name: "refMemoGroupItems",
+      args: { group: v.string() },
+      handler: function* refMemoGroupItems({ group }) {
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const parent = selector({
+      name: "refMemoParent",
+      args: {},
+      handler: function* refMemoParent() {
+        const a = yield* groupItems({ group: "a" });
+        const b = yield* groupItems({ group: "b" });
+        return { a, b };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    const firstA = cached.getSnapshot().a;
+    const firstB = cached.getSnapshot().b;
+
+    // Op hits A only: A is recomputed (new ref), B is reused (same ref).
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+
+    expect(cached.getSnapshot().a).not.toBe(firstA);
+    expect(cached.getSnapshot().b).toBe(firstB);
+
+    unsubscribe();
+  });
+
+  test("three-level nesting skips a whole subtree when its ranges are untouched", () => {
+    const itemsTable = defineTable("threeLevelItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    let leafRuns = 0;
+    let midRuns = 0;
+
+    const leaf = selector({
+      name: "threeLevelLeaf",
+      args: { group: v.string() },
+      handler: function* threeLevelLeaf({ group }) {
+        leafRuns++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const mid = selector({
+      name: "threeLevelMid",
+      args: { group: v.string() },
+      handler: function* threeLevelMid({ group }) {
+        midRuns++;
+        const items = yield* leaf({ group });
+        return items.length;
+      },
+    });
+    const top = selector({
+      name: "threeLevelTop",
+      args: {},
+      handler: function* threeLevelTop() {
+        const a = yield* mid({ group: "a" });
+        const b = yield* mid({ group: "b" });
+        return { a, b };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, top, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(midRuns).toBe(2);
+    expect(leafRuns).toBe(2);
+
+    // Op hits group a: the entire group-b subtree (mid + leaf) is skipped.
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+
+    expect(cached.getSnapshot()).toEqual({ a: 1, b: 0 });
+    expect(midRuns).toBe(3); // only mid(a) reran
+    expect(leafRuns).toBe(3); // only leaf(a) reran
+
+    unsubscribe();
+  });
+
+  test("a skipped ancestor keeps its subtree cached for later reruns", () => {
+    const itemsTable = defineTable("deepCacheItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    const leafRuns: Record<string, number> = { a1: 0, a2: 0, b: 0 };
+    const leaf = selector({
+      name: "deepCacheLeaf",
+      args: { group: v.string() },
+      handler: function* deepCacheLeaf({ group }) {
+        leafRuns[group] = (leafRuns[group] ?? 0) + 1;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const midA = selector({
+      name: "deepCacheMidA",
+      args: {},
+      handler: function* deepCacheMidA() {
+        const a1 = yield* leaf({ group: "a1" });
+        const a2 = yield* leaf({ group: "a2" });
+        return a1.length + a2.length;
+      },
+    });
+    const midB = selector({
+      name: "deepCacheMidB",
+      args: {},
+      handler: function* deepCacheMidB() {
+        const b = yield* leaf({ group: "b" });
+        return b.length;
+      },
+    });
+    const top = selector({
+      name: "deepCacheTop",
+      args: {},
+      handler: function* deepCacheTop() {
+        const a = yield* midA({});
+        const b = yield* midB({});
+        return { a, b };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, top, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(leafRuns).toEqual({ a1: 1, a2: 1, b: 1 });
+
+    // Op hits group b: midA is skipped (cached). Its leaves are NOT re-walked.
+    execSync(
+      testDb.insert(itemsTable, [{ id: "b1", group: "b", orderToken: "a" }]),
+    );
+    expect(leafRuns).toEqual({ a1: 1, a2: 1, b: 2 });
+
+    // Op hits group a1: midA recomputes, leaf a1 reruns, but leaf a2 must stay
+    // cached (its subtree survived midA being skipped above).
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1x", group: "a1", orderToken: "a" }]),
+    );
+    expect(leafRuns).toEqual({ a1: 2, a2: 1, b: 2 });
+    expect(cached.getSnapshot()).toEqual({ a: 1, b: 1 });
+
+    unsubscribe();
+  });
+
+  test("conditional child recomputes against current data after being absent", () => {
+    const flagsTable = defineTable("condFlags", {
+      id: v.string(),
+      active: v.string(),
+    });
+    const itemsTable = defineTable("condItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(flagsTable, itemsTable);
+    execSync(testDb.insert(flagsTable, [{ id: "flag", active: "a" }]));
+
+    let runA = 0;
+    let runB = 0;
+    const groupItems = selector({
+      name: "condGroupItems",
+      args: { group: v.string() },
+      handler: function* condGroupItems({ group }) {
+        if (group === "a") runA++;
+        else runB++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const parent = selector({
+      name: "condParent",
+      args: {},
+      handler: function* condParent() {
+        const flags = yield* selectFrom(flagsTable, "byId").where((q) =>
+          q.eq("id", "flag"),
+        );
+        const group = flags[0]?.active === "a" ? "a" : "b";
+        const items = yield* groupItems({ group });
+        return items.map((item) => item.id);
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(cached.getSnapshot()).toEqual([]);
+    expect(runA).toBe(1);
+
+    // Flip to branch B. Child A's ranges leave the subscription.
+    execSync(testDb.upsert(flagsTable, [{ id: "flag", active: "b" }]));
+    expect(cached.getSnapshot()).toEqual([]);
+    expect(runB).toBe(1);
+
+    // Mutate A's data while A is absent: no rerun (A is not subscribed).
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+    expect(cached.getSnapshot()).toEqual([]);
+
+    // Flip back to A: the stale memo must NOT be reused; A recomputes and
+    // observes the row inserted while it was absent.
+    execSync(testDb.upsert(flagsTable, [{ id: "flag", active: "a" }]));
+    expect(cached.getSnapshot()).toEqual(["a1"]);
+    expect(runA).toBe(2);
+
+    unsubscribe();
+  });
+
+  test("conditional descendant is pruned after its ancestor was skipped", () => {
+    const flagsTable = defineTable("nestedCondFlags", {
+      id: v.string(),
+      active: v.string(),
+    });
+    const itemsTable = defineTable("nestedCondItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(flagsTable, itemsTable);
+    execSync(testDb.insert(flagsTable, [{ id: "flag", active: "a" }]));
+
+    let midRuns = 0;
+    const leafRuns: Record<string, number> = { a: 0, b: 0, sibling: 0 };
+
+    const groupItems = selector({
+      name: "nestedCondGroupItems",
+      args: { group: v.string() },
+      handler: function* nestedCondGroupItems({ group }) {
+        leafRuns[group] = (leafRuns[group] ?? 0) + 1;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+
+    const conditionalMid = selector({
+      name: "nestedCondMid",
+      args: {},
+      handler: function* nestedCondMid() {
+        midRuns++;
+        const flags = yield* selectFrom(flagsTable, "byId").where((q) =>
+          q.eq("id", "flag"),
+        );
+        const group = flags[0]?.active === "a" ? "a" : "b";
+        const items = yield* groupItems({ group });
+        return items.map((item) => item.id);
+      },
+    });
+
+    const parent = selector({
+      name: "nestedCondParent",
+      args: {},
+      handler: function* nestedCondParent() {
+        const activeItems = yield* conditionalMid({});
+        const siblingItems = yield* groupItems({ group: "sibling" });
+        return {
+          active: activeItems,
+          sibling: siblingItems.map((item) => item.id),
+        };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(cached.getSnapshot()).toEqual({ active: [], sibling: [] });
+    expect(midRuns).toBe(1);
+    expect(leafRuns).toEqual({ a: 1, b: 0, sibling: 1 });
+
+    // Touch only the sibling branch. conditionalMid should be skipped, and its
+    // existing child memo should survive without being re-walked or pruned.
+    execSync(
+      testDb.insert(itemsTable, [
+        { id: "sibling-1", group: "sibling", orderToken: "a" },
+      ]),
+    );
+
+    expect(cached.getSnapshot()).toEqual({
+      active: [],
+      sibling: ["sibling-1"],
+    });
+    expect(midRuns).toBe(1);
+    expect(leafRuns).toEqual({ a: 1, b: 0, sibling: 2 });
+
+    // Now rerun conditionalMid and switch branches. Its old "a" descendant
+    // must be pruned because that range leaves the subscription.
+    execSync(testDb.upsert(flagsTable, [{ id: "flag", active: "b" }]));
+
+    expect(cached.getSnapshot()).toEqual({
+      active: [],
+      sibling: ["sibling-1"],
+    });
+    expect(midRuns).toBe(2);
+    expect(leafRuns).toEqual({ a: 1, b: 1, sibling: 2 });
+
+    // Mutate the absent "a" branch. If the stale descendant memo was kept, the
+    // later switch back would incorrectly reuse the old empty result.
+    execSync(
+      testDb.insert(itemsTable, [
+        { id: "a-1", group: "a", orderToken: "a" },
+      ]),
+    );
+    expect(cached.getSnapshot()).toEqual({
+      active: [],
+      sibling: ["sibling-1"],
+    });
+
+    execSync(testDb.upsert(flagsTable, [{ id: "flag", active: "a" }]));
+
+    expect(cached.getSnapshot()).toEqual({
+      active: ["a-1"],
+      sibling: ["sibling-1"],
+    });
+    expect(midRuns).toBe(3);
+    expect(leafRuns).toEqual({ a: 2, b: 1, sibling: 2 });
+
+    unsubscribe();
   });
 
   test("selector preserves query order after rerun", () => {
