@@ -2,7 +2,7 @@ import {
   createTraceFrameMeta,
   type TraceFrameMeta,
   type TraceKind,
-} from "./store";
+} from "../core/tracer";
 
 export const generatorTraceMetaKey = Symbol.for(
   "hyperdb.devtool.generatorMeta",

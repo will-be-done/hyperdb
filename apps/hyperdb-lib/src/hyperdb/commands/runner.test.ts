@@ -80,6 +80,13 @@ const makeDb = () => {
   return db;
 };
 
+const makeRows = (group: string, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${group}-${index}`,
+    group,
+    orderToken: String(index).padStart(3, "0"),
+  }));
+
 const insertOp = (id: string, group: string, orderToken: string): Op => ({
   type: "insert",
   table: itemsTable,
@@ -90,6 +97,7 @@ const buildTree = (handler: (group: string) => void) => {
   const child = selector({
     name: "runnerMemoChild",
     args: { group: v.string() },
+    memoization: { selfChild: true },
     handler: function* runnerMemoChild({ group }) {
       handler(group);
       return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
@@ -100,6 +108,7 @@ const buildTree = (handler: (group: string) => void) => {
   const parent = selector({
     name: "runnerMemoParent",
     args: {},
+    memoization: { selfChild: true },
     handler: function* runnerMemoParent() {
       const a = yield* child({ group: "a" });
       const b = yield* child({ group: "b" });
@@ -126,7 +135,7 @@ const runTree = <T>(
 };
 
 describe("runCommandGenerator nested selector memo", () => {
-  test("skips runSelector arg serialization when childMemo is absent", () => {
+  test("skips runSelector arg serialization unless selfChild memoization is enabled", () => {
     const db = makeDb();
     let getterReads = 0;
     const args = {};
@@ -150,6 +159,19 @@ describe("runCommandGenerator nested selector memo", () => {
           name: "manualChild",
         }) as string;
       })();
+    const makeMemoizedRoot = () =>
+      (function* root() {
+        return (yield {
+          type: "runSelector",
+          selector: manualSelector,
+          args,
+          makeBody: function* manualChild() {
+            return "ok";
+          },
+          name: "manualChild",
+          memoization: { root: true, selfChild: true },
+        }) as string;
+      })();
 
     expect(
       execSync(
@@ -160,9 +182,20 @@ describe("runCommandGenerator nested selector memo", () => {
     ).toBe("ok");
     expect(getterReads).toBe(0);
 
+    // A childMemo alone should not force expensive arg normalization.
     expect(
       execSync(
         runCommandGenerator(db, makeRoot(), {
+          childMemo: new Map(),
+          selectRangeCmds: [],
+        }),
+      ),
+    ).toBe("ok");
+    expect(getterReads).toBe(0);
+
+    expect(
+      execSync(
+        runCommandGenerator(db, makeMemoizedRoot(), {
           childMemo: new Map(),
           selectRangeCmds: [],
         }),
@@ -173,14 +206,16 @@ describe("runCommandGenerator nested selector memo", () => {
 
   test("populates childMemo on the first run (no ops)", () => {
     const db = makeDb();
-    execSync(db.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]));
+    execSync(
+      db.insert(itemsTable, [...makeRows("a", 11), ...makeRows("b", 11)]),
+    );
     const handler = vi.fn();
     const parent = buildTree(handler);
     const childMemo: ChildMemo = new Map();
 
     const result = runTree(db, () => parent({}), { childMemo });
 
-    expect(result).toEqual({ a: 1, b: 0 });
+    expect(result).toEqual({ a: 11, b: 11 });
     expect(handler.mock.calls.map((call) => call[0]).sort()).toEqual([
       "a",
       "b",
@@ -198,7 +233,9 @@ describe("runCommandGenerator nested selector memo", () => {
 
   test("reruns only the child whose ranges an op intersects", () => {
     const db = makeDb();
-    execSync(db.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]));
+    execSync(
+      db.insert(itemsTable, [...makeRows("a", 11), ...makeRows("b", 11)]),
+    );
     const handler = vi.fn();
     const parent = buildTree(handler);
     const childMemo: ChildMemo = new Map();
@@ -206,20 +243,24 @@ describe("runCommandGenerator nested selector memo", () => {
     runTree(db, () => parent({}), { childMemo });
     handler.mockClear();
 
-    execSync(db.insert(itemsTable, [{ id: "a2", group: "a", orderToken: "b" }]));
+    execSync(
+      db.insert(itemsTable, [{ id: "a-extra", group: "a", orderToken: "999" }]),
+    );
     const result = runTree(db, () => parent({}), {
       childMemo,
-      ops: [insertOp("a2", "a", "b")],
+      ops: [insertOp("a-extra", "a", "999")],
     });
 
-    expect(result).toEqual({ a: 2, b: 0 });
+    expect(result).toEqual({ a: 12, b: 11 });
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith("a");
   });
 
   test("skips the whole tree when no op intersects any range", () => {
     const db = makeDb();
-    execSync(db.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]));
+    execSync(
+      db.insert(itemsTable, [...makeRows("a", 11), ...makeRows("b", 11)]),
+    );
     const handler = vi.fn();
     const parent = buildTree(handler);
     const childMemo: ChildMemo = new Map();
@@ -233,7 +274,7 @@ describe("runCommandGenerator nested selector memo", () => {
     });
 
     // Result is the memoized value; nothing recomputed.
-    expect(result).toEqual({ a: 1, b: 0 });
+    expect(result).toEqual({ a: 11, b: 11 });
     expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -16,7 +16,11 @@ import {
   type ChildVisited,
   type CommandRunnerOptions,
 } from "../runner";
-import { type RunSelectorCmd, type SelectRangeCmd } from "./commands";
+import {
+  type RunSelectorCmd,
+  type SelectRangeCmd,
+  type SelectorMemoization,
+} from "./commands";
 import {
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
@@ -81,6 +85,7 @@ export type SelectorTraceSkip =
       childTrace: boolean;
       rootTrace: boolean;
     };
+export type SelectorMemoizationOptions = Partial<SelectorMemoization>;
 
 export type ObjectSelector<
   TReturn,
@@ -90,6 +95,7 @@ export type ObjectSelector<
   readonly name: string;
   readonly args: TSchema;
   readonly skipTrace?: SelectorTraceSkip;
+  readonly memoization?: SelectorMemoization;
   readonly handler: (
     args: InferObject<TSchema>,
   ) => Generator<unknown, TReturn, unknown>;
@@ -102,6 +108,7 @@ export type AnyObjectSelector = ((
   readonly name: string;
   readonly args: SelectorArgsSchema;
   readonly skipTrace?: SelectorTraceSkip;
+  readonly memoization?: SelectorMemoization;
   readonly handler: (args: any) => Generator<unknown, any, unknown>;
 };
 
@@ -121,6 +128,7 @@ export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
   skipTrace?: SelectorTraceSkip;
+  memoization?: SelectorMemoizationOptions;
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
 
@@ -146,6 +154,18 @@ const normalizeSelectorTraceSkip = (
   };
 };
 
+const defaultSelectorMemoization: SelectorMemoization = {
+  root: true,
+  selfChild: false,
+};
+
+const normalizeSelectorMemoization = (
+  memoization: SelectorMemoizationOptions | undefined,
+): SelectorMemoization => ({
+  root: memoization?.root ?? defaultSelectorMemoization.root,
+  selfChild: memoization?.selfChild ?? defaultSelectorMemoization.selfChild,
+});
+
 const defineSelectorMetadata = <
   TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
 >(
@@ -154,6 +174,7 @@ const defineSelectorMetadata = <
     name: string;
     args?: SelectorArgsSchema;
     skipTrace?: SelectorTraceSkip;
+    memoization?: SelectorMemoization;
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
 ): TFn => {
@@ -175,6 +196,11 @@ const defineSelectorMetadata = <
     },
     handler: {
       value: metadata.handler,
+      enumerable: true,
+      configurable: false,
+    },
+    memoization: {
+      value: metadata.memoization,
       enumerable: true,
       configurable: false,
     },
@@ -226,6 +252,7 @@ export function selector<TReturn, TParams extends any[]>(
     const definition = input;
     const displayName = assertSelectorName(definition.name);
     const skipTrace = normalizeSelectorTraceSkip(definition.skipTrace);
+    const memoization = normalizeSelectorMemoization(definition.memoization);
     const wrapped = ((args: InferObject<typeof definition.args>) => {
       const body = (function* () {
         return (yield {
@@ -234,6 +261,7 @@ export function selector<TReturn, TParams extends any[]>(
           args,
           makeBody: () => definition.handler(args),
           name: displayName,
+          memoization,
           skipTrace,
         } satisfies RunSelectorCmd) as TReturn;
       })();
@@ -248,12 +276,14 @@ export function selector<TReturn, TParams extends any[]>(
       name: displayName,
       args: definition.args,
       skipTrace: definition.skipTrace,
+      memoization,
       handler: definition.handler,
     }) as unknown as SelectorGeneratorFn<TReturn, TParams>;
   }
 
   const fn = input;
   const displayName = fn.name || "anonymous selector";
+  const memoization = normalizeSelectorMemoization(undefined);
   const makeBody = (args: TParams): Generator<unknown, unknown, unknown> => {
     if (isGeneratorFunction(fn)) {
       return fn(...args) as Generator<unknown, unknown, unknown>;
@@ -274,6 +304,7 @@ export function selector<TReturn, TParams extends any[]>(
         args: positionalTraceArg(args),
         makeBody: () => makeBody(args),
         name: displayName,
+        memoization,
       } satisfies RunSelectorCmd) as TReturn;
     })();
 
@@ -287,6 +318,7 @@ export function selector<TReturn, TParams extends any[]>(
 
   return defineSelectorMetadata(wrapped, {
     name: displayName,
+    memoization,
     handler: fn as SelectorGeneratorFn<unknown, any[]>,
   }) as SelectorGeneratorFn<TReturn, TParams>;
 }
@@ -460,6 +492,12 @@ const getSelectorTraceSkip = (
   return normalizeSelectorTraceSkip(skipTrace);
 };
 
+const getSelectorMemoization = (selector: object): SelectorMemoization => {
+  const memoization = (selector as { memoization?: SelectorMemoization })
+    .memoization;
+  return normalizeSelectorMemoization(memoization);
+};
+
 const traceSelectorCacheHit = (entry: SelectorCacheEntry<unknown>): void => {
   const skipTrace = getSelectorTraceSkip(entry.selector);
   recordCachedRootTrace(
@@ -492,6 +530,54 @@ const rerunSelectorCacheEntry = <TReturn>(
   entry.currentRevision = entry.db.getRevision();
 };
 
+const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  options: {
+    freezeArgs?: boolean;
+  },
+): SelectorCacheStore<SelectorReturn<TSelector>> => {
+  const freezeArgs =
+    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+  const cachedArgs = freezeArgs ? deepFreeze(args) : args;
+  const gen = () => selector(cachedArgs);
+  const selectRangeCmds: SelectRangeCmd[] = [];
+  const childMemo: ChildMemo = new Map();
+  let currentResult = runSelector(db, gen, selectRangeCmds, { childMemo });
+  let currentRevision = db.getRevision();
+
+  const rerun = (ops?: Op[]) => {
+    currentResult = runSelector(db, gen, selectRangeCmds, {
+      ops,
+      childMemo,
+    });
+    currentRevision = db.getRevision();
+  };
+
+  return {
+    subscribe: (callback: () => void) => {
+      const unsubscribe = db.subscribe((ops, _traits, revision) => {
+        currentRevision = revision;
+        if (!isNeedToRerunRange(selectRangeCmds, ops)) {
+          return;
+        }
+
+        rerun(ops);
+        callback();
+      });
+
+      if (currentRevision !== db.getRevision()) {
+        rerun();
+        callback();
+      }
+
+      return unsubscribe;
+    },
+    getSnapshot: () => currentResult,
+  };
+};
+
 const ensureSelectorCacheEntrySubscribed = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
 ) => {
@@ -520,6 +606,10 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
     gcTime?: number;
   } = {},
 ): SelectorCacheStore<SelectorReturn<TSelector>> {
+  if (!getSelectorMemoization(selector).root) {
+    return initUncachedSelectorStore(db, selector, args, options);
+  }
+
   const argsKey = stableSerializeSelectorArgs(args);
   const freezeArgs =
     options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;

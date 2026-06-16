@@ -8,6 +8,7 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
+import type { HyperDBTracer } from "../core/tracer";
 import { deepFreeze } from "../deep-freeze";
 import {
   normalizeRecordsForDriver,
@@ -27,6 +28,7 @@ type OriginalDB = {
   getId(): string;
   getTraceEnabled(): boolean;
   getAutoTraceEnabled(): boolean;
+  getTracer?(): HyperDBTracer | null | undefined;
   getOptions?(): CodecOptions;
 };
 
@@ -158,6 +160,10 @@ export class DBTx implements HyperDBTx {
 
   getAutoTraceEnabled(): boolean {
     return this.originalDB.getAutoTraceEnabled();
+  }
+
+  getTracer(): HyperDBTracer | null | undefined {
+    return this.originalDB.getTracer?.();
   }
 
   getOptions(): CodecOptions {

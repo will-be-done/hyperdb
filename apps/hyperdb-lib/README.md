@@ -1,134 +1,269 @@
-# HyperDB Schemas
+# HyperDB
 
-HyperDB tables can be declared directly with validator-backed schemas:
+HyperDB is a small local database API with typed schemas, indexed queries,
+generator-based selectors/actions, pluggable storage drivers, React hooks, and a
+React devtool.
+
+## Schema
+
+Define tables with `defineTable`. Every table must have a string `id`; HyperDB
+also creates a built-in hash index named `byId`.
 
 ```ts
-import { defineTable, v } from "@will-be-done/hyperdb-lib";
+import {
+  defineTable,
+  v,
+  type ExtractSchema,
+  type Infer,
+} from "@will-be-done/hyperdb-lib";
 
-export const projectCategoriesTable = defineTable("projectCategories", {
+export const tasksTable = defineTable("tasks", {
   id: v.string(),
   projectId: v.string(),
-  orderToken: v.string(),
-  name: v.string(),
-}).index("byProjectIdOrderToken", ["projectId", "orderToken"]);
-```
-
-There is no project-level `defineSchema()` wrapper. HyperDB keeps a user-defined
-`id` field and does not add Convex system fields like `_id` or `_creationTime`.
-
-## Validators
-
-The validator builder supports:
-
-- `v.string()`, `v.number()`, `v.boolean()`, `v.null()`
-- `v.array(item)`, `v.object(fields)`, `v.record(key, value)`
-- `v.union(...)`, `v.literal(value)`, `v.optional(inner)`, `v.any()`
-
-`ExtractSchema<typeof table>` is inferred from validators. `defineTable` schemas
-must include `id`; missing `id` is rejected by TypeScript and at runtime.
-
-Tables are declared with `defineTable` so runtime validators and TypeScript
-inference describe the same schema.
-
-## Optional Fields
-
-Optional fields are declared with `v.optional(...)`:
-
-```ts
-const tasksTable = defineTable("tasks", {
-  id: v.string(),
   title: v.string(),
-  content: v.optional(v.string()),
-});
-```
-
-A missing optional field is valid. On insert or replacement upsert,
-`{ content: undefined }` is normalized as if `content` were missing. Arrays with
-`undefined` always throw.
-
-## Unions, Literals, Null, And Undefined
-
-Use `v.union` and `v.literal` for tagged values:
-
-```ts
-const tasksTable = defineTable("tasks", {
-  id: v.string(),
   state: v.union(v.literal("todo"), v.literal("done")),
-  completedAt: v.union(v.number(), v.null()),
-});
-```
-
-`null` is a valid stored value. `undefined` is not a stored value. Query filters
-do not use `undefined` to mean "field missing"; indexed query values remain
-limited to `string | number | boolean | null`.
-
-## Runtime Validation
-
-Runtime record validation is configured per DB:
-
-```ts
-const db = new DB(driver, [tasksTable], { runtimeValidation: true });
-```
-
-When enabled, records are validated before insert/upsert and after driver reads.
-Errors include the table name, record id when available, and field path. When
-disabled, schema-derived TypeScript types still work, while runtime schema checks
-are skipped. The persistence codec still rejects unsafe values such as
-`undefined` in arrays and invalid object keys.
-
-## Write Semantics
-
-HyperDB writes are keyed by the record `id`:
-
-- `insert(table, records)` creates new records. If any `id` already exists, the
-  insert throws instead of replacing the stored record.
-- `upsert(table, records)` is a replacement upsert. If an `id` exists, the whole
-  stored record is replaced by the provided record. If an `id` does not exist, a
-  new record is inserted.
-- `delete(table, ids)` removes records by `id`. Missing ids are ignored, so
-  deleting a record that does not exist is a no-op.
-
-Upserts are not patches: omitted fields are omitted from the replacement record.
-
-## SQLite Serialization
-
-HyperDB normalizes documents before drivers see them. Drivers return normalized
-documents; SQL drivers encode/decode values around JSON storage, while in-memory
-drivers keep normalized JS objects directly. This keeps value semantics
-consistent across SQLite and in-memory drivers.
-
-The codec rejects invalid `undefined`, strips schema-known optional
-`undefined`, preserves `bigint`, and encodes byte values such as `ArrayBuffer`
-and typed arrays.
-
-## Index Limitations
-
-Indexes are declared on a table with `.index(name, columns, options?)`.
-`btree` is the default index type:
-
-```ts
-defineTable("tasks", {
-  id: v.string(),
-  title: v.string(),
-  projectId: v.string(),
+  orderToken: v.string(),
+  note: v.optional(v.string()),
 })
-  .index("byProjectId", ["projectId"])
+  .index("byProjectOrder", ["projectId", "orderToken"])
   .index("byTitle", ["title"], { type: "hash" });
+
+export type Task = ExtractSchema<typeof tasksTable>;
 ```
 
-Index names should follow the `byKebabCase` convention: start with `by` and
-then use PascalCase field names, such as `byProjectIdOrderToken`. Every table
-also gets a built-in hash index named `byId` over the `id` field.
-
-Hash indexes must use exactly one column.
-
-Documents can contain richer values through validators and the codec, but indexed
-fields are constrained to SQLite-comparable primitives:
+For object-shaped schemas that are not tables, use validators directly:
 
 ```ts
-defineTable("files", {
-  id: v.string(),
-  name: v.string(),
-  data: v.any(),
-}).index("byName", ["name"]);
+const filterSchema = v.object({
+  projectId: v.string(),
+  state: v.optional(v.union(v.literal("todo"), v.literal("done"))),
+});
+
+type Filter = Infer<typeof filterSchema>;
 ```
+
+`defineTable` can also take a standalone object/union validator. This is useful
+for tagged unions:
+
+```ts
+const documentsTable = defineTable(
+  "documents",
+  v.union(
+    v.object({ id: v.string(), type: v.literal("post"), title: v.string() }),
+    v.object({ id: v.string(), type: v.literal("note"), body: v.string() }),
+  ),
+).index("byPostTitle", ["title"]);
+```
+
+Supported validators:
+
+- `v.string()`, `v.number()` finite only, `v.bigint()`, `v.boolean()`, `v.null()`
+- `v.literal(value)` for string, number, bigint, boolean, or null literals
+- `v.array(item)`, `v.object(fields)`, `v.record(key, value)`
+- `v.union(...)`, `v.optional(inner)`, `v.partial(objectValidator)`,
+  `v.required(objectValidator, keys)`, `v.arrayBuffer()`, `v.any()`
+
+Stored values cannot contain `undefined`. Optional object fields may be omitted,
+and `{ optionalField: undefined }` is normalized as missing. Arrays and records
+cannot contain `undefined`.
+
+Indexes are declared with `.index(name, columns, options?)`. `btree` is the
+default; `hash` indexes must have exactly one column. Indexable values are
+`string`, finite `number`, `bigint`, `boolean`, `null`, `ArrayBuffer`,
+typed-array/data-view values, compatible literals, compatible unions, and
+optional versions of those values.
+
+## Selectors, Queries, And Actions
+
+A query is built with `selectFrom(table, index)`. It supports `where`, `eq`,
+`lt`, `lte`, `gt`, `gte`, `limit`, `order("asc" | "desc")`, `first()`, and
+`firstOr(value)`.
+
+```ts
+import {
+  action,
+  insert,
+  selectFrom,
+  selector,
+  syncDispatch,
+} from "@will-be-done/hyperdb-lib";
+
+export const projectTasks = selector({
+  name: "projectTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectOrder")
+      .where((q) => q.eq("projectId", projectId))
+      .order("asc");
+  },
+});
+
+export const createTask = action({
+  name: "createTask",
+  args: { id: v.string(), projectId: v.string(), title: v.string() },
+  handler: function* ({ id, projectId, title }) {
+    yield* insert(tasksTable, [
+      { id, projectId, title, state: "todo", orderToken: id },
+    ]);
+  },
+});
+
+syncDispatch(db, createTask({ id: "task-1", projectId: "p1", title: "Ship" }));
+```
+
+Selectors can be defined in object form or by wrapping a function. Object-form
+selectors support:
+
+- `name`: required display/debug name
+- `args`: validator map for the single args object
+- `handler`: generator function
+- `skipTrace`: `true` or `{ rootTrace, childTrace }`
+- `memoization`: `{ root?: boolean, selfChild?: boolean }`
+
+Actions can also be object-form or function-form. Object-form actions support
+`name`, `args`, and `handler`. Actions can yield mutations with `insert`,
+`upsert`, and `deleteRows`, and may read with `selectFrom`. Selectors cannot
+write; the command runner rejects writes unless it is dispatching an action.
+`insert` fails for duplicate ids, `upsert` replaces the whole row, and
+`deleteRows` ignores ids that do not exist.
+
+Selector cache behavior:
+
+- `initCachedSelector(db, selector, args)` caches by DB, selector identity, and a
+  stable serialization of args.
+- Equivalent object args with different key order share the same cache entry.
+- Subscribed selectors rerun only when a mutation touches a scanned range.
+- Unsubscribed cache entries are retained for `gcTime` ms; the default is
+  `3000`. Pass `{ gcTime: 0 }` to drop immediately.
+- Root memoization is on by default. Use `memoization: { root: false }` to opt
+  out. Use `memoization: { selfChild: true }` to memoize a nested selector's own
+  child subtree across reruns.
+
+## DB Runtime
+
+Create a DB with a driver, load tables, then run commands through the generator
+executor.
+
+```ts
+import {
+  BptreeInmemDriver,
+  DB,
+  hyperDBTraceStore,
+  SubscribableDB,
+} from "@will-be-done/hyperdb-lib";
+
+const baseDb = new DB(new BptreeInmemDriver(), {
+  runtimeValidation: true,
+  freezeArgs: true,
+  freezeRows: false,
+  trace: true,
+  autoTrace: true,
+  tracer: hyperDBTraceStore,
+});
+
+const db = new SubscribableDB(baseDb);
+
+db.loadTables([tasksTable]);
+```
+
+Runtime options:
+
+- `runtimeValidation`: validate full records against table validators on writes
+  and reads.
+- `freezeArgs`: deep-freeze selector args used by cached selectors/runs.
+- `freezeRows`: deep-freeze rows after write normalization.
+- `traits`: initial metadata traits attached to the DB.
+- `trace`: record traces even before the devtool is open.
+- `autoTrace`: allow listener/devtool-activated tracing. Defaults to `true`.
+- `tracer`: per-DB tracer implementation used to configure tracing behavior for
+  this database instead of using the global default tracer.
+
+Runtime types:
+
+- `DB`: core HyperDB runtime around a storage driver.
+- `SubscribableDB`: wraps a DB with subscriptions, revisions, operation
+  notifications, and `afterInsert`/`afterUpsert`/`afterDelete`/`afterChange`
+  hooks.
+
+## Storage
+
+Storage is provided by drivers:
+
+- `BptreeInmemDriver`: in-memory driver, good for tests and ephemeral local data.
+- `SqlDriver`: synchronous SQLite-compatible driver.
+- `AsyncSqlDriver`: async SQLite-compatible driver.
+
+```ts
+import { initSqlJsWasm } from "./src/hyperdb/drivers/sqlite/init-sql-js-wasm";
+
+const memoryDb = new DB(new BptreeInmemDriver());
+
+const sqliteDriver = await initSqlJsWasm();
+const sqliteDb = new DB(sqliteDriver);
+```
+
+SQLite helpers currently live next to the drivers:
+`src/hyperdb/drivers/sqlite/init-sql-js-wasm.ts` returns a `SqlDriver` backed by
+`sql.js`, and `src/hyperdb/drivers/sqlite/init-wa-sqlite.ts` returns an
+`AsyncSqlDriver` backed by `wa-sqlite`.
+
+The storage codec normalizes values before they reach drivers. SQLite encodes
+`bigint`, `ArrayBuffer`, and typed-array/data-view values around JSON storage;
+the in-memory driver stores normalized JS values directly.
+
+## React And Devtools
+
+The only framework integration today is React, exported from
+`@will-be-done/hyperdb-lib/react`.
+
+```tsx
+import {
+  DBProvider,
+  useDispatch,
+  useSyncSelector,
+} from "@will-be-done/hyperdb-lib/react";
+import { HyperDBDevtools } from "@will-be-done/hyperdb-lib/devtool";
+
+function Tasks({ projectId }: { projectId: string }) {
+  const tasks = useSyncSelector({
+    selector: projectTasks,
+    args: { projectId },
+    defaultValue: [],
+  });
+  const dispatch = useDispatch();
+
+  return (
+    <>
+      <button
+        onClick={() =>
+          dispatch(
+            createTask({
+              id: crypto.randomUUID(),
+              projectId,
+              title: "New task",
+            }),
+          )
+        }
+      >
+        Add
+      </button>
+      {tasks.map((task) => (
+        <div key={task.id}>{task.title}</div>
+      ))}
+    </>
+  );
+}
+
+export function App() {
+  return (
+    <DBProvider value={db}>
+      <Tasks projectId="p1" />
+      <HyperDBDevtools db={db} initialIsOpen={false} />
+    </DBProvider>
+  );
+}
+```
+
+React exports include `DBProvider`, `useDB`, `useSyncSelector`,
+`useAsyncSelector`, `useDispatch`, `useAsyncDispatch`, `useSelect`, and
+`useAsyncSelect`. The devtool can read the DB from context or from its `db` prop.

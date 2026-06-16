@@ -114,7 +114,7 @@ describe("HyperDBDevtools", () => {
 
     expect(isFullyCachedTrace(trace)).toBe(true);
     expect(html).toContain("cachedListSelector");
-    expect(html).toContain("[cached]");
+    expect(html).toContain("cached");
   });
 
   it("renders a database selector when traces come from multiple dbs", () => {

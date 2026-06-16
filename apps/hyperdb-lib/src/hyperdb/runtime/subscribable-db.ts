@@ -12,13 +12,7 @@ import {
 } from "../storage/codec";
 // import { collectAll } from "../commands/async";
 import type { ExtractIndexes, ExtractSchema, TableDefinition } from "../schema/table";
-import { getTraceContextForDB } from "../tracing/context";
-import {
-  beginMutationEvent,
-  endMutationEventError,
-  endMutationEventSuccess,
-  getCurrentTraceFrame,
-} from "../tracing/store";
+import { getTraceContextForDB, type HyperDBTracer } from "../core/tracer";
 import { refVar, type RefVar } from "../utils";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
@@ -142,6 +136,10 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getAutoTraceEnabled?.() ?? true;
   }
 
+  getTracer(): HyperDBTracer | null | undefined {
+    return this.subDb.getTracer?.();
+  }
+
   recordsMutationTraceEvents(): boolean {
     return true;
   }
@@ -197,19 +195,27 @@ export class SubscribableDBTx implements HyperDBTx {
 
     const traceContext = getTraceContextForDB(this);
     const mutationEvent = traceContext
-      ? beginMutationEvent(traceContext, getCurrentTraceFrame(traceContext), {
-          kind: "insert",
-          tableName: table.tableName,
-          newValue: records,
-          rows: records,
-        })
+      ? traceContext.tracer.beginMutationEvent(
+          traceContext,
+          traceContext.tracer.getCurrentTraceFrame(traceContext),
+          {
+            kind: "insert",
+            tableName: table.tableName,
+            newValue: records,
+            rows: records,
+          },
+        )
       : undefined;
 
     try {
       yield* this.txDb.insert(table, records);
     } catch (error) {
       if (traceContext && mutationEvent) {
-        endMutationEventError(traceContext, mutationEvent, error);
+        traceContext.tracer.endMutationEventError(
+          traceContext,
+          mutationEvent,
+          error,
+        );
       }
       throw error;
     }
@@ -224,7 +230,7 @@ export class SubscribableDBTx implements HyperDBTx {
     );
     appendOps(this.operations, insertOps);
     if (traceContext && mutationEvent) {
-      endMutationEventSuccess(traceContext, mutationEvent, {
+      traceContext.tracer.endMutationEventSuccess(traceContext, mutationEvent, {
         newValue: records,
         rows: records,
       });
@@ -279,12 +285,16 @@ export class SubscribableDBTx implements HyperDBTx {
     const previousRecords = new Map<string, Row>();
     const traceContext = getTraceContextForDB(this);
     const mutationEvent = traceContext
-      ? beginMutationEvent(traceContext, getCurrentTraceFrame(traceContext), {
-          kind: "upsert",
-          tableName: table.tableName,
-          newValue: upsertRecords,
-          rows: upsertRecords,
-        })
+      ? traceContext.tracer.beginMutationEvent(
+          traceContext,
+          traceContext.tracer.getCurrentTraceFrame(traceContext),
+          {
+            kind: "upsert",
+            tableName: table.tableName,
+            newValue: upsertRecords,
+            rows: upsertRecords,
+          },
+        )
       : undefined;
 
     try {
@@ -299,7 +309,11 @@ export class SubscribableDBTx implements HyperDBTx {
       yield* this.txDb.upsert(table, upsertRecords);
     } catch (error) {
       if (traceContext && mutationEvent) {
-        endMutationEventError(traceContext, mutationEvent, error);
+        traceContext.tracer.endMutationEventError(
+          traceContext,
+          mutationEvent,
+          error,
+        );
       }
       throw error;
     }
@@ -315,7 +329,7 @@ export class SubscribableDBTx implements HyperDBTx {
     );
     appendOps(this.operations, upsertOps);
     if (traceContext && mutationEvent) {
-      endMutationEventSuccess(traceContext, mutationEvent, {
+      traceContext.tracer.endMutationEventSuccess(traceContext, mutationEvent, {
         oldValue: Array.from(previousRecords.values()),
         newValue: upsertRecords,
         rows: upsertRecords,
@@ -348,11 +362,15 @@ export class SubscribableDBTx implements HyperDBTx {
     const deleteOps: DeleteOp[] = [];
     const traceContext = getTraceContextForDB(this);
     const mutationEvent = traceContext
-      ? beginMutationEvent(traceContext, getCurrentTraceFrame(traceContext), {
-          kind: "delete",
-          tableName: table.tableName,
-          ids,
-        })
+      ? traceContext.tracer.beginMutationEvent(
+          traceContext,
+          traceContext.tracer.getCurrentTraceFrame(traceContext),
+          {
+            kind: "delete",
+            tableName: table.tableName,
+            ids,
+          },
+        )
       : undefined;
 
     try {
@@ -368,13 +386,17 @@ export class SubscribableDBTx implements HyperDBTx {
       appendOps(this.operations, deleteOps);
     } catch (error) {
       if (traceContext && mutationEvent) {
-        endMutationEventError(traceContext, mutationEvent, error);
+        traceContext.tracer.endMutationEventError(
+          traceContext,
+          mutationEvent,
+          error,
+        );
       }
       throw error;
     }
 
     if (traceContext && mutationEvent) {
-      endMutationEventSuccess(traceContext, mutationEvent, {
+      traceContext.tracer.endMutationEventSuccess(traceContext, mutationEvent, {
         ids,
         oldValue: deleteOps.map((op) => op.oldValue),
       });
@@ -510,6 +532,10 @@ export class SubscribableDB implements HyperDB {
 
   getAutoTraceEnabled(): boolean {
     return this.db.getAutoTraceEnabled?.() ?? true;
+  }
+
+  getTracer(): HyperDBTracer | null | undefined {
+    return this.db.getTracer?.();
   }
 
   getOptions(): CodecOptions {

@@ -16,7 +16,7 @@ export class SyncDBTx {
   }
 
   intervalScan<
-    TTable extends TableDefinition,
+    TTable extends TableDefinition<any, any, any>,
     K extends keyof ExtractIndexes<TTable>,
   >(
     table: TTable,
@@ -29,21 +29,24 @@ export class SyncDBTx {
     );
   }
 
-  insert<TTable extends TableDefinition>(
+  insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): void {
     return execSync(this.dbTx.insert(table, records));
   }
 
-  upsert<TTable extends TableDefinition>(
+  upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): void {
     return execSync(this.dbTx.upsert(table, records));
   }
 
-  delete<TTable extends TableDefinition>(table: TTable, ids: string[]): void {
+  delete<TTable extends TableDefinition<any, any, any>>(
+    table: TTable,
+    ids: string[],
+  ): void {
     return execSync(this.dbTx.delete(table, ids));
   }
 
@@ -63,7 +66,7 @@ export class SyncDB {
     this.db = db;
   }
 
-  loadTables(tables: TableDefinition<any, any>[]): void {
+  loadTables(tables: TableDefinition<any, any, any>[]): void {
     return execSync(this.db.loadTables(tables));
   }
 
@@ -73,7 +76,7 @@ export class SyncDB {
   }
 
   intervalScan<
-    TTable extends TableDefinition,
+    TTable extends TableDefinition<any, any, any>,
     K extends keyof ExtractIndexes<TTable>,
   >(
     table: TTable,
@@ -86,21 +89,21 @@ export class SyncDB {
     );
   }
 
-  insert<TTable extends TableDefinition<any, any>>(
+  insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): void {
     return execSync(this.db.insert(table, records));
   }
 
-  upsert<TTable extends TableDefinition<any, any>>(
+  upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): void {
     return execSync(this.db.upsert(table, records));
   }
 
-  delete<TTable extends TableDefinition<any, any>>(
+  delete<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
     ids: string[],
   ): void {

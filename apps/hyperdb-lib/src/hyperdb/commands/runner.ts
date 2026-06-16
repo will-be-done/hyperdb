@@ -17,29 +17,19 @@ import {
   stableSerializeSelectorArgs,
 } from "./query/selector-memo";
 import type { Op } from "../runtime/ops";
-import { withTraceContextTrait } from "../tracing/context";
+import {
+  anonymousTraceMeta,
+  getTracerForDB,
+  withTraceContextTrait,
+  type HyperDBTracer,
+  type TraceContext,
+  type TraceFrame,
+} from "../core/tracer";
 import {
   getCommandFramePath,
   getGeneratorTraceMeta,
   wrapGeneratorWithExistingTraceMeta,
 } from "../tracing/metadata";
-import {
-  anonymousTraceMeta,
-  beginMutationEvent,
-  beginSelectEvent,
-  endMutationEventError,
-  endMutationEventSuccess,
-  endSelectEventError,
-  endSelectEventSuccess,
-  endTraceError,
-  endTraceSuccess,
-  enterFramePath,
-  getCurrentTraceFrameMeta,
-  markTraceFrameCached,
-  startRootTrace,
-  type TraceContext,
-  type TraceFrame,
-} from "../tracing/store";
 
 export type ChildMemoEntry = {
   selectRangeCmds: SelectRangeCmd[];
@@ -163,6 +153,7 @@ const recordsMutationTraceEvents = (db: HyperDB): boolean =>
 
 function* runMutationCommand(
   db: HyperDB,
+  tracer: HyperDBTracer | undefined,
   traceContext: TraceContext | undefined,
   traceFrame: TraceFrame | undefined,
   input:
@@ -182,9 +173,10 @@ function* runMutationCommand(
   const shouldRecordInRunner =
     traceContext !== undefined &&
     traceFrame !== undefined &&
+    tracer !== undefined &&
     !recordsMutationTraceEvents(db);
   const mutationEvent = shouldRecordInRunner
-    ? beginMutationEvent(traceContext, traceFrame, {
+    ? tracer.beginMutationEvent(traceContext, traceFrame, {
         kind: input.kind,
         tableName: input.tableName,
         ...(input.kind === "delete"
@@ -196,14 +188,14 @@ function* runMutationCommand(
   try {
     yield* input.run();
   } catch (error) {
-    if (traceContext && mutationEvent) {
-      endMutationEventError(traceContext, mutationEvent, error);
+    if (traceContext && tracer && mutationEvent) {
+      tracer.endMutationEventError(traceContext, mutationEvent, error);
     }
     throw error;
   }
 
-  if (traceContext && mutationEvent) {
-    endMutationEventSuccess(
+  if (traceContext && tracer && mutationEvent) {
+    tracer.endMutationEventSuccess(
       traceContext,
       mutationEvent,
       input.kind === "delete"
@@ -218,13 +210,13 @@ export function* runCommandGenerator<TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   options: CommandRunnerOptions = {},
 ): Generator<DBCmd, TReturn, unknown> {
+  const tracer = options.traceContext?.tracer ?? getTracerForDB(db);
   const traceContext =
     options.traceContext ??
     (options.skipRootTrace
       ? undefined
-      : startRootTrace(
+      : tracer?.startRootTrace(
           getGeneratorTraceMeta(gen) ?? anonymousTraceMeta(),
-          undefined,
           db,
         ));
   const ownsTraceContext = traceContext !== undefined && !options.traceContext;
@@ -236,7 +228,7 @@ export function* runCommandGenerator<TReturn>(
     while (!result.done) {
       const cmd = result.value;
       const traceFrame = traceContext
-        ? enterFramePath(
+        ? tracer?.enterFramePath(
             traceContext,
             options.skipChildTrace ? undefined : getCommandFramePath(cmd),
           )
@@ -247,8 +239,8 @@ export function* runCommandGenerator<TReturn>(
 
         options.selectRangeCmds?.push(cmd);
         const selectEvent =
-          traceContext && traceFrame
-            ? beginSelectEvent(traceContext, traceFrame, {
+          traceContext && tracer && traceFrame
+            ? tracer.beginSelectEvent(traceContext, traceFrame, {
                 tableName: table.tableName,
                 index,
                 where: selectQuery.where,
@@ -268,19 +260,22 @@ export function* runCommandGenerator<TReturn>(
               order: selectQuery.order,
             },
           );
-          if (traceContext && selectEvent) {
-            endSelectEventSuccess(traceContext, selectEvent, rows);
+          if (traceContext && tracer && selectEvent) {
+            tracer.endSelectEventSuccess(traceContext, selectEvent, rows);
           }
           result = gen.next(rows);
         } catch (error) {
-          if (traceContext && selectEvent) {
-            endSelectEventError(traceContext, selectEvent, error);
+          if (traceContext && tracer && selectEvent) {
+            tracer.endSelectEventError(traceContext, selectEvent, error);
           }
           throw error;
         }
       } else if (isRunSelectorCmd(cmd)) {
+        const memoizesSelf = cmd.memoization?.selfChild === true;
         const argsKey =
-          options.childMemo !== undefined ? argsKeyOf(cmd.args) : undefined;
+          options.childMemo !== undefined && memoizesSelf
+            ? argsKeyOf(cmd.args)
+            : undefined;
         if (db.getOptions?.().freezeArgs) {
           deepFreeze(cmd.args);
         }
@@ -304,11 +299,12 @@ export function* runCommandGenerator<TReturn>(
           options.selectRangeCmds?.push(...memo.selectRangeCmds);
           if (
             traceContext &&
+            tracer &&
             traceFrame &&
             !options.skipChildTrace &&
             !cmd.skipTrace?.childTrace
           ) {
-            markTraceFrameCached(traceContext, traceFrame);
+            tracer.markTraceFrameCached(traceContext, traceFrame);
           }
           result = gen.next(memo.result);
         } else {
@@ -317,16 +313,24 @@ export function* runCommandGenerator<TReturn>(
           // when the node itself recomputes, its unaffected descendants stay
           // cached. Non-serializable nodes can't be persisted, so their subtree
           // memo is a throwaway scope (ephemeral, recomputed each run).
-          const scopedMemo: ChildMemo =
-            argsKey != null ? (memo?.childMemo ?? new Map()) : new Map();
+          const scopedMemo: ChildMemo | undefined =
+            options.childMemo === undefined
+              ? undefined
+              : memoizesSelf
+                ? argsKey != null
+                  ? (memo?.childMemo ?? new Map())
+                  : new Map()
+                : options.childMemo;
           const scopedVisited: ChildVisited | undefined = options.visited
-            ? new Map()
+            ? memoizesSelf
+              ? new Map()
+              : options.visited
             : undefined;
           // Re-wrap the freshly created body with the selector frame's own meta
           // so its scans nest under this frame instead of spawning a duplicate.
           const selectorMeta =
-            traceContext && traceFrame
-              ? getCurrentTraceFrameMeta(traceContext)
+            traceContext && tracer && traceFrame
+              ? tracer.getCurrentTraceFrameMeta(traceContext)
               : undefined;
           const body = selectorMeta
             ? wrapGeneratorWithExistingTraceMeta(cmd.makeBody(), selectorMeta)
@@ -366,7 +370,7 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
             kind: "insert",
             tableName: cmd.table.tableName,
             rows: cmd.values,
@@ -379,7 +383,7 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
             kind: "upsert",
             tableName: cmd.table.tableName,
             rows: cmd.values,
@@ -392,7 +396,7 @@ export function* runCommandGenerator<TReturn>(
         }
 
         result = gen.next(
-          yield* runMutationCommand(scopedDB, traceContext, traceFrame, {
+          yield* runMutationCommand(scopedDB, tracer, traceContext, traceFrame, {
             kind: "delete",
             tableName: cmd.table.tableName,
             ids: cmd.values,
@@ -411,13 +415,13 @@ export function* runCommandGenerator<TReturn>(
     }
 
     if (ownsTraceContext) {
-      endTraceSuccess(traceContext);
+      tracer?.endTraceSuccess(traceContext);
     }
 
     return result.value;
   } catch (error) {
     if (ownsTraceContext) {
-      endTraceError(traceContext, error);
+      tracer?.endTraceError(traceContext, error);
     }
 
     console.error(error);

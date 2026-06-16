@@ -9,6 +9,7 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
+import type { HyperDBTracer } from "../core/tracer";
 import { deepFreeze } from "../deep-freeze";
 import {
   DEFAULT_CODEC_OPTIONS,
@@ -27,6 +28,7 @@ export type DBOptions = Partial<CodecOptions> & {
   traits?: Trait[];
   trace?: boolean;
   autoTrace?: boolean;
+  tracer?: HyperDBTracer | null;
 };
 
 type DBState = {
@@ -35,6 +37,7 @@ type DBState = {
   id: string;
   trace: boolean;
   autoTrace: boolean;
+  tracer?: HyperDBTracer | null;
 };
 
 let dbIdCounter = 0;
@@ -62,6 +65,7 @@ const createDBState = (options: DBOptions): DBState => {
     id: createDBId(),
     trace,
     autoTrace,
+    tracer: options.tracer,
   };
 };
 
@@ -175,6 +179,10 @@ export class DB implements HyperDB {
 
   getAutoTraceEnabled(): boolean {
     return this.state.autoTrace;
+  }
+
+  getTracer(): HyperDBTracer | null | undefined {
+    return this.state.tracer;
   }
 
   get options(): CodecOptions {

@@ -64,6 +64,17 @@ const createTestDB = (...tables: Parameters<SubscribableDB["loadTables"]>[0]) =>
   return testDb;
 };
 
+const makeGroupRows = (
+  group: string,
+  count: number,
+  prefix = group,
+): { id: string; group: string; orderToken: string }[] =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `${prefix}-${index}`,
+    group,
+    orderToken: String(index).padStart(3, "0"),
+  }));
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -378,6 +389,37 @@ describe("selector", () => {
       } as never),
     ).toThrow(/array properties are not supported/);
     expect(testDb.subscribers).toHaveLength(0);
+  });
+
+  test("object-form selector can disable root memoization", () => {
+    const testDb = createTestDB();
+    let getterReads = 0;
+    let runs = 0;
+    const args = {};
+    Object.defineProperty(args, "value", {
+      enumerable: true,
+      get() {
+        getterReads++;
+        return "expensive";
+      },
+    });
+
+    const uncachedSelector = selector({
+      name: "uncachedRootSelector",
+      args: { value: v.any() },
+      memoization: { root: false },
+      handler: function* uncachedRootSelector() {
+        runs++;
+        return runs;
+      },
+    });
+
+    const first = initCachedSelector(testDb, uncachedSelector, args as never);
+    const second = initCachedSelector(testDb, uncachedSelector, args as never);
+
+    expect(first.getSnapshot()).toBe(1);
+    expect(second.getSnapshot()).toBe(2);
+    expect(getterReads).toBe(0);
   });
 
   test("cached object-form selectors split entries by args", () => {
@@ -835,6 +877,12 @@ describe("selector", () => {
       orderToken: v.string(),
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(itemsTable);
+    execSync(
+      testDb.insert(itemsTable, [
+        ...makeGroupRows("a", 11),
+        ...makeGroupRows("b", 11),
+      ]),
+    );
 
     let runA = 0;
     let runB = 0;
@@ -842,6 +890,7 @@ describe("selector", () => {
     const groupItems = selector({
       name: "nestedGroupItems",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* nestedGroupItems({ group }) {
         if (group === "a") runA++;
         else runB++;
@@ -869,7 +918,10 @@ describe("selector", () => {
 
     expect(runA).toBe(1);
     expect(runB).toBe(1);
-    expect(cached.getSnapshot()).toEqual({ a: [], b: [] });
+    expect(cached.getSnapshot()).toEqual({
+      a: makeGroupRows("a", 11).map((item) => item.id),
+      b: makeGroupRows("b", 11).map((item) => item.id),
+    });
 
     // Op lands in child A's range -> A recomputes, B served from memo.
     execSync(
@@ -878,7 +930,10 @@ describe("selector", () => {
 
     expect(runA).toBe(2);
     expect(runB).toBe(1);
-    expect(cached.getSnapshot()).toEqual({ a: ["a1"], b: [] });
+    expect(cached.getSnapshot()).toEqual({
+      a: [...makeGroupRows("a", 11).map((item) => item.id), "a1"],
+      b: makeGroupRows("b", 11).map((item) => item.id),
+    });
 
     // Op lands in child B's range -> B recomputes, A served from memo.
     execSync(
@@ -887,12 +942,68 @@ describe("selector", () => {
 
     expect(runA).toBe(2);
     expect(runB).toBe(2);
-    expect(cached.getSnapshot()).toEqual({ a: ["a1"], b: ["b1"] });
+    expect(cached.getSnapshot()).toEqual({
+      a: [...makeGroupRows("a", 11).map((item) => item.id), "a1"],
+      b: [...makeGroupRows("b", 11).map((item) => item.id), "b1"],
+    });
 
     expect(snapshots).toEqual([
-      { a: ["a1"], b: [] },
-      { a: ["a1"], b: ["b1"] },
+      {
+        a: [...makeGroupRows("a", 11).map((item) => item.id), "a1"],
+        b: makeGroupRows("b", 11).map((item) => item.id),
+      },
+      {
+        a: [...makeGroupRows("a", 11).map((item) => item.id), "a1"],
+        b: [...makeGroupRows("b", 11).map((item) => item.id), "b1"],
+      },
     ]);
+
+    unsubscribe();
+  });
+
+  test("nested selectors are not memoized by default", () => {
+    const itemsTable = defineTable("smallNestedMemoItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    let runA = 0;
+    let runB = 0;
+
+    const groupItems = selector({
+      name: "smallNestedGroupItems",
+      args: { group: v.string() },
+      handler: function* smallNestedGroupItems({ group }) {
+        if (group === "a") runA++;
+        else runB++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+
+    const parent = selector({
+      name: "smallNestedMemoParent",
+      args: {},
+      handler: function* smallNestedMemoParent() {
+        const a = yield* groupItems({ group: "a" });
+        const b = yield* groupItems({ group: "b" });
+        return { a: a.length, b: b.length };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, parent, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+
+    expect(cached.getSnapshot()).toEqual({ a: 1, b: 0 });
+    expect(runA).toBe(2);
+    expect(runB).toBe(2);
 
     unsubscribe();
   });
@@ -1009,10 +1120,12 @@ describe("selector", () => {
         orderToken: v.string(),
       }).index("groupOrder", ["group", "orderToken"]);
       const testDb = createTestDB(itemsTable);
+      execSync(testDb.insert(itemsTable, makeGroupRows("b", 11)));
 
       const groupItems = selector({
         name: "cachedMarkerGroupItems",
         args: { group: v.string() },
+        memoization: { selfChild: true },
         handler: function* cachedMarkerGroupItems({ group }) {
           return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
             q.eq("group", group),
@@ -1081,7 +1194,10 @@ describe("selector", () => {
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(itemsTable);
     execSync(
-      testDb.insert(itemsTable, [{ id: "x", group: "a", orderToken: "a" }]),
+      testDb.insert(itemsTable, [
+        ...makeGroupRows("a", 11),
+        { id: "x", group: "a", orderToken: "999" },
+      ]),
     );
 
     let runA = 0;
@@ -1089,6 +1205,7 @@ describe("selector", () => {
     const groupItems = selector({
       name: "moveMemoGroupItems",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* moveMemoGroupItems({ group }) {
         if (group === "a") runA++;
         else runB++;
@@ -1103,14 +1220,14 @@ describe("selector", () => {
       handler: function* moveMemoParent() {
         const a = yield* groupItems({ group: "a" });
         const b = yield* groupItems({ group: "b" });
-        return { a: a.map((item) => item.id), b: b.map((item) => item.id) };
+        return { a: a.length, b: b.length };
       },
     });
 
     const cached = initCachedSelector(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
-    expect(cached.getSnapshot()).toEqual({ a: ["x"], b: [] });
+    expect(cached.getSnapshot()).toEqual({ a: 12, b: 0 });
     expect(runA).toBe(1);
     expect(runB).toBe(1);
 
@@ -1119,14 +1236,14 @@ describe("selector", () => {
       testDb.upsert(itemsTable, [{ id: "x", group: "b", orderToken: "a" }]),
     );
 
-    expect(cached.getSnapshot()).toEqual({ a: [], b: ["x"] });
+    expect(cached.getSnapshot()).toEqual({ a: 11, b: 1 });
     expect(runA).toBe(2);
     expect(runB).toBe(2);
 
     // Delete x (now in B): only B recomputes.
     execSync(testDb.delete(itemsTable, ["x"]));
 
-    expect(cached.getSnapshot()).toEqual({ a: [], b: [] });
+    expect(cached.getSnapshot()).toEqual({ a: 11, b: 0 });
     expect(runA).toBe(2);
     expect(runB).toBe(3);
 
@@ -1140,10 +1257,12 @@ describe("selector", () => {
       orderToken: v.string(),
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(itemsTable);
+    execSync(testDb.insert(itemsTable, makeGroupRows("b", 11)));
 
     const groupItems = selector({
       name: "refMemoGroupItems",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* refMemoGroupItems({ group }) {
         return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
           q.eq("group", group),
@@ -1184,6 +1303,7 @@ describe("selector", () => {
       orderToken: v.string(),
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(itemsTable);
+    execSync(testDb.insert(itemsTable, makeGroupRows("b", 11)));
 
     let leafRuns = 0;
     let midRuns = 0;
@@ -1191,6 +1311,7 @@ describe("selector", () => {
     const leaf = selector({
       name: "threeLevelLeaf",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* threeLevelLeaf({ group }) {
         leafRuns++;
         return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
@@ -1201,6 +1322,7 @@ describe("selector", () => {
     const mid = selector({
       name: "threeLevelMid",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* threeLevelMid({ group }) {
         midRuns++;
         const items = yield* leaf({ group });
@@ -1228,9 +1350,68 @@ describe("selector", () => {
       testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
     );
 
-    expect(cached.getSnapshot()).toEqual({ a: 1, b: 0 });
+    expect(cached.getSnapshot()).toEqual({ a: 1, b: 11 });
     expect(midRuns).toBe(3); // only mid(a) reran
     expect(leafRuns).toBe(3); // only leaf(a) reran
+
+    unsubscribe();
+  });
+
+  test("memoized leaf can be reused through an unmemoized middle selector", () => {
+    const itemsTable = defineTable("leafThroughUnmemoizedMidItems", {
+      id: v.string(),
+      group: v.string(),
+      orderToken: v.string(),
+    }).index("groupOrder", ["group", "orderToken"]);
+    const testDb = createTestDB(itemsTable);
+
+    let leafRuns = 0;
+    let midRuns = 0;
+
+    const leaf = selector({
+      name: "leafThroughUnmemoizedMidLeaf",
+      args: { group: v.string() },
+      memoization: { selfChild: true },
+      handler: function* leafThroughUnmemoizedMidLeaf({ group }) {
+        leafRuns++;
+        return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
+          q.eq("group", group),
+        );
+      },
+    });
+    const mid = selector({
+      name: "leafThroughUnmemoizedMid",
+      args: { group: v.string() },
+      handler: function* leafThroughUnmemoizedMid({ group }) {
+        midRuns++;
+        const items = yield* leaf({ group });
+        return items.length;
+      },
+    });
+    const top = selector({
+      name: "leafThroughUnmemoizedMidTop",
+      args: {},
+      handler: function* leafThroughUnmemoizedMidTop() {
+        const a = yield* mid({ group: "a" });
+        const b = yield* mid({ group: "b" });
+        return { a, b };
+      },
+    });
+
+    const cached = initCachedSelector(testDb, top, {});
+    const unsubscribe = cached.subscribe(() => {});
+
+    expect(cached.getSnapshot()).toEqual({ a: 0, b: 0 });
+    expect(midRuns).toBe(2);
+    expect(leafRuns).toBe(2);
+
+    execSync(
+      testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
+    );
+
+    expect(cached.getSnapshot()).toEqual({ a: 1, b: 0 });
+    expect(midRuns).toBe(4);
+    expect(leafRuns).toBe(3);
 
     unsubscribe();
   });
@@ -1242,11 +1423,19 @@ describe("selector", () => {
       orderToken: v.string(),
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(itemsTable);
+    execSync(
+      testDb.insert(itemsTable, [
+        ...makeGroupRows("a1", 11),
+        ...makeGroupRows("a2", 11),
+        ...makeGroupRows("b", 11),
+      ]),
+    );
 
     const leafRuns: Record<string, number> = { a1: 0, a2: 0, b: 0 };
     const leaf = selector({
       name: "deepCacheLeaf",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* deepCacheLeaf({ group }) {
         leafRuns[group] = (leafRuns[group] ?? 0) + 1;
         return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
@@ -1257,6 +1446,7 @@ describe("selector", () => {
     const midA = selector({
       name: "deepCacheMidA",
       args: {},
+      memoization: { selfChild: true },
       handler: function* deepCacheMidA() {
         const a1 = yield* leaf({ group: "a1" });
         const a2 = yield* leaf({ group: "a2" });
@@ -1266,6 +1456,7 @@ describe("selector", () => {
     const midB = selector({
       name: "deepCacheMidB",
       args: {},
+      memoization: { selfChild: true },
       handler: function* deepCacheMidB() {
         const b = yield* leaf({ group: "b" });
         return b.length;
@@ -1298,7 +1489,7 @@ describe("selector", () => {
       testDb.insert(itemsTable, [{ id: "a1x", group: "a1", orderToken: "a" }]),
     );
     expect(leafRuns).toEqual({ a1: 2, a2: 1, b: 2 });
-    expect(cached.getSnapshot()).toEqual({ a: 1, b: 1 });
+    expect(cached.getSnapshot()).toEqual({ a: 23, b: 12 });
 
     unsubscribe();
   });
@@ -1321,6 +1512,7 @@ describe("selector", () => {
     const groupItems = selector({
       name: "condGroupItems",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* condGroupItems({ group }) {
         if (group === "a") runA++;
         else runB++;
@@ -1380,6 +1572,7 @@ describe("selector", () => {
     }).index("groupOrder", ["group", "orderToken"]);
     const testDb = createTestDB(flagsTable, itemsTable);
     execSync(testDb.insert(flagsTable, [{ id: "flag", active: "a" }]));
+    execSync(testDb.insert(itemsTable, makeGroupRows("a", 11)));
 
     let midRuns = 0;
     const leafRuns: Record<string, number> = { a: 0, b: 0, sibling: 0 };
@@ -1387,6 +1580,7 @@ describe("selector", () => {
     const groupItems = selector({
       name: "nestedCondGroupItems",
       args: { group: v.string() },
+      memoization: { selfChild: true },
       handler: function* nestedCondGroupItems({ group }) {
         leafRuns[group] = (leafRuns[group] ?? 0) + 1;
         return yield* selectFrom(itemsTable, "groupOrder").where((q) =>
@@ -1398,6 +1592,7 @@ describe("selector", () => {
     const conditionalMid = selector({
       name: "nestedCondMid",
       args: {},
+      memoization: { selfChild: true },
       handler: function* nestedCondMid() {
         midRuns++;
         const flags = yield* selectFrom(flagsTable, "byId").where((q) =>
@@ -1425,7 +1620,10 @@ describe("selector", () => {
     const cached = initCachedSelector(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
-    expect(cached.getSnapshot()).toEqual({ active: [], sibling: [] });
+    expect(cached.getSnapshot()).toEqual({
+      active: makeGroupRows("a", 11).map((item) => item.id),
+      sibling: [],
+    });
     expect(midRuns).toBe(1);
     expect(leafRuns).toEqual({ a: 1, b: 0, sibling: 1 });
 
@@ -1438,7 +1636,7 @@ describe("selector", () => {
     );
 
     expect(cached.getSnapshot()).toEqual({
-      active: [],
+      active: makeGroupRows("a", 11).map((item) => item.id),
       sibling: ["sibling-1"],
     });
     expect(midRuns).toBe(1);
@@ -1456,10 +1654,10 @@ describe("selector", () => {
     expect(leafRuns).toEqual({ a: 1, b: 1, sibling: 2 });
 
     // Mutate the absent "a" branch. If the stale descendant memo was kept, the
-    // later switch back would incorrectly reuse the old empty result.
+    // later switch back would incorrectly reuse the old 11-row result.
     execSync(
       testDb.insert(itemsTable, [
-        { id: "a-1", group: "a", orderToken: "a" },
+        { id: "a-extra", group: "a", orderToken: "999" },
       ]),
     );
     expect(cached.getSnapshot()).toEqual({
@@ -1470,7 +1668,7 @@ describe("selector", () => {
     execSync(testDb.upsert(flagsTable, [{ id: "flag", active: "a" }]));
 
     expect(cached.getSnapshot()).toEqual({
-      active: ["a-1"],
+      active: [...makeGroupRows("a", 11).map((item) => item.id), "a-extra"],
       sibling: ["sibling-1"],
     });
     expect(midRuns).toBe(3);

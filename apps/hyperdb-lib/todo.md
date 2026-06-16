@@ -20,15 +20,16 @@ TODO:
 1. DONE Rename selector -> query; action -> mutation?
 1. DONE better naming query/mutation. But if name query, then what is selectFrom() - . Actually maybe current naming is good. Action, selectors, query = selectFrom, mutation = insert/upsert/delete
 1. DONE Value - add bigint/arraybuffer support
-1. Make validation as param when insert/update/delete
 1. DONE Move web to new useSyncSelector syntax
 1. DONE Make sure that cache layer same as in reselect
 1. DONE Integrate to will be done
 1. DONE Refactor UI with claude code
+1. DONE remove child cache? Only collect root cache?
+1. DONE genearate small readme
+1. Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
 1. Turn on arguments validation with db options
 1. Rename query -> select dir
 1. rename autoTrace
-1. remove child cache? Only collect root cache?
 1. Generate docs
 
 TODO for devtool:
@@ -37,7 +38,7 @@ TODO for devtool:
 1. WONTFIX In devtool - maybe use db to store traces?
 1. DONE Display how much rows were selected during query in general list
 1. DONE Keep same tab open when change action/selector
-1. newValue always dilsplay as "circualr". Maybe just display array of oldValue and newValues, without status/startedAt/
+1. DONE newValue always dilsplay as "circualr". Maybe just display array of oldValue and newValues, without status/startedAt/
 1. DONE Don't open new db traces inew db appeared. Just keep current selected db
 1. DONE somehow always collect traces event when closed, if devtool is mounted(and not opened)
 1. DONE Devtool doens't work correctly with async flow
@@ -45,6 +46,10 @@ TODO for devtool:
 1. DONE Vertical resize of devtool
 1. DONE When clear events - db select still should be present
 1. DONE Show any actions run, but if it was cached - show as cached
+1. DONE Use hyperdb for traces
+1. DONE Add selectors | actions tabs
+1. DONE Add ability to sort by duration
+1. Give dbName so devtool looks better
 
 devtool maybe:
 1. Mutation - show button display diff. Also, add pagination if too much mutations
