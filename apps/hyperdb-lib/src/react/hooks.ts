@@ -10,18 +10,20 @@ import {
   initCachedSelector,
   runSelectorAsync,
   select,
-  type SelectRangeCmd,
-  isNeedToRerunRange,
-  stableSerializeSelectorArgs,
   type AnyObjectSelector,
   type SelectorArgs,
   type SelectorReturn,
-} from "../hyperdb/commands/query/selector";
+} from "../hyperdb/commands/selector/selector";
 import {
   asyncDispatch,
   syncDispatch,
 } from "../hyperdb/commands/action/builders";
 import { useDB } from "./context";
+import {
+  isNeedToRerunRange,
+  stableSerializeSelectorArgs,
+} from "../hyperdb/commands/selector/selector-memo";
+import type { SelectRangeCmd } from "../hyperdb/commands/selector/commands";
 
 type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;
@@ -118,9 +120,7 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
   const selectRangeCmdsRef = useRef<SelectRangeCmd[]>([]);
   const genRef = useRef<
     () => Generator<unknown, SelectorReturn<TSelector>, unknown>
-  >(
-    () => input.selector(input.args),
-  );
+  >(() => input.selector(input.args));
   genRef.current = () => input.selector(input.args);
 
   useEffect(() => {

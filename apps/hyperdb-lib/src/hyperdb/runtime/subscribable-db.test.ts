@@ -6,7 +6,7 @@ import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
 import { v } from "../schema/values";
-import { selectFrom } from "../commands/query/builder";
+import { selectFrom } from "../commands/selector/builder";
 import { deleteRows, insert, upsert } from "../commands/action/builders";
 
 type Task = {

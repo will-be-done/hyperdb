@@ -1,4 +1,4 @@
-import type { QueryWhereClause } from "../commands/query/commands";
+import type { QueryWhereClause } from "../commands/selector/commands";
 import type { TupleScanOptions } from "../core/primitives";
 import { DB } from "../runtime/db";
 import { SubscribableDB } from "../runtime/subscribable-db";
@@ -99,19 +99,6 @@ const dbLabels = new Map<string, string>();
 type TraceDBIdentified = {
   getId?: () => string;
 };
-
-type TraceDBConfigured = {
-  getTraceEnabled?: () => boolean;
-  getAutoTraceEnabled?: () => boolean;
-};
-
-const isTraceEnabledForDB = (db: object | undefined): boolean =>
-  ((db as TraceDBConfigured | undefined)?.getTraceEnabled?.() ?? false) ===
-  true;
-
-const isAutoTraceEnabledForDB = (db: object | undefined): boolean =>
-  ((db as TraceDBConfigured | undefined)?.getAutoTraceEnabled?.() ?? true) ===
-  true;
 
 const nextId = (prefix: string): string => {
   idCounter += 1;
@@ -222,7 +209,6 @@ const omitUndefined = <T extends Record<string, unknown>>(value: T): T => {
 export class HyperDBTraceStore implements HyperDBTracer {
   private subDb = new SubscribableDB(
     new DB(new BptreeInmemDriver(), {
-      autoTrace: false,
       tracer: null,
     }),
   );
@@ -530,10 +516,10 @@ export const startRootTrace = (
 ): TraceContext | undefined => {
   if (meta.skipRootTrace) return undefined;
 
-  if (
-    !isTraceEnabledForDB(db) &&
-    (!store.isActive() || !isAutoTraceEnabledForDB(db))
-  ) {
+  const traceEnabled = meta.trace ?? false;
+  const autoTrace = meta.autoTrace ?? true;
+
+  if (!traceEnabled && (!store.isActive() || !autoTrace)) {
     return undefined;
   }
 

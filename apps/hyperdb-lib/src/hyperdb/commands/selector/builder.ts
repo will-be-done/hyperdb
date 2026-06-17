@@ -7,9 +7,12 @@ import type {
 } from "../../schema/table";
 import type { Value } from "../../core/primitives";
 import { convertWhereToBound } from "../../core/query/bounds";
-import type { QueryOrder, QueryWhereClause, SelectQuery, SelectRangeCmd } from "./commands";
-
-export type { QueryOrder, QueryWhereClause, SelectQuery } from "./commands";
+import type {
+  QueryOrder,
+  QueryWhereClause,
+  SelectQuery,
+  SelectRangeCmd,
+} from "./commands";
 
 export type ExtractIndexName<TTable> = Extract<
   keyof ExtractIndexes<TTable>,

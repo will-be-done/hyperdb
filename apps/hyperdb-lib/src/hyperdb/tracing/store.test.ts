@@ -37,25 +37,25 @@ describe("devtool tracing store", () => {
     expect(store.getSnapshot()).toEqual([]);
   });
 
-  it("stores traces without listeners when the db has trace enabled", () => {
+  it("stores traces without listeners when trace is enabled", () => {
     const store = new HyperDBTraceStore();
     const context = startRootTrace(
-      createTraceFrameMeta("action", "traced", undefined),
+      createTraceFrameMeta("action", "traced", undefined, { trace: true }),
       store,
-      { getTraceEnabled: () => true },
     );
 
     expect(context).toBeDefined();
     expect(store.getSnapshot()[0]?.name).toBe("traced");
   });
 
-  it("does not store listener-activated traces when db auto trace is disabled", () => {
+  it("does not store listener-activated traces when auto trace is disabled", () => {
     const store = new HyperDBTraceStore();
     const unsubscribe = store.subscribe(() => {});
     const context = startRootTrace(
-      createTraceFrameMeta("action", "manual-only", undefined),
+      createTraceFrameMeta("action", "manual-only", undefined, {
+        autoTrace: false,
+      }),
       store,
-      { getAutoTraceEnabled: () => false },
     );
 
     expect(context).toBeUndefined();

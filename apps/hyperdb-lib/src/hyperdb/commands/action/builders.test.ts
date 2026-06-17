@@ -2,10 +2,18 @@ import { describe, expect, it } from "vitest";
 import { defineTable } from "../../schema/table";
 import { DB, execSync } from "../../db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
-import { action, deleteRows, syncDispatch, insert, upsert } from "./builders";
-import { selectFrom } from "../query/builder";
+import {
+  createAction,
+  deleteRows,
+  syncDispatch,
+  insert,
+  upsert,
+} from "./builders";
+import { selectFrom } from "../selector/builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
+
+const action = createAction();
 
 type Task = {
   type: "task";
@@ -135,8 +143,38 @@ describe("action", () => {
     expect(createTask.kind).toBe("action");
     expect(createTask.name).toBe("createTask");
     expect(createTask.args).toBe(args);
+    expect(createTask.trace).toBe(false);
+    expect(createTask.autoTrace).toBe(true);
+    expect(createTask.validateArgs).toBe(false);
     expect(traceMeta?.name).toBe("createTask");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
+  });
+
+  it("createAction can enable and disable object args validation", () => {
+    const validatingAction = createAction({ validateArgs: true });
+    const looseAction = createAction({ validateArgs: false });
+
+    const validated = validatingAction({
+      name: "validatedArgsAction",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+    const loose = looseAction({
+      name: "looseArgsAction",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    expect(validated.validateArgs).toBe(true);
+    expect(() => validated({ id: 123 } as never)).toThrow(
+      "expected string at id",
+    );
+    expect(() => validated({ id: "task-1" })).not.toThrow();
+    expect(() => loose({ id: 123 } as never)).not.toThrow();
   });
 
   it("object-form action requires an explicit name", () => {

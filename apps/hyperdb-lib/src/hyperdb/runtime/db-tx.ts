@@ -26,8 +26,6 @@ type OriginalDB = {
   options: CodecOptions;
   getTraits(): Trait[];
   getId(): string;
-  getTraceEnabled(): boolean;
-  getAutoTraceEnabled(): boolean;
   getTracer?(): HyperDBTracer | null | undefined;
   getOptions?(): CodecOptions;
 };
@@ -152,14 +150,6 @@ export class DBTx implements HyperDBTx {
 
   getId(): string {
     return this.originalDB.getId();
-  }
-
-  getTraceEnabled(): boolean {
-    return this.originalDB.getTraceEnabled();
-  }
-
-  getAutoTraceEnabled(): boolean {
-    return this.originalDB.getAutoTraceEnabled();
   }
 
   getTracer(): HyperDBTracer | null | undefined {

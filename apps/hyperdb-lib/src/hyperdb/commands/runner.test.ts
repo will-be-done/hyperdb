@@ -4,8 +4,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
-import { selectFrom } from "./query/builder";
-import { selector } from "./query/selector";
+import { selectFrom } from "./selector/builder";
 import {
   pruneChildMemo,
   runCommandGenerator,
@@ -14,6 +13,9 @@ import {
   type ChildVisited,
 } from "./runner";
 import type { Op } from "../runtime/ops";
+import { createSelector } from "./selector/selector";
+
+const selector = createSelector();
 
 const entry = (result: unknown): ChildMemoEntry => ({
   selectRangeCmds: [],
@@ -45,9 +47,7 @@ describe("pruneChildMemo", () => {
 
   test("removes a selector whose args map becomes empty", () => {
     const sel = {};
-    const childMemo: ChildMemo = new Map([
-      [sel, new Map([["x", entry(1)]])],
-    ]);
+    const childMemo: ChildMemo = new Map([[sel, new Map([["x", entry(1)]])]]);
     const visited: ChildVisited = new Map([[sel, new Set(["other"])]]);
 
     pruneChildMemo(childMemo, visited);
@@ -57,9 +57,7 @@ describe("pruneChildMemo", () => {
 
   test("keeps every entry that was visited", () => {
     const sel = {};
-    const childMemo: ChildMemo = new Map([
-      [sel, new Map([["x", entry(1)]])],
-    ]);
+    const childMemo: ChildMemo = new Map([[sel, new Map([["x", entry(1)]])]]);
     const visited: ChildVisited = new Map([[sel, new Set(["x"])]]);
 
     pruneChildMemo(childMemo, visited);
