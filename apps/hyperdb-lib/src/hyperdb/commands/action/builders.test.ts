@@ -9,7 +9,7 @@ import {
   insert,
   upsert,
 } from "./builders";
-import { selectFrom } from "../query/builder";
+import { selectFrom } from "../selector/builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
 

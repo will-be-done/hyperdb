@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { assertType, describe, expect, it } from "vitest";
-import { selectFrom } from "../commands/query/builder";
+import { selectFrom } from "../commands/selector/builder";
 import { defineTable, type ExtractSchema } from "./table";
 import { assertValid, type Infer, v } from "./values";
 

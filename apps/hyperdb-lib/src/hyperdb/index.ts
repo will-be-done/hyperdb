@@ -1,7 +1,7 @@
 export * from "./db";
 export * from "./commands/action/builders";
-export * from "./commands/query/builder";
-export * from "./commands/query/selector";
+export * from "./commands/selector/builder";
+export * from "./commands/selector/selector";
 export { noop } from "./commands/async";
 export * from "./core/query/bounds";
 export * from "./runtime/subscribable-db";

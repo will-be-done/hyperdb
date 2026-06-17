@@ -4,7 +4,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
-import { selectFrom } from "./query/builder";
+import { selectFrom } from "./selector/builder";
 import {
   pruneChildMemo,
   runCommandGenerator,
@@ -13,7 +13,7 @@ import {
   type ChildVisited,
 } from "./runner";
 import type { Op } from "../runtime/ops";
-import { createSelector } from "./query/selector";
+import { createSelector } from "./selector/selector";
 
 const selector = createSelector();
 

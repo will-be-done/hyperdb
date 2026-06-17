@@ -26,8 +26,8 @@ TODO:
 1. DONE Refactor UI with claude code
 1. DONE remove child cache? Only collect root cache?
 1. DONE genearate small readme
-1. Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
-1. Turn on arguments validation with db options
+1. DONE Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
+1. DONE Turn on arguments validation with db options
 1. Rename query -> select dir
 1. rename autoTrace
 1. Generate docs
@@ -70,11 +70,3 @@ Maybe:
 1. filter
 1. play with effect-ts
 1. ability to change data in devtool
-
-@insertProject [200ms]
-  select projects.byId [50ms] [1 row]
-  insert projects [50ms] [5 rows]
-  select tasks.byProjectId [50ms] [2 rows]
-  @insertFirstTask [50ms]
-    select tasks.byId [20ms] [1 row]
-    insert tasks [30ms] [2 rows]

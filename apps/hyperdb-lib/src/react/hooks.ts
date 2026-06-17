@@ -13,7 +13,7 @@ import {
   type AnyObjectSelector,
   type SelectorArgs,
   type SelectorReturn,
-} from "../hyperdb/commands/query/selector";
+} from "../hyperdb/commands/selector/selector";
 import {
   asyncDispatch,
   syncDispatch,
@@ -22,8 +22,8 @@ import { useDB } from "./context";
 import {
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
-} from "../hyperdb/commands/query/selector-memo";
-import type { SelectRangeCmd } from "../hyperdb/commands/query/commands";
+} from "../hyperdb/commands/selector/selector-memo";
+import type { SelectRangeCmd } from "../hyperdb/commands/selector/commands";
 
 type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;

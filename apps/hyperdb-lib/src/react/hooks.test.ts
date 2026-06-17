@@ -37,7 +37,7 @@ vi.mock("./context", () => ({
   useDB: () => mocks.db,
 }));
 
-vi.mock("../hyperdb/commands/query/selector", () => ({
+vi.mock("../hyperdb/commands/selector/selector", () => ({
   initCachedSelector: (...args: unknown[]) =>
     mocks.initCachedSelector(...args),
   initSelector: vi.fn(),

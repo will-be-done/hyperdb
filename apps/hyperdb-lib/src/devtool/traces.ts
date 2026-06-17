@@ -1,5 +1,5 @@
 import { createAction, createSelector } from "../hyperdb";
-import { selectFrom } from "../hyperdb/commands/query/builder";
+import { selectFrom } from "../hyperdb/commands/selector/builder";
 import { v } from "../hyperdb/schema/values";
 import {
   hyperDBTraceStore,

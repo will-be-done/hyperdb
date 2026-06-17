@@ -11,11 +11,11 @@ import {
   isRunSelectorCmd,
   isSelectRangeCmd,
   type SelectRangeCmd,
-} from "./query/commands";
+} from "./selector/commands";
 import {
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
-} from "./query/selector-memo";
+} from "./selector/selector-memo";
 import type { Op } from "../runtime/ops";
 import {
   anonymousTraceMeta,

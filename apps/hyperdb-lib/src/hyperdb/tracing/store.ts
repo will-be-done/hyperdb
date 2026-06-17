@@ -1,4 +1,4 @@
-import type { QueryWhereClause } from "../commands/query/commands";
+import type { QueryWhereClause } from "../commands/selector/commands";
 import type { TupleScanOptions } from "../core/primitives";
 import { DB } from "../runtime/db";
 import { SubscribableDB } from "../runtime/subscribable-db";

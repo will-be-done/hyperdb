@@ -16,12 +16,12 @@ import {
   syncDispatch,
   upsert,
 } from "../commands/action/builders";
-import { selectFrom } from "../commands/query/builder";
+import { selectFrom } from "../commands/selector/builder";
 import {
   createSelector,
   select,
   selector,
-} from "../commands/query/selector";
+} from "../commands/selector/selector";
 import { getTraceContextFromTraits } from "./context";
 import { hyperDBTraceStore } from "./store";
 
