@@ -33,8 +33,8 @@ import type {
   TraceFrame,
 } from "../hyperdb/tracing/store";
 
-const createDB = (): SubscribableDB => {
-  const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+const createDB = (dbName?: string): SubscribableDB => {
+  const db = new SubscribableDB(new DB(new BptreeInmemDriver(), { dbName }));
   execSync(db.loadTables([]));
   return db;
 };
@@ -161,6 +161,32 @@ describe("HyperDBDevtools", () => {
     expect(html.match(/<option/g)).toHaveLength(2);
     expect(html).toContain("No traces");
     expect(html).not.toContain("secondDBSelector");
+  });
+
+  it("uses dbName as the database selector label when provided", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    const namedDB = createDB("Local todos");
+    const fallbackDB = createDB();
+    const namedContext = startRootTrace(
+      createTraceFrameMeta("action", "namedDBAction", undefined),
+      hyperDBTraceStore,
+      namedDB,
+    )!;
+    endTraceSuccess(namedContext);
+    const fallbackContext = startRootTrace(
+      createTraceFrameMeta("selector", "fallbackDBSelector", undefined),
+      hyperDBTraceStore,
+      fallbackDB,
+    )!;
+    endTraceSuccess(fallbackContext);
+    unsubscribe();
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={namedDB} />);
+
+    expect(html).toContain("Local todos");
+    expect(html).toMatch(/DB \d+/);
+    expect(html).toContain("namedDBAction");
+    expect(html).not.toContain("fallbackDBSelector");
   });
 
   it("respects localStorage open state", () => {

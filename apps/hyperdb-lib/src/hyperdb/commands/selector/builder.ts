@@ -1,9 +1,9 @@
 import type {
-  TableDefinition,
   ExtractSchema,
   ExtractIndexes,
   UnionKeys,
   UnionValue,
+  AnyTableDefinition,
 } from "../../schema/table";
 import type { Value } from "../../core/primitives";
 import { convertWhereToBound } from "../../core/query/bounds";
@@ -62,7 +62,7 @@ const createSelectRangeCmd = <QType extends SelectQuery>(
 };
 
 function* selectFirst<
-  TTable extends TableDefinition,
+  TTable extends AnyTableDefinition,
   TIndexName extends ExtractIndexName<TTable>,
 >(
   query: SelectQuery<TTable, TIndexName>,
@@ -76,7 +76,7 @@ function* selectFirst<
 }
 
 function* selectFirstOr<
-  TTable extends TableDefinition,
+  TTable extends AnyTableDefinition,
   TIndexName extends ExtractIndexName<TTable>,
   TOtherValue,
 >(
@@ -170,7 +170,7 @@ class QueryBuilder<TTable, TIndexName extends ExtractIndexName<TTable>> {
 }
 
 class SelectQueryBuilder<
-  TTable extends TableDefinition,
+  TTable extends AnyTableDefinition,
   TIndexName extends ExtractIndexName<TTable>,
 > {
   private table: TTable;
@@ -271,7 +271,7 @@ class SelectQueryBuilder<
 }
 
 class SelectQueryBuilderWithWhere<
-  TTable extends TableDefinition,
+  TTable extends AnyTableDefinition,
   TIndexName extends ExtractIndexName<TTable>,
 > {
   private table: TTable;
@@ -342,7 +342,7 @@ class SelectQueryBuilderWithWhere<
 }
 
 export const selectFrom = <
-  TTable extends TableDefinition,
+  TTable extends AnyTableDefinition,
   TIndexName extends ExtractIndexName<TTable>,
 >(
   table: TTable,

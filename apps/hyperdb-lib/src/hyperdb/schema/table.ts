@@ -128,6 +128,12 @@ export interface TableDefinition<
   >;
 }
 
+export type AnyTableDefinition = TableDefinition<
+  any,
+  AnyIndexDefinitions,
+  any
+>;
+
 export type ExtractSchema<TTable> =
   TTable extends TableDefinition<infer T, any, any> ? T : never;
 

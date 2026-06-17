@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { TupleScanOptions, Value } from "../../core/primitives";
-import type { TableDefinition } from "../../schema/table";
+import type { AnyTableDefinition } from "../../schema/table";
 
 const selectRangeType = "selectRange";
 
@@ -15,7 +14,7 @@ export type QueryWhereClause = {
 export type QueryOrder = "asc" | "desc";
 
 export type SelectQuery<
-  TTable extends TableDefinition = TableDefinition,
+  TTable extends AnyTableDefinition = AnyTableDefinition,
   K extends string | number = string | number,
 > = {
   limit?: number;
@@ -27,7 +26,7 @@ export type SelectQuery<
 
 export type SelectRangeCmd = {
   type: typeof selectRangeType;
-  table: TableDefinition<any>;
+  table: AnyTableDefinition;
   index: string;
   selectQuery: SelectQuery;
   bounds: TupleScanOptions[];

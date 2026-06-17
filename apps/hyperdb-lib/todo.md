@@ -28,7 +28,7 @@ TODO:
 1. DONE genearate small readme
 1. DONE Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
 1. DONE Turn on arguments validation with db options
-1. Rename query -> select dir
+1. DONE Rename query -> select dir
 1. rename autoTrace
 1. Generate docs
 
@@ -49,7 +49,7 @@ TODO for devtool:
 1. DONE Use hyperdb for traces
 1. DONE Add selectors | actions tabs
 1. DONE Add ability to sort by duration
-1. Give dbName so devtool looks better
+1. DONE Give dbName so devtool looks better
 
 devtool maybe:
 1. Mutation - show button display diff. Also, add pagination if too much mutations

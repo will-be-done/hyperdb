@@ -6,10 +6,13 @@ import {
   getTraceDBInfo,
   hyperDBTraceStore,
   safeSerialize,
+  unassignedTraceDBKey,
   type MutationEvent,
   type MutationEventKind,
   type RootTrace,
   type SelectCommandEvent,
+  type TraceSortDir,
+  type TraceSortField,
   type TraceDBInfo,
   type TraceFrame,
   type TraceStatus,
@@ -18,6 +21,7 @@ import {
   clearTraceStore,
   clearTraceStoreDB,
   setTraceStoreMaxTraces,
+  traceStoreTraceSelection,
   traceStoreTraces,
 } from "./traces";
 
@@ -50,9 +54,16 @@ export type HyperDBDevtoolsPanelProps = {
 };
 
 const storageKey = "hyperdb-devtools-open";
-const unassignedDBId = "__hyperdb_unassigned__";
+const unassignedDBId = unassignedTraceDBKey;
 const mutationEventBatchSize = 30;
 const mutationValuePreviewSize = 30;
+const emptyTraceSelection: {
+  visibleTraces: RootTrace[];
+  selectedTrace: RootTrace | undefined;
+} = {
+  visibleTraces: [],
+  selectedTrace: undefined,
+};
 
 const readStoredOpenState = (initialIsOpen: boolean): boolean => {
   try {
@@ -185,9 +196,6 @@ const kindFilterOptions: {
   { value: "selector", label: "Sel", dot: "selector" },
   { value: "action", label: "Act", dot: "action" },
 ];
-
-type TraceSortField = "created" | "duration";
-type TraceSortDir = "asc" | "desc";
 
 const sortFieldKey = "hyperdb-devtools-sort-field";
 const sortDirKey = "hyperdb-devtools-sort-dir";
@@ -1699,26 +1707,6 @@ const formatActionCount = (count: number): string =>
 export const isFullyCachedTrace = (trace: RootTrace): boolean =>
   trace.frames[0]?.cached === true;
 
-const compareTraces = (
-  left: RootTrace,
-  right: RootTrace,
-  field: TraceSortField,
-): number =>
-  field === "duration"
-    ? (left.durationMs ?? 0) - (right.durationMs ?? 0)
-    : left.startedAt - right.startedAt;
-
-export const sortTraces = (
-  traces: RootTrace[],
-  field: TraceSortField,
-  dir: TraceSortDir,
-): RootTrace[] => {
-  const sorted = [...traces].sort((left, right) =>
-    compareTraces(left, right, field),
-  );
-  return dir === "desc" ? sorted.reverse() : sorted;
-};
-
 type CallTreeOperation =
   | {
       kind: "frame";
@@ -2389,7 +2377,7 @@ const DevtoolsPanelInner = ({
   );
   const traces = useSyncSelector({
     selector: traceStoreTraces,
-    args: { maxTraces, kind: kindFilter },
+    args: { maxTraces, kind: kindFilter, sortField, sortDir },
     defaultValue: [],
   });
 
@@ -2423,25 +2411,19 @@ const DevtoolsPanelInner = ({
       : hasMultipleDBs
         ? fallbackDBId
         : undefined;
-  const visibleTraces = useMemo(
-    () =>
-      traces.filter(
-        (trace) =>
-          (!activeDBId || traceDBId(trace) === activeDBId) &&
-          (!skipCached || !isFullyCachedTrace(trace)),
-      ),
-    [activeDBId, skipCached, traces],
-  );
-  const sortedTraces = useMemo(
-    () => sortTraces(visibleTraces, sortField, sortDir),
-    [visibleTraces, sortField, sortDir],
-  );
-  const selectedTrace = useMemo(
-    () =>
-      sortedTraces.find((trace) => trace.id === selectedTraceId) ??
-      sortedTraces[0],
-    [selectedTraceId, sortedTraces],
-  );
+  const { visibleTraces, selectedTrace } = useSyncSelector({
+    selector: traceStoreTraceSelection,
+    args: {
+      maxTraces,
+      kind: kindFilter,
+      skipCached,
+      sortField,
+      sortDir,
+      ...(activeDBId !== undefined ? { dbKey: activeDBId } : {}),
+      ...(selectedTraceId !== undefined ? { selectedTraceId } : {}),
+    },
+    defaultValue: emptyTraceSelection,
+  });
 
   useEffect(() => {
     setKnownDBOptions((currentOptions) => {
@@ -2626,10 +2608,10 @@ const DevtoolsPanelInner = ({
           </SortControls>
         </FilterBar>
         <Rows>
-          {sortedTraces.length === 0 ? (
+          {visibleTraces.length === 0 ? (
             <Empty>No traces</Empty>
           ) : (
-            sortedTraces.map((trace) => (
+            visibleTraces.map((trace) => (
               <TraceRow
                 key={trace.id}
                 selected={trace.id === selectedTrace?.id}
