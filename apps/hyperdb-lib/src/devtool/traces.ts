@@ -46,8 +46,45 @@ function* selectTraceRows({
   sortField,
   sortDir,
   dbKey,
+  kind,
+  skipCached,
 }: {
   maxTraces: number;
+  sortField: TraceSortField;
+  sortDir: TraceSortDir;
+  dbKey?: string;
+  kind?: TraceQueryKind;
+  skipCached?: boolean;
+}): Generator<unknown, TraceRootRow[], unknown> {
+  const limit = normalizedLimit(maxTraces);
+  let queryLimit = limit;
+
+  while (true) {
+    const rows = yield* selectTraceRowCandidates({
+      limit: queryLimit,
+      sortField,
+      sortDir,
+      dbKey,
+    });
+    const filteredRows = rows.filter((row) =>
+      traceRowMatchesFilters(row, { kind, skipCached }),
+    );
+
+    if (filteredRows.length >= limit || rows.length < queryLimit) {
+      return filteredRows.slice(0, limit);
+    }
+
+    queryLimit *= 2;
+  }
+}
+
+function* selectTraceRowCandidates({
+  limit,
+  sortField,
+  sortDir,
+  dbKey,
+}: {
+  limit: number;
   sortField: TraceSortField;
   sortDir: TraceSortDir;
   dbKey?: string;
@@ -55,7 +92,7 @@ function* selectTraceRows({
   const index = traceSortIndex(sortField, dbKey);
   const query = selectFrom(traceRootsRuntimeTable, index)
     .order(sortDir)
-    .limit(normalizedLimit(maxTraces));
+    .limit(limit);
 
   if (dbKey !== undefined) {
     return yield* query.where((q) => q.eq("dbKey", dbKey));
@@ -63,6 +100,19 @@ function* selectTraceRows({
 
   return yield* query;
 }
+
+const traceRowMatchesFilters = (
+  row: TraceRootRow,
+  {
+    kind,
+    skipCached,
+  }: {
+    kind?: TraceQueryKind;
+    skipCached?: boolean;
+  },
+): boolean =>
+  (kind === undefined || row.kind === kind) &&
+  (skipCached !== true || row.cached !== true);
 
 const filterTraces = (
   traces: RootTrace[],
@@ -97,6 +147,7 @@ export const traceStoreTraces = selector({
       maxTraces,
       sortField,
       sortDir,
+      kind: kind === "all" ? undefined : kind,
     });
 
     return filterTraces(hyperDBTraceStore.resolveTraceRows(rows), {
@@ -134,6 +185,8 @@ export const traceStoreTraceSelection = selector({
       dbKey,
       sortField,
       sortDir,
+      kind: kind === "all" ? undefined : kind,
+      skipCached,
     });
     const visibleTraces = filterTraces(hyperDBTraceStore.resolveTraceRows(rows), {
       kind: kind === "all" ? undefined : kind,
