@@ -5,7 +5,10 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
-import { traceStoreTraceSelection, traceStoreTraces } from "./traces";
+import {
+  traceStoreTraceSelection,
+  traceStoreTraces,
+} from "./traces";
 
 const traceFrame = (cached = false): TraceFrame => ({
   id: cached ? "cached-frame" : "frame",
@@ -123,5 +126,36 @@ describe("devtool trace selectors", () => {
       "visible-1",
       "visible-2",
     ]);
+  });
+
+  it("does not record trace-list selector reads as devtool traces", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
+
+    const traces = select(
+      hyperDBTraceStore.getDB(),
+      traceStoreTraces({
+        maxTraces: 10,
+        kind: "all",
+        sortField: "created",
+        sortDir: "desc",
+      }),
+    );
+
+    expect(traces.map((item) => item.name)).toEqual(["visible-1"]);
+    expect(hyperDBTraceStore.getSnapshot().map((item) => item.name)).toEqual([
+      "visible-1",
+    ]);
+    unsubscribe();
+  });
+
+  it("clears the trace store directly while the devtool listener is active", () => {
+    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+    hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
+
+    hyperDBTraceStore.clear();
+
+    expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
+    unsubscribe();
   });
 });

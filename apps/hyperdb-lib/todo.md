@@ -31,7 +31,7 @@ TODO:
 1. DONE Rename query -> select dir
 1. DONE rename autoTrace
 1. DONE fix initall inserts are not tracing of will be done
-1. clear at devtool doens't work
+1. DONE clear at devtool doens't work
 1. Generate docs
 
 TODO for devtool:
