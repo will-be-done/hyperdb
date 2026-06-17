@@ -1,0 +1,290 @@
+import { describe, expect, it } from "vitest";
+import { assertValid, type Infer, v } from "./values";
+
+const assertType = <T>(_value: T) => {};
+
+describe("validators", () => {
+  it("infers primitive, object, optional, union, literal, and array types", () => {
+    const validator = v.object({
+      id: v.string(),
+      count: v.number(),
+      done: v.boolean(),
+      missing: v.optional(v.string()),
+      kind: v.union(v.literal("task"), v.literal("template")),
+      tags: v.array(v.string()),
+      none: v.null(),
+    });
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({
+      id: "1",
+      count: 1,
+      done: false,
+      kind: "task",
+      tags: ["a"],
+      none: null,
+    });
+
+    assertType<Value>({
+      id: "1",
+      count: 1,
+      done: false,
+      missing: "ok",
+      kind: "template",
+      tags: [],
+      none: null,
+    });
+
+    expect(
+      assertValid(validator, {
+        id: "1",
+        count: 1,
+        done: false,
+        kind: "task",
+        tags: ["a"],
+        none: null,
+      }),
+    ).toEqual({
+      id: "1",
+      count: 1,
+      done: false,
+      kind: "task",
+      tags: ["a"],
+      none: null,
+    });
+  });
+
+  it("validates and normalizes optional object fields", () => {
+    const validator = v.object({
+      id: v.string(),
+      title: v.string(),
+      note: v.optional(v.string()),
+    });
+
+    expect(
+      assertValid(validator, {
+        id: "1",
+        title: "Hello",
+      }),
+    ).toEqual({
+      id: "1",
+      title: "Hello",
+    });
+
+    expect(
+      assertValid(validator, {
+        id: "1",
+        title: "Hello",
+        note: undefined,
+      }),
+    ).toEqual({
+      id: "1",
+      title: "Hello",
+    });
+  });
+
+  it("makes object validator fields shallowly optional", () => {
+    const validator = v.partial(
+      v.object({
+        id: v.string(),
+        count: v.number(),
+        done: v.boolean(),
+      }),
+    );
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({});
+    assertType<Value>({ count: 1 });
+    assertType<Value>({ id: "1", count: 1, done: false });
+
+    expect(assertValid(validator, { count: 1 })).toEqual({ count: 1 });
+    expect(assertValid(validator, {})).toEqual({});
+    expect(assertValid(validator, { id: "x", count: 2, done: true })).toEqual({
+      id: "x",
+      count: 2,
+      done: true,
+    });
+    expect(() => assertValid(validator, { count: "1" })).toThrow(
+      /expected finite number at count/,
+    );
+  });
+
+  it("makes specified fields required, leaving others optional", () => {
+    const base = v.object({
+      id: v.string(),
+      count: v.number(),
+      done: v.boolean(),
+    });
+
+    const validator = v.required(v.partial(base), ["id", "count"]);
+
+    type Value = Infer<typeof validator>;
+
+    assertType<Value>({ id: "1", count: 1 });
+    assertType<Value>({ id: "1", count: 1, done: false });
+
+    expect(assertValid(validator, { id: "1", count: 1 })).toEqual({
+      id: "1",
+      count: 1,
+    });
+    expect(assertValid(validator, { id: "1", count: 1, done: true })).toEqual({
+      id: "1",
+      count: 1,
+      done: true,
+    });
+
+    expect(() => assertValid(validator, { id: "1" })).toThrow(
+      /missing required field at count/,
+    );
+    expect(() => assertValid(validator, { count: 1 })).toThrow(
+      /missing required field at id/,
+    );
+    expect(() => assertValid(validator, {})).toThrow(/missing required field/);
+    expect(() => assertValid(validator, { id: 1, count: 1 })).toThrow(
+      /expected string at id/,
+    );
+  });
+
+  it("v.required is a no-op on already-required fields", () => {
+    const base = v.object({
+      id: v.string(),
+      title: v.optional(v.string()),
+    });
+
+    const validator = v.required(base, ["id"]);
+
+    expect(assertValid(validator, { id: "1" })).toEqual({ id: "1" });
+    expect(assertValid(validator, { id: "1", title: "hi" })).toEqual({
+      id: "1",
+      title: "hi",
+    });
+    expect(() => assertValid(validator, { title: "hi" })).toThrow(
+      /missing required field at id/,
+    );
+  });
+
+  it("rejects undefined stored values, including inside arrays", () => {
+    expect(() => assertValid(v.string(), undefined)).toThrow(
+      /undefined is not a valid stored value at <root>/,
+    );
+
+    expect(() => assertValid(v.array(v.string()), ["ok", undefined])).toThrow(
+      /undefined is not a valid stored value at \[1\]/,
+    );
+  });
+
+  it("rejects missing required fields, unexpected fields, and invalid object keys", () => {
+    const validator = v.object({
+      id: v.string(),
+      _private: v.boolean(),
+    });
+
+    expect(() => assertValid(validator, { id: "1" })).toThrow(
+      /missing required field at _private/,
+    );
+    expect(() =>
+      assertValid(validator, { id: "1", _private: true, extra: "nope" }),
+    ).toThrow(/unexpected object field extra at extra/);
+    expect(() => assertValid(v.any(), { "": "empty" })).toThrow(
+      /object keys cannot be empty or start with \$ at \[""\]/,
+    );
+    expect(() => assertValid(v.any(), { $bad: "bad" })).toThrow(
+      /object keys cannot be empty or start with \$ at \$bad/,
+    );
+
+    expect(assertValid(validator, { id: "1", _private: true })).toEqual({
+      id: "1",
+      _private: true,
+    });
+  });
+
+  it("validates record keys as dynamic ASCII keys", () => {
+    const validator = v.record(v.string(), v.boolean());
+
+    expect(assertValid(validator, { a: true, "z-9": false })).toEqual({
+      a: true,
+      "z-9": false,
+    });
+
+    expect(() => assertValid(validator, { ключ: true })).toThrow(
+      /record keys must be non-empty ASCII keys/,
+    );
+    expect(() => assertValid(validator, { $bad: true })).toThrow(
+      /record keys must be non-empty ASCII keys/,
+    );
+  });
+
+  it("validates union, literal, any, and null semantics", () => {
+    const validator = v.union(v.literal("a"), v.literal(1), v.null());
+
+    expect(assertValid(validator, "a")).toBe("a");
+    expect(assertValid(validator, 1)).toBe(1);
+    expect(assertValid(validator, null)).toBeNull();
+    expect(() => assertValid(validator, false)).toThrow(
+      /expected one of union variants/,
+    );
+
+    const bytes = new ArrayBuffer(2);
+    expect(assertValid(v.any(), { ok: [1, "two", true, null], bytes })).toEqual(
+      {
+        ok: [1, "two", true, null],
+        bytes,
+      },
+    );
+  });
+
+  it("passes through values with a declared type", () => {
+    type RuntimeOnly = { fn: () => string };
+    const value: RuntimeOnly = { fn: () => "ok" };
+
+    expect(assertValid(v.pass<RuntimeOnly>(), value)).toBe(value);
+  });
+
+  it("validates bigint values", () => {
+    expect(assertValid(v.bigint(), 1n)).toBe(1n);
+    expect(() => assertValid(v.bigint(), 1)).toThrow(/expected bigint/);
+    expect(() => assertValid(v.bigint(), "1")).toThrow(/expected bigint/);
+    expect(() => assertValid(v.bigint(), null)).toThrow(/expected bigint/);
+    expect(() => assertValid(v.bigint(), undefined)).toThrow(
+      /undefined is not a valid stored value at <root>/,
+    );
+  });
+
+  it("validates ArrayBuffer values", () => {
+    const bytes = new ArrayBuffer(2);
+
+    expect(assertValid(v.arrayBuffer(), bytes)).toBe(bytes);
+    expect(() => assertValid(v.arrayBuffer(), [1, 2])).toThrow(
+      /expected ArrayBuffer/,
+    );
+    expect(() => assertValid(v.arrayBuffer(), "bytes")).toThrow(
+      /expected ArrayBuffer/,
+    );
+    expect(() => assertValid(v.arrayBuffer(), null)).toThrow(
+      /expected ArrayBuffer/,
+    );
+    expect(() => assertValid(v.arrayBuffer(), undefined)).toThrow(
+      /undefined is not a valid stored value at <root>/,
+    );
+  });
+
+  it("normalizes ArrayBufferView values to exact ArrayBuffers", () => {
+    const source = new Uint8Array([9, 1, 2, 8]);
+    const view = source.subarray(1, 3);
+    const normalized = assertValid(v.arrayBuffer(), view);
+
+    expect(normalized).toBeInstanceOf(ArrayBuffer);
+    expect(Array.from(new Uint8Array(normalized))).toEqual([1, 2]);
+  });
+
+  it("rejects non-finite numbers", () => {
+    expect(() => assertValid(v.number(), Number.NaN)).toThrow(
+      /expected finite number/,
+    );
+    expect(() => assertValid(v.any(), Number.POSITIVE_INFINITY)).toThrow(
+      /number must be finite/,
+    );
+  });
+});

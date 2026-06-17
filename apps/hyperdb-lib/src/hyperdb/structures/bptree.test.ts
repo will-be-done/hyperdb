@@ -1,0 +1,1167 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { describe, expect, it } from "vitest";
+import { jsonCodec } from "lexicodec";
+import { InMemoryBinaryPlusTree } from "./bptree";
+
+const assert = {
+  equal: (actual: unknown, expected: unknown, message?: string) => {
+    expect(actual, message).toBe(expected);
+  },
+  deepEqual: (actual: unknown, expected: unknown, message?: string) => {
+    expect(actual, message).toEqual(expected);
+  },
+  isAbove: (actual: number, expected: number, message?: string) => {
+    expect(actual, message).toBeGreaterThan(expected);
+  },
+  isBelow: (actual: number, expected: number, message?: string) => {
+    expect(actual, message).toBeLessThan(expected);
+  },
+  throws: (fn: () => unknown, message?: string) => {
+    expect(fn).toThrow(message);
+  },
+  ok: (value: unknown, message?: string) => {
+    expect(value, message).toBeTruthy();
+  },
+};
+
+// min = 2, max = 4
+const structuralTests24 = `
++ 5
+[5]
+
++ 10
+[5,10]
+
++ 3
+[3,5,10]
+
+// Delete from root leaf
+- 5
+[3,10]
+
++ 5
+[3,5,10]
+
++ 7
+[3,5,7,10]
+
+// Split
++ 6
+[null,7]
+[3,5,6] [7,10]
+
+// Merge right branch
+- 7
+[3,5,6,10]
+
++ 7
+[null,7]
+[3,5,6] [7,10]
+
+- 6
+[null,7]
+[3,5] [7,10]
+
+// Merge left branch
+- 5
+[3,7,10]
+
++ 5
+[3,5,7,10]
+
++ 6
+[null,7]
+[3,5,6] [7,10]
+
++ 14
+[null,7]
+[3,5,6] [7,10,14]
+
++ 23
+[null,7]
+[3,5,6] [7,10,14,23]
+
++ 24
+[null,7,23]
+[3,5,6] [7,10,14] [23,24]
+
+// Merge right branch
+- 23
+[null,7]
+[3,5,6] [7,10,14,24]
+
++ 23
+[null,7,23]
+[3,5,6] [7,10,14] [23,24]
+
+// Update parent minKey
+- 7
+[null,10,23]
+[3,5,6] [10,14] [23,24]
+
+// Merge middle branch
+- 14
+[null,23]
+[3,5,6,10] [23,24]
+
++ 14
+[null,10,23]
+[3,5,6] [10,14] [23,24]
+
+- 3
+[null,10,23]
+[5,6] [10,14] [23,24]
+
+// Merge left branch
+- 6
+[null,23]
+[5,10,14] [23,24]
+
++ 3
+[null,23]
+[3,5,10,14] [23,24]
+
++ 6
+[null,10,23]
+[3,5,6] [10,14] [23,24]
+
++ 7
+[null,10,23]
+[3,5,6,7] [10,14] [23,24]
+
++ 8
+[null,7,10,23]
+[3,5,6] [7,8] [10,14] [23,24]
+
++ 11
+[null,7,10,23]
+[3,5,6] [7,8] [10,11,14] [23,24]
+
++ 12
+[null,7,10,23]
+[3,5,6] [7,8] [10,11,12,14] [23,24]
+
+// Double split
++ 13
+[null,13]
+[null,7,10] [13,23]
+[3,5,6] [7,8] [10,11,12] [13,14] [23,24]
+
++ 15
+[null,13]
+[null,7,10] [13,23]
+[3,5,6] [7,8] [10,11,12] [13,14,15] [23,24]
+
+// Double update minKey
+- 13
+[null,14]
+[null,7,10] [14,23]
+[3,5,6] [7,8] [10,11,12] [14,15] [23,24]
+
+// Double merge mid-right branch
+- 14
+[null,7,10,15]
+[3,5,6] [7,8] [10,11,12] [15,23,24]
+
++ 2
+[null,7,10,15]
+[2,3,5,6] [7,8] [10,11,12] [15,23,24]
+
++ 4
+[null,10]
+[null,5,7] [10,15]
+[2,3,4] [5,6] [7,8] [10,11,12] [15,23,24]
+
+- 8
+[null,10]
+[null,5] [10,15]
+[2,3,4] [5,6,7] [10,11,12] [15,23,24]
+
+- 3
+[null,10]
+[null,5] [10,15]
+[2,4] [5,6,7] [10,11,12] [15,23,24]
+
+// Double merge left branch
+- 2
+[null,10,15]
+[4,5,6,7] [10,11,12] [15,23,24]
+
+- 15
+[null,10,23]
+[4,5,6,7] [10,11,12] [23,24]
+
++ 20
+[null,10,23]
+[4,5,6,7] [10,11,12,20] [23,24]
+
+// Redistribute right
+- 24
+[null,10,20]
+[4,5,6,7] [10,11,12] [20,23]
+
++ 13
+[null,10,20]
+[4,5,6,7] [10,11,12,13] [20,23]
+
+- 4
+[null,10,20]
+[5,6,7] [10,11,12,13] [20,23]
+
+- 5
+[null,10,20]
+[6,7] [10,11,12,13] [20,23]
+
+// Redistribute left
+- 6
+[null,12,20]
+[7,10,11] [12,13] [20,23]
+
+`;
+
+describe("InMemoryBinaryPlusTree", () => {
+  describe("structural tests 2-4", () => {
+    const tree = new InMemoryBinaryPlusTree(2, 4);
+    test(tree);
+  });
+
+  // describe("property test 2-4 * 100", () => {
+  //   propertyTest({ minSize: 2, maxSize: 4, testSize: 100 });
+  // });
+  //
+  // describe("property test 3-6 * 100", () => {
+  //   propertyTest({ minSize: 3, maxSize: 6, testSize: 100 });
+  // });
+
+  // function propertyTest(args: {
+  //   minSize: number;
+  //   maxSize: number;
+  //   testSize: number;
+  // }) {
+  //   const size = args.testSize;
+  //   const numbers = randomNumbers(size);
+  //
+  //   const tree = new InMemoryBinaryPlusTree(args.minSize, args.maxSize);
+  //   for (let i = 0; i < size; i++) {
+  //     const n = numbers[i];
+  //     it(`Set ${i} : ${n}`, () => {
+  //       // it(`+ ${n}`, () => {
+  //       tree.set(n, n.toString());
+  //       verify(tree);
+  //
+  //       // Get works on every key so far.
+  //       for (let j = 0; j <= i; j++) {
+  //         const x = numbers[j];
+  //         assert.equal(tree.get(x), x.toString());
+  //       }
+  //       // })
+  //
+  //       // Overwrite the jth key.
+  //       for (let j = 0; j <= i; j++) {
+  //         const x = numbers[j];
+  //
+  //         // it(`Overwrite ${j}: ${x}`, () => {
+  //         const t = cloneTree(tree);
+  //         t.set(x, x * 2);
+  //         verify(t);
+  //
+  //         // Check get on all keys.
+  //         for (let k = 0; k <= i; k++) {
+  //           const y = numbers[k];
+  //           if (x === y) assert.equal(t.get(y), y * 2);
+  //           else assert.equal(t.get(y), y.toString());
+  //         }
+  //         // })
+  //       }
+  //
+  //       // Delete the jth key.
+  //       for (let j = 0; j <= i; j++) {
+  //         const x = numbers[j];
+  //
+  //         // it(`Delete ${j} : ${x}`, () => {
+  //         const t = cloneTree(tree);
+  //         t.delete(x);
+  //         try {
+  //           verify(t);
+  //         } catch (error) {
+  //           console.log("BEFORE", inspect(tree));
+  //           console.log("DELETE", x);
+  //           console.log("AFTER", inspect(t));
+  //           throw error;
+  //         }
+  //
+  //         // Check get on all keys.
+  //         for (let k = 0; k <= i; k++) {
+  //           const y = numbers[k];
+  //           if (x === y) assert.equal(t.get(y), undefined);
+  //           else assert.equal(t.get(y), y.toString());
+  //         }
+  //         // })
+  //       }
+  //     });
+  //   }
+  // }
+
+  it("big tree", () => {
+    const numbers = randomNumbers(20_000);
+    const tree = new InMemoryBinaryPlusTree(3, 9);
+    for (const number of numbers) {
+      tree.set(number, number * 2);
+      assert.equal(tree.get(number), number * 2);
+    }
+    for (const number of numbers) {
+      tree.delete(number);
+      assert.equal(tree.get(number), undefined);
+    }
+    assert.equal(treeDepth(tree), 1);
+  });
+
+  it("fork uses an empty overlay and isolates later writes", () => {
+    const tree = new InMemoryBinaryPlusTree(3, 9);
+    for (let i = 0; i < 200; i++) {
+      tree.set(i, i);
+    }
+
+    const forked = tree.fork();
+    assert.equal(forked.nodes.size, 0);
+    assert.deepEqual(forked.list(), tree.list());
+
+    const originalList = tree.list();
+    forked.set(201, 201);
+
+    assert.isAbove(forked.nodes.size, 0);
+    assert.isBelow(forked.nodes.size, tree.nodes.size);
+
+    forked.delete(10);
+    assert.deepEqual(tree.list(), originalList);
+
+    const forkedList = forked.list();
+    tree.set(202, 202);
+    tree.delete(11);
+    assert.deepEqual(forked.list(), forkedList);
+
+    verify(tree);
+    assert.equal(forked.get(10), undefined);
+    assert.equal(forked.get(11), 11);
+    assert.equal(forked.get(201), 201);
+    assert.equal(forked.get(202), undefined);
+  });
+
+  it("prevents sibling forks from the same base", () => {
+    const tree = new InMemoryBinaryPlusTree(3, 9);
+    tree.set(1, "one");
+
+    const first = tree.fork();
+    assert.throws(
+      () => tree.fork(),
+      "Cannot create multiple active forks from the same tree.",
+    );
+
+    first.discardFork();
+    const second = tree.fork();
+    second.set(2, "two");
+
+    const materialized = second.materializeFork();
+    assert.equal(materialized, tree);
+    assert.deepEqual(tree.list(), [
+      { key: 1, value: "one" },
+      { key: 2, value: "two" },
+    ]);
+  });
+
+  it("rejects stale fork materialization after discard", () => {
+    const tree = new InMemoryBinaryPlusTree(3, 9);
+    tree.set(1, "one");
+
+    const forked = tree.fork();
+    forked.set(2, "two");
+    forked.discardFork();
+
+    assert.throws(
+      () => forked.materializeFork(),
+      "Cannot materialize an inactive fork.",
+    );
+    assert.deepEqual(tree.list(), [{ key: 1, value: "one" }]);
+  });
+
+  it("materialized fork keeps base nodes owned and reachable", () => {
+    let tree = new InMemoryBinaryPlusTree(3, 9);
+    for (let i = 0; i < 200; i++) {
+      tree.set(i, i);
+    }
+
+    const originalTree = tree;
+    const forked = tree.fork();
+    forked.set(201, 201);
+    forked.delete(10);
+
+    tree = forked.materializeFork();
+    assert.equal(tree, originalTree);
+    verify(tree);
+
+    tree.set(150, 1500);
+    tree.set(202, 202);
+    tree.delete(11);
+
+    verify(tree);
+    assert.equal(tree.get(10), undefined);
+    assert.equal(tree.get(11), undefined);
+    assert.equal(tree.get(150), 1500);
+    assert.equal(tree.get(201), 201);
+    assert.equal(tree.get(202), 202);
+  });
+
+  it("materializes repeated fork splits and joins", () => {
+    let tree = new InMemoryBinaryPlusTree<number, string>(2, 4);
+    const expected = new Map<number, string>();
+
+    const assertMaterializedTree = () => {
+      verify(tree);
+      assert.deepEqual(
+        tree.list().map(({ key, value }) => [key, value]),
+        Array.from(expected.entries()).sort(([a], [b]) => a - b),
+      );
+      for (const [key, value] of expected) {
+        assert.equal(tree.get(key), value);
+      }
+    };
+
+    for (let batch = 0; batch < 20; batch++) {
+      const forked = tree.fork();
+      for (let offset = 0; offset < 6; offset++) {
+        const key = batch * 6 + offset;
+        forked.set(key, `value-${key}`);
+        expected.set(key, `value-${key}`);
+      }
+      tree = forked.materializeFork();
+      assertMaterializedTree();
+    }
+
+    for (let batch = 0; batch < 15; batch++) {
+      const forked = tree.fork();
+      for (let offset = 0; offset < 5; offset++) {
+        const key = batch * 5 + offset;
+        forked.delete(key);
+        expected.delete(key);
+      }
+      tree = forked.materializeFork();
+      assertMaterializedTree();
+    }
+
+    for (let batch = 0; batch < 20; batch++) {
+      const forked = tree.fork();
+      const deletedKey = 75 + batch;
+      const insertedKey = 200 + batch;
+      const updatedKey = 95 + batch;
+
+      forked.delete(deletedKey);
+      expected.delete(deletedKey);
+
+      forked.set(insertedKey, `value-${insertedKey}`);
+      expected.set(insertedKey, `value-${insertedKey}`);
+
+      forked.set(updatedKey, `updated-${updatedKey}`);
+      expected.set(updatedKey, `updated-${updatedKey}`);
+
+      tree = forked.materializeFork();
+      assertMaterializedTree();
+    }
+  });
+
+  it("materializes no-op and missing-delete forks without changing contents", () => {
+    let tree = new InMemoryBinaryPlusTree<number, string>(2, 4);
+    for (let i = 0; i < 40; i++) {
+      tree.set(i, `value-${i}`);
+    }
+    const expected = tree.list();
+
+    tree = tree.fork().materializeFork();
+    verify(tree);
+    assert.deepEqual(tree.list(), expected);
+
+    const forked = tree.fork();
+    forked.delete(-1);
+    forked.delete(100);
+
+    tree = forked.materializeFork();
+    verify(tree);
+    assert.deepEqual(tree.list(), expected);
+
+    tree.set(20, "updated-20");
+    tree.delete(21);
+    verify(tree);
+    assert.equal(tree.get(20), "updated-20");
+    assert.equal(tree.get(21), undefined);
+  });
+
+  it("materializes a fork that deletes every key and collapses the root", () => {
+    let tree = new InMemoryBinaryPlusTree<number, string>(2, 4);
+    for (let i = 0; i < 60; i++) {
+      tree.set(i, `value-${i}`);
+    }
+
+    const forked = tree.fork();
+    for (let i = 0; i < 60; i++) {
+      forked.delete(i);
+    }
+
+    tree = forked.materializeFork();
+    verify(tree);
+    assert.deepEqual(tree.list(), []);
+
+    tree.set(1, "after-empty");
+    verify(tree);
+    assert.deepEqual(tree.list(), [{ key: 1, value: "after-empty" }]);
+  });
+
+  it("materializes fork overwrites and preserves bounded iteration", () => {
+    let tree = new InMemoryBinaryPlusTree<number, string>(2, 4);
+    for (let i = 0; i < 30; i++) {
+      tree.set(i, `value-${i}`);
+    }
+
+    const forked = tree.fork();
+    forked.set(5, "updated-5");
+    forked.set(10, "updated-10");
+    forked.delete(12);
+    forked.set(30, "value-30");
+
+    tree = forked.materializeFork();
+    verify(tree);
+
+    assert.deepEqual(tree.list({ gte: 4, lte: 10, limit: 4 }), [
+      { key: 4, value: "value-4" },
+      { key: 5, value: "updated-5" },
+      { key: 6, value: "value-6" },
+      { key: 7, value: "value-7" },
+    ]);
+    assert.deepEqual(tree.list({ gt: 8, lt: 14, reverse: true }), [
+      { key: 13, value: "value-13" },
+      { key: 11, value: "value-11" },
+      { key: 10, value: "updated-10" },
+      { key: 9, value: "value-9" },
+    ]);
+  });
+
+  it("materializes nested forks without leaving unreachable base nodes", () => {
+    let tree = new InMemoryBinaryPlusTree<number, string>(2, 4);
+    for (let i = 0; i < 80; i++) {
+      tree.set(i, `value-${i}`);
+    }
+
+    let forked = tree.fork();
+    forked.set(80, "value-80");
+    forked.delete(5);
+
+    const nested = forked.fork();
+    nested.set(81, "value-81");
+    nested.delete(6);
+    nested.set(30, "updated-30");
+
+    forked = nested.materializeFork();
+    assert.equal(forked.get(5), undefined);
+    assert.equal(forked.get(6), undefined);
+    assert.equal(forked.get(30), "updated-30");
+    assert.equal(forked.get(80), "value-80");
+    assert.equal(forked.get(81), "value-81");
+
+    tree = forked.materializeFork();
+    verify(tree);
+
+    tree.set(40, "updated-40");
+    tree.delete(7);
+    verify(tree);
+    assert.equal(tree.get(5), undefined);
+    assert.equal(tree.get(6), undefined);
+    assert.equal(tree.get(7), undefined);
+    assert.equal(tree.get(30), "updated-30");
+    assert.equal(tree.get(40), "updated-40");
+    assert.equal(tree.get(80), "value-80");
+    assert.equal(tree.get(81), "value-81");
+  });
+
+  it("tuple keys", () => {
+    const tree = new InMemoryBinaryPlusTree<any[], any>(
+      3,
+      9,
+      jsonCodec.compare,
+    );
+
+    const numbers = randomNumbers(2000);
+    for (const number of numbers) {
+      tree.set(["user", number], { id: number });
+      tree.set(["profile", number], number);
+      assert.deepEqual(tree.get(["user", number]), { id: number });
+      assert.deepEqual(tree.get(["profile", number]), number);
+    }
+
+    for (const number of numbers) {
+      tree.delete(["user", number]);
+      assert.equal(tree.get(["user", number]), undefined);
+    }
+  });
+
+  describe("list", () => {
+    const listTest =
+      (tree: InMemoryBinaryPlusTree, min: number, max: number) =>
+      (
+        args: {
+          gt?: number;
+          gte?: number;
+          lt?: number;
+          lte?: number;
+          limit?: number;
+          reverse?: boolean;
+        } = {},
+      ) => {
+        const expected = listEvens(min, max)(args);
+        assert.deepEqual(tree.list(args), expected, JSON.stringify(args));
+        assert.deepEqual(
+          Array.from(tree.iterate(args)),
+          expected,
+          `iterate ${JSON.stringify(args)}`,
+        );
+      };
+
+    it("manual tests", () => {
+      // All even numbers from 0 to 1998
+
+      // Test a few different tree sizes.
+      for (const [minSize, maxSize] of [
+        [3, 9],
+        [8, 21],
+        [50, 100],
+      ]) {
+        const tree = new InMemoryBinaryPlusTree(minSize, maxSize);
+
+        // Empty
+        assert.deepEqual(tree.list(), [], "empty list");
+
+        for (const { key, value } of listEvens(0, 1998)()) tree.set(key, value);
+
+        const testList = listTest(tree, 0, 1998);
+
+        // Entire thing
+        testList();
+        testList({ limit: 2 });
+        testList({ limit: 40 });
+        testList({ reverse: true });
+        testList({ reverse: true, limit: 40 });
+        testList({ reverse: true, limit: 4 });
+
+        // Less than odd.
+        testList({ lt: 9 });
+        testList({ lt: 9, limit: 2 });
+        testList({ lt: 9, reverse: true });
+        testList({ lt: 9, reverse: true, limit: 2 });
+        testList({ lt: 199 });
+        testList({ lt: 199, limit: 40 });
+        testList({ lt: 199, reverse: true });
+        testList({ lt: 199, reverse: true, limit: 40 });
+
+        // Less than open bound.
+        testList({ lt: 10 });
+        testList({ lt: 10, limit: 2 });
+        testList({ lt: 10, reverse: true });
+        testList({ lt: 10, reverse: true, limit: 2 });
+        testList({ lt: 200 });
+        testList({ lt: 200, limit: 40 });
+        testList({ lt: 200, reverse: true });
+        testList({ lt: 200, reverse: true, limit: 40 });
+
+        // Less than odd closed bound.
+        testList({ lte: 9 });
+        testList({ lte: 9, limit: 2 });
+        testList({ lte: 9, reverse: true });
+        testList({ lte: 9, reverse: true, limit: 2 });
+        testList({ lte: 199 });
+        testList({ lte: 199, limit: 40 });
+        testList({ lte: 199, reverse: true });
+        testList({ lte: 199, reverse: true, limit: 40 });
+
+        // Less than closed bound.
+        testList({ lte: 10 });
+        testList({ lte: 10, limit: 2 });
+        testList({ lte: 10, reverse: true });
+        testList({ lte: 10, reverse: true, limit: 2 });
+        testList({ lte: 200 });
+        testList({ lte: 200, limit: 40 });
+        testList({ lte: 200, reverse: true });
+        testList({ lte: 200, reverse: true, limit: 40 });
+
+        // Less than left bound.
+        testList({ lt: -1 });
+        testList({ lt: -1, limit: 2 });
+        testList({ lt: -1, reverse: true });
+        testList({ lt: -1, reverse: true, limit: 2 });
+        testList({ lte: -1 });
+        testList({ lte: -1, limit: 2 });
+        testList({ lte: -1, reverse: true });
+        testList({ lte: -1, reverse: true, limit: 2 });
+
+        // Less than right bound
+        testList({ lt: 5000 });
+        testList({ lt: 5000, limit: 2 });
+        testList({ lt: 5000, reverse: true });
+        testList({ lt: 5000, reverse: true, limit: 2 });
+        testList({ lte: 5000 });
+        testList({ lte: 5000, limit: 2 });
+        testList({ lte: 5000, reverse: true });
+        testList({ lte: 5000, reverse: true, limit: 2 });
+
+        // Greater than odd.
+        testList({ gt: 1989 });
+        testList({ gt: 1989, limit: 2 });
+        testList({ gt: 1989, reverse: true });
+        testList({ gt: 1989, reverse: true, limit: 2 });
+        testList({ gt: 1781 });
+        testList({ gt: 1781, limit: 40 });
+        testList({ gt: 1781, reverse: true });
+        testList({ gt: 1781, reverse: true, limit: 40 });
+
+        // Greater than open bound.
+        testList({ gt: 1988 });
+        testList({ gt: 1988, limit: 2 });
+        testList({ gt: 1988, reverse: true });
+        testList({ gt: 1988, reverse: true, limit: 2 });
+        testList({ gt: 1780 });
+        testList({ gt: 1780, limit: 40 });
+        testList({ gt: 1780, reverse: true });
+        testList({ gt: 1780, reverse: true, limit: 40 });
+
+        // Greater than odd closed bound
+        testList({ gte: 1989 });
+        testList({ gte: 1989, limit: 2 });
+        testList({ gte: 1989, reverse: true });
+        testList({ gte: 1989, reverse: true, limit: 2 });
+        testList({ gte: 1781 });
+        testList({ gte: 1781, limit: 40 });
+        testList({ gte: 1781, reverse: true });
+        testList({ gte: 1781, reverse: true, limit: 40 });
+
+        // Greater than closed bound.
+        testList({ gte: 1988 });
+        testList({ gte: 1988, limit: 2 });
+        testList({ gte: 1988, reverse: true });
+        testList({ gte: 1988, reverse: true, limit: 2 });
+        testList({ gte: 1780 });
+        testList({ gte: 1780, limit: 40 });
+        testList({ gte: 1780, reverse: true });
+        testList({ gte: 1780, reverse: true, limit: 40 });
+
+        // Greater than left bound.
+        testList({ gt: -1 });
+        testList({ gt: -1, limit: 2 });
+        testList({ gt: -1, reverse: true });
+        testList({ gt: -1, reverse: true, limit: 2 });
+        testList({ gte: -1 });
+        testList({ gte: -1, limit: 2 });
+        testList({ gte: -1, reverse: true });
+        testList({ gte: -1, reverse: true, limit: 2 });
+
+        // Greater than right bound
+        testList({ gt: 5000 });
+        testList({ gt: 5000, limit: 2 });
+        testList({ gt: 5000, reverse: true });
+        testList({ gt: 5000, reverse: true, limit: 2 });
+        testList({ gte: 5000 });
+        testList({ gte: 5000, limit: 2 });
+        testList({ gte: 5000, reverse: true });
+        testList({ gte: 5000, reverse: true, limit: 2 });
+
+        // Within a branch
+
+        const sameLeaf = (args: { reverse?: boolean; limit?: number } = {}) => {
+          testList({ gt: 2, lt: 8, ...args });
+          testList({ gte: 2, lt: 8, ...args });
+          testList({ gt: 2, lte: 8, ...args });
+          testList({ gte: 2, lte: 8, ...args });
+
+          testList({ gt: 204, lt: 208, ...args });
+          testList({ gte: 204, lt: 208, ...args });
+          testList({ gt: 204, lte: 208, ...args });
+          testList({ gte: 204, lte: 208, ...args });
+
+          testList({ gt: 206, lt: 210, ...args });
+          testList({ gte: 206, lt: 210, ...args });
+          testList({ gt: 206, lte: 210, ...args });
+          testList({ gte: 206, lte: 210, ...args });
+
+          testList({ gt: 210, lt: 214, ...args });
+          testList({ gte: 210, lt: 214, ...args });
+          testList({ gt: 210, lte: 214, ...args });
+          testList({ gte: 210, lte: 214, ...args });
+        };
+        sameLeaf();
+        sameLeaf({ limit: 2 });
+        sameLeaf({ reverse: true });
+        sameLeaf({ reverse: true, limit: 2 });
+
+        const differentLeaves = (
+          args: { reverse?: boolean; limit?: number } = {},
+        ) => {
+          testList({ gt: 200, lt: 800, ...args });
+          testList({ gte: 200, lt: 800, ...args });
+          testList({ gt: 200, lte: 800, ...args });
+          testList({ gte: 200, lte: 800, ...args });
+
+          testList({ gt: 204, lt: 808, ...args });
+          testList({ gte: 204, lt: 808, ...args });
+          testList({ gt: 204, lte: 808, ...args });
+          testList({ gte: 204, lte: 808, ...args });
+        };
+        differentLeaves();
+        differentLeaves({ limit: 20 });
+        differentLeaves({ reverse: true });
+        differentLeaves({ reverse: true, limit: 20 });
+
+        const bounds = (args: { reverse?: boolean; limit?: number } = {}) => {
+          testList({ gt: -100, lt: 100, ...args });
+          testList({ gte: -100, lt: 100, ...args });
+          testList({ gt: -100, lte: 100, ...args });
+          testList({ gte: -100, lte: 100, ...args });
+
+          testList({ gt: 1900, lt: 2100, ...args });
+          testList({ gte: 1900, lt: 2100, ...args });
+          testList({ gt: 1900, lte: 2100, ...args });
+          testList({ gte: 1900, lte: 2100, ...args });
+
+          testList({ gt: -100, lt: 2100, ...args });
+          testList({ gte: -100, lt: 2100, ...args });
+          testList({ gt: -100, lte: 2100, ...args });
+          testList({ gte: -100, lte: 2100, ...args });
+        };
+        bounds();
+        bounds({ limit: 20 });
+        bounds({ reverse: true });
+        bounds({ reverse: true, limit: 20 });
+
+        // Random challenges from property test.
+        testList({ gt: -91, lt: 0 });
+        testList({ gt: 2, lt: 3 });
+      }
+    });
+
+    // it("property tests", () => {
+    //   const tree = new InMemoryBinaryPlusTree(3, 9);
+    //
+    //   const min = 0;
+    //   const max = 400;
+    //   const delta = 20;
+    //
+    //   for (const { key, value } of listEvens(min, max)()) tree.set(key, value);
+    //
+    //   const testList = listTest(tree, min, max);
+    //
+    //   for (let start = -min - delta; start < max + delta; start += 3) {
+    //     for (let end = start + 1; end < max + delta; end += 5) {
+    //       testList({ gt: start, lt: end });
+    //       testList({ gt: start, lt: end, limit: 2 });
+    //       testList({ gt: start, lt: end, limit: 40 });
+    //       testList({ gt: start, lt: end, reverse: true });
+    //       testList({ gt: start, lt: end, reverse: true, limit: 2 });
+    //       testList({ gt: start, lt: end, reverse: true, limit: 40 });
+    //       testList({ gte: start, lt: end });
+    //       testList({ gte: start, lt: end, limit: 2 });
+    //       testList({ gte: start, lt: end, limit: 40 });
+    //       testList({ gte: start, lt: end, reverse: true });
+    //       testList({ gte: start, lt: end, reverse: true, limit: 2 });
+    //       testList({ gte: start, lt: end, reverse: true, limit: 40 });
+    //       testList({ gt: start, lte: end });
+    //       testList({ gt: start, lte: end, limit: 2 });
+    //       testList({ gt: start, lte: end, limit: 40 });
+    //       testList({ gt: start, lte: end, reverse: true });
+    //       testList({ gt: start, lte: end, reverse: true, limit: 2 });
+    //       testList({ gt: start, lte: end, reverse: true, limit: 40 });
+    //       testList({ gte: start, lte: end });
+    //       testList({ gte: start, lte: end, limit: 2 });
+    //       testList({ gte: start, lte: end, limit: 40 });
+    //       testList({ gte: start, lte: end, reverse: true });
+    //       testList({ gte: start, lte: end, reverse: true, limit: 2 });
+    //       testList({ gte: start, lte: end, reverse: true, limit: 40 });
+    //     }
+    //   }
+    // });
+
+    // it("smaller property tests", () => {
+    //   const tree = new InMemoryBinaryPlusTree(3, 9);
+    //
+    //   const min = 0;
+    //   const max = 100;
+    //   const delta = 10;
+    //
+    //   for (const { key, value } of listEvens(min, max)()) tree.set(key, value);
+    //
+    //   const testList = listTest(tree, min, max);
+    //
+    //   for (let start = -min - delta; start < max + delta; start += 1) {
+    //     for (let end = start; end < max + delta; end += 1) {
+    //       if (start !== end) {
+    //         testList({ gt: start, lt: end });
+    //         testList({ gt: start, lt: end, limit: 1 });
+    //         testList({ gt: start, lt: end, limit: 2 });
+    //         testList({ gt: start, lt: end, limit: 40 });
+    //         testList({ gt: start, lt: end, reverse: true });
+    //         testList({ gt: start, lt: end, reverse: true, limit: 1 });
+    //         testList({ gt: start, lt: end, reverse: true, limit: 2 });
+    //         testList({ gt: start, lt: end, reverse: true, limit: 40 });
+    //         testList({ gte: start, lt: end });
+    //         testList({ gte: start, lt: end, limit: 1 });
+    //         testList({ gte: start, lt: end, limit: 2 });
+    //         testList({ gte: start, lt: end, limit: 40 });
+    //         testList({ gte: start, lt: end, reverse: true });
+    //         testList({ gte: start, lt: end, reverse: true, limit: 1 });
+    //         testList({ gte: start, lt: end, reverse: true, limit: 2 });
+    //         testList({ gte: start, lt: end, reverse: true, limit: 40 });
+    //         testList({ gt: start, lte: end });
+    //         testList({ gt: start, lte: end, limit: 2 });
+    //         testList({ gt: start, lte: end, limit: 40 });
+    //         testList({ gt: start, lte: end, reverse: true });
+    //         testList({ gt: start, lte: end, reverse: true, limit: 1 });
+    //         testList({ gt: start, lte: end, reverse: true, limit: 2 });
+    //         testList({ gt: start, lte: end, reverse: true, limit: 40 });
+    //       }
+    //       testList({ gte: start, lte: end });
+    //       testList({ gte: start, lte: end, limit: 1 });
+    //       testList({ gte: start, lte: end, limit: 2 });
+    //       testList({ gte: start, lte: end, limit: 40 });
+    //       testList({ gte: start, lte: end, reverse: true });
+    //       testList({ gte: start, lte: end, reverse: true, limit: 1 });
+    //       testList({ gte: start, lte: end, reverse: true, limit: 2 });
+    //       testList({ gte: start, lte: end, reverse: true, limit: 40 });
+    //     }
+    //   }
+    // });
+  });
+});
+
+function randomNumbers(size: number, range?: [number, number]) {
+  if (!range) range = [-size * 10, size * 10];
+  const numbers: number[] = [];
+  for (let i = 0; i < size; i++)
+    numbers.push(Math.round(Math.random() * (range[1] - range[0]) - range[0]));
+  return numbers;
+}
+
+function parseTests(str: string) {
+  // Cleanup extra whitespace
+  str = str
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n")
+    .trim();
+
+  return str.split("\n\n").map((block) => {
+    const lines = block.split("\n");
+    let comment = "";
+    if (lines[0].startsWith("//")) {
+      comment = lines[0].slice(3);
+      lines.splice(0, 1);
+    }
+    const [op, nStr] = lines[0].split(" ");
+    const n = parseInt(nStr);
+    const tree = lines.slice(1).join("\n");
+    return { comment, n, tree, op: op as "+" | "-" };
+  });
+}
+
+// function cloneTree<K, V>(tree: InMemoryBinaryPlusTree<K, V>) {
+//   const cloned = new InMemoryBinaryPlusTree<K, V>(
+//     tree.minSize,
+//     tree.maxSize,
+//     tree.compareKey,
+//   );
+//   cloned.nodes = cloneDeep(tree.nodes);
+//   return cloned;
+// }
+
+function treeDepth(tree: InMemoryBinaryPlusTree) {
+  const root = tree.nodes.get("root");
+  if (!root) return 0;
+  let depth = 1;
+  let node = root;
+  while (!node.leaf) {
+    depth += 1;
+    const nextNode = tree.nodes.get(node.children[0].childId);
+    if (!nextNode) throw new Error("Broken.");
+    node = nextNode;
+  }
+  return depth;
+}
+
+function test(tree: InMemoryBinaryPlusTree) {
+  for (const test of parseTests(structuralTests24)) {
+    let label = `${test.op} ${test.n}`;
+    if (test.comment) label += " // " + test.comment;
+    it(label, () => {
+      if (test.op === "+") tree.set(test.n, test.n.toString());
+      if (test.op === "-") tree.delete(test.n);
+      assert.equal(inspect(tree), test.tree, test.comment);
+
+      const value = test.op === "+" ? test.n.toString() : undefined;
+      assert.equal(tree.get(test.n), value, test.comment);
+
+      assert.equal(treeDepth(tree), test.tree.split("\n").length, test.comment);
+
+      verify(tree);
+    });
+  }
+}
+
+type Key = string | number | null;
+type KeyTree =
+  | { keys: Key[]; children?: undefined }
+  | { keys: Key[]; children: KeyTree[] };
+
+function toKeyTree(tree: InMemoryBinaryPlusTree, id = "root"): KeyTree {
+  const node = tree.nodes.get(id);
+  if (!node) throw new Error("Missing node!");
+
+  const keys = node.leaf
+    ? node.values.map((v) => v.key)
+    : node.children.map((v) => v.minKey);
+
+  if (node.leaf) return { keys: keys };
+  const subtrees = node.children.map((v) => toKeyTree(tree, v.childId));
+
+  return { keys: keys, children: subtrees };
+}
+
+type TreeLayer = Key[][];
+
+function toTreeLayers(tree: KeyTree): TreeLayer[] {
+  const layers: TreeLayer[] = [];
+
+  let cursor = [tree];
+  while (cursor.length > 0) {
+    const layer: TreeLayer = [];
+    const nextCursor: KeyTree[] = [];
+    for (const tree of cursor) {
+      layer.push(tree.keys);
+      if (tree.children) nextCursor.push(...tree.children);
+    }
+    layers.push(layer);
+    cursor = nextCursor;
+  }
+  return layers;
+}
+
+function print(x: any): string {
+  if (x === null) return "null";
+  if (typeof x === "number") return x.toString();
+  if (typeof x === "string") return JSON.stringify(x);
+  if (Array.isArray(x)) return "[" + x.map(print).join(",") + "]";
+  return "";
+}
+
+function inspect(tree: InMemoryBinaryPlusTree) {
+  const keyTree = toKeyTree(tree);
+  const layers = toTreeLayers(keyTree);
+  const str = layers
+    .map((layer) =>
+      layer.length === 1 ? print(layer[0]) : layer.map(print).join(" "),
+    )
+    .join("\n");
+  return str;
+}
+
+/** Check for node sizes. */
+function verify(tree: InMemoryBinaryPlusTree, id = "root") {
+  const node = tree.nodes.get(id);
+  if (id === "root") {
+    assert.equal(countNodes(tree), tree.nodes.size);
+    if (!node) return;
+    if (node.leaf) return;
+    for (const { childId } of node.children) verify(tree, childId);
+    return;
+  }
+
+  assert.ok(node);
+  const size = node.leaf ? node.values.length : node.children.length;
+  assert.ok(size >= tree.minSize);
+  assert.ok(size <= tree.maxSize, inspect(tree));
+
+  if (node.leaf) return;
+  for (const { childId } of node.children) verify(tree, childId);
+}
+
+function countNodes(tree: InMemoryBinaryPlusTree, id = "root") {
+  const node = tree.nodes.get(id);
+  if (id === "root") {
+    if (!node) return 0;
+    if (node.leaf) return 1;
+    let count = 1;
+    for (const { childId } of node.children) count += countNodes(tree, childId);
+    return count;
+  }
+
+  assert.ok(node);
+  if (node.leaf) return 1;
+  let count = 1;
+  for (const { childId } of node.children) count += countNodes(tree, childId);
+  return count;
+}
+
+function listEvens(min: number, max: number) {
+  return (
+    args: {
+      gt?: number;
+      gte?: number;
+      lt?: number;
+      lte?: number;
+      limit?: number;
+      reverse?: boolean;
+    } = {},
+  ) => {
+    let start: number;
+    if (args.gt !== undefined && args.gt % 2 === 0) {
+      start = args.gt + 2;
+    } else if (args.gte !== undefined && args.gte % 2 === 0) {
+      start = args.gte;
+    } else if (args.gt !== undefined || args.gte !== undefined) {
+      const above = Math.ceil((args.gt || args.gte) as number);
+      if (above % 2 === 0) start = above;
+      else start = above + 1;
+    } else {
+      start = 0;
+    }
+
+    start = Math.max(start, min);
+
+    let end: number;
+    if (args.lt !== undefined && args.lt % 2 === 0) {
+      end = args.lt - 2;
+    } else if (args.lte !== undefined && args.lte % 2 === 0) {
+      end = args.lte;
+    } else if (args.lt !== undefined || args.lte !== undefined) {
+      const above = Math.floor((args.lt || args.lte) as number);
+      if (above % 2 === 0) end = above;
+      else end = above - 1;
+    } else {
+      end = 1998;
+    }
+
+    end = Math.min(end, max);
+
+    let count = 0;
+    const result: { key: number; value: number }[] = [];
+    if (args.reverse) {
+      for (let i = end; i >= start; i -= 2) {
+        count += 1;
+        result.push({ key: i, value: i });
+        if (args.limit && count >= args.limit) {
+          break;
+        }
+      }
+    } else {
+      for (let i = start; i <= end; i += 2) {
+        count += 1;
+        result.push({ key: i, value: i });
+        if (args.limit && count >= args.limit) {
+          break;
+        }
+      }
+    }
+    return result;
+  };
+}
