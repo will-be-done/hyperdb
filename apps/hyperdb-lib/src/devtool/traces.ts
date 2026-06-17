@@ -1,4 +1,4 @@
-import { createAction, createSelector } from "../hyperdb";
+import { createSelector } from "../hyperdb";
 import { selectFrom } from "../hyperdb/commands/selector/builder";
 import { v } from "../hyperdb/schema/values";
 import {
@@ -13,8 +13,8 @@ import {
   type TraceSortField,
 } from "../hyperdb/tracing/store";
 
-const action = createAction();
-const selector = createSelector();
+const devtoolTraceOptions = { enabled: false, startOn: "devtoolOpen" } as const;
+const selector = createSelector({ trace: devtoolTraceOptions });
 
 export type TraceStoreTraceSelection = {
   visibleTraces: RootTrace[];
@@ -199,29 +199,5 @@ export const traceStoreTraceSelection = selector({
         visibleTraces.find((trace) => trace.id === selectedTraceId) ??
         visibleTraces[0],
     };
-  },
-});
-
-export const setTraceStoreMaxTraces = action({
-  name: "setTraceStoreMaxTraces",
-  args: { maxTraces: v.number() },
-  handler: function* ({ maxTraces }) {
-    hyperDBTraceStore.setMaxTraces(maxTraces);
-  },
-});
-
-export const clearTraceStore = action({
-  name: "clearTraceStore",
-  args: {},
-  handler: function* () {
-    hyperDBTraceStore.clear();
-  },
-});
-
-export const clearTraceStoreDB = action({
-  name: "clearTraceStoreDB",
-  args: { dbId: v.optional(v.string()) },
-  handler: function* ({ dbId }) {
-    hyperDBTraceStore.clearDB(dbId);
   },
 });

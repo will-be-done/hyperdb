@@ -11,6 +11,17 @@ export type TraceStatus = "running" | "success" | "error";
 export type TraceQueryOrder = "asc" | "desc";
 export type CommandEventKind = "select";
 export type MutationEventKind = "insert" | "upsert" | "delete";
+export type TraceStartOn = "devtoolOpen" | "load";
+
+export type TraceOptions = {
+  enabled: boolean;
+  startOn: TraceStartOn;
+};
+
+export const defaultTraceOptions: TraceOptions = Object.freeze({
+  enabled: true,
+  startOn: "devtoolOpen",
+});
 
 export type TraceError = {
   name?: string;
@@ -23,8 +34,7 @@ export type TraceFrameMeta = {
   kind: TraceKind;
   name: string;
   arg: unknown;
-  trace?: boolean;
-  autoTrace?: boolean;
+  trace?: TraceOptions;
   skipRootTrace?: boolean;
   skipChildTrace?: boolean;
 };
@@ -194,7 +204,7 @@ export const createTraceFrameMeta = (
   arg: unknown,
   options: Pick<
     TraceFrameMeta,
-    "trace" | "autoTrace" | "skipRootTrace" | "skipChildTrace"
+    "trace" | "skipRootTrace" | "skipChildTrace"
   > = {},
 ): TraceFrameMeta => ({
   id: nextMetaId(),

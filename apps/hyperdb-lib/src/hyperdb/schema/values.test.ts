@@ -1,5 +1,7 @@
-import { assertType, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { assertValid, type Infer, v } from "./values";
+
+const assertType = <T>(_value: T) => {};
 
 describe("validators", () => {
   it("infers primitive, object, optional, union, literal, and array types", () => {
@@ -231,6 +233,13 @@ describe("validators", () => {
         bytes,
       },
     );
+  });
+
+  it("passes through values with a declared type", () => {
+    type RuntimeOnly = { fn: () => string };
+    const value: RuntimeOnly = { fn: () => "ok" };
+
+    expect(assertValid(v.pass<RuntimeOnly>(), value)).toBe(value);
   });
 
   it("validates bigint values", () => {

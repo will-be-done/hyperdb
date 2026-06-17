@@ -1,7 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { runCommandGenerator } from "../runner";
 import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Trait } from "../../core/primitives";
+import { defaultTraceOptions, type TraceOptions } from "../../core/tracer";
 import {
   assertValid,
   v,
@@ -21,15 +23,9 @@ import {
   type UpsertActionCmd,
 } from "./commands";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-export type ActionFn<TReturn, TParams extends any[]> = (
-  ...args: TParams
-) => Generator<unknown, TReturn, unknown>;
-
 export type ActionArgsSchema = Record<string, Validator<any>>;
 export type ActionFactoryOptions = {
-  trace?: boolean;
-  autoTrace?: boolean;
+  trace?: TraceOptions;
   validateArgs?: boolean;
 };
 
@@ -40,8 +36,7 @@ export type ObjectAction<
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
-  readonly trace?: boolean;
-  readonly autoTrace?: boolean;
+  readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
   readonly handler: (
     args: InferObject<TSchema>,
@@ -61,8 +56,7 @@ const defineActionMetadata = <
   metadata: {
     name: string;
     args?: ActionArgsSchema;
-    trace?: boolean;
-    autoTrace?: boolean;
+    trace: TraceOptions;
     validateArgs?: boolean;
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
@@ -93,11 +87,6 @@ const defineActionMetadata = <
       enumerable: true,
       configurable: false,
     },
-    autoTrace: {
-      value: metadata.autoTrace,
-      enumerable: true,
-      configurable: false,
-    },
     validateArgs: {
       value: metadata.validateArgs,
       enumerable: true,
@@ -106,12 +95,6 @@ const defineActionMetadata = <
   });
 
   return fn;
-};
-
-const positionalTraceArg = (args: unknown[]): unknown => {
-  if (args.length === 0) return undefined;
-  if (args.length === 1) return args[0];
-  return args;
 };
 
 const assertActionName = (name: unknown): string => {
@@ -126,16 +109,14 @@ export interface ActionBuilder {
   <TSchema extends ActionArgsSchema, TReturn>(
     definition: ActionDefinition<TSchema, TReturn>,
   ): ObjectAction<TReturn, TSchema>;
-  <TReturn, TParams extends any[]>(
-    fn: ActionFn<TReturn, TParams>,
-  ): ActionFn<TReturn, TParams>;
 }
 
 const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
-  trace: false,
-  autoTrace: true,
+  trace: defaultTraceOptions,
   validateArgs: false,
 };
+
+const isTraceDisabled = (trace: TraceOptions): boolean => !trace.enabled;
 
 export function createAction(
   options: ActionFactoryOptions = {},
@@ -145,62 +126,37 @@ export function createAction(
     ...options,
   };
 
-  const buildAction = <TReturn, TParams extends any[]>(
-    input:
-      | ActionDefinition<ActionArgsSchema, TReturn>
-      | ActionFn<TReturn, TParams>,
-  ): ActionFn<TReturn, TParams> => {
-    if (typeof input !== "function") {
-      const displayName = assertActionName(input.name);
-      const argsValidator = v.object(input.args);
-      const wrapped = ((args: InferObject<typeof input.args>) => {
-        const normalizedArgs = factoryOptions.validateArgs
-          ? assertValid(argsValidator, args)
-          : args;
+  const buildAction = <TSchema extends ActionArgsSchema, TReturn>(
+    input: ActionDefinition<TSchema, TReturn>,
+  ): ObjectAction<TReturn, TSchema> => {
+    const displayName = assertActionName(input.name);
+    const argsValidator = v.object(input.args);
+    const traceDisabled = isTraceDisabled(factoryOptions.trace);
+    const wrapped = ((args: InferObject<typeof input.args>) => {
+      const normalizedArgs = factoryOptions.validateArgs
+        ? assertValid(argsValidator, args)
+        : args;
 
-        return wrapGeneratorWithTraceMeta(
-          input.handler(normalizedArgs),
-          "action",
-          displayName,
-          normalizedArgs,
-          {
-            trace: factoryOptions.trace,
-            autoTrace: factoryOptions.autoTrace,
-          },
-        );
-      }) as ObjectAction<TReturn, typeof input.args>;
-
-      return defineActionMetadata(wrapped, {
-        name: displayName,
-        args: input.args,
-        trace: factoryOptions.trace,
-        autoTrace: factoryOptions.autoTrace,
-        validateArgs: factoryOptions.validateArgs,
-        handler: input.handler,
-      }) as unknown as ActionFn<TReturn, TParams>;
-    }
-
-    const fn = input;
-    const displayName = fn.name || "anonymous action";
-    const wrapped = ((...args: TParams) =>
-      wrapGeneratorWithTraceMeta(
-        fn(...args),
+      return wrapGeneratorWithTraceMeta(
+        input.handler(normalizedArgs),
         "action",
         displayName,
-        positionalTraceArg(args),
+        normalizedArgs,
         {
           trace: factoryOptions.trace,
-          autoTrace: factoryOptions.autoTrace,
+          skipChildTrace: traceDisabled,
+          skipRootTrace: traceDisabled,
         },
-      )) as ActionFn<TReturn, TParams>;
+      );
+    }) as ObjectAction<TReturn, TSchema>;
 
     return defineActionMetadata(wrapped, {
       name: displayName,
+      args: input.args,
       trace: factoryOptions.trace,
-      autoTrace: factoryOptions.autoTrace,
       validateArgs: factoryOptions.validateArgs,
-      handler: fn as ActionFn<unknown, any[]>,
-    }) as ActionFn<TReturn, TParams>;
+      handler: input.handler,
+    });
   };
 
   return buildAction as ActionBuilder;

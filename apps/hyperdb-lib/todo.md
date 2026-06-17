@@ -29,7 +29,9 @@ TODO:
 1. DONE Ask gpt: Check if args validation turned on(maybe add createSelector() createAction()?), rows on insert/updade is validated too.
 1. DONE Turn on arguments validation with db options
 1. DONE Rename query -> select dir
-1. rename autoTrace
+1. DONE rename autoTrace
+1. DONE fix initall inserts are not tracing of will be done
+1. DONE clear at devtool doens't work
 1. Generate docs
 
 TODO for devtool:

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { css, setup, styled } from "goober";
-import { DBProvider, useDispatch, useSyncSelector } from "../react";
+import { DBProvider, useSyncSelector } from "../react";
 import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
 import {
   getTraceDBInfo,
@@ -18,9 +18,6 @@ import {
   type TraceStatus,
 } from "../hyperdb/tracing/store";
 import {
-  clearTraceStore,
-  clearTraceStoreDB,
-  setTraceStoreMaxTraces,
   traceStoreTraceSelection,
   traceStoreTraces,
 } from "./traces";
@@ -2296,7 +2293,6 @@ const DevtoolsPanelInner = ({
   const dividerRef = useRef<HTMLDivElement>(null);
   const panelDividerRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
-  const dispatch = useDispatch();
 
   const isVerticallyResizable =
     !embedded && (position === "top" || position === "bottom");
@@ -2382,8 +2378,8 @@ const DevtoolsPanelInner = ({
   });
 
   useEffect(() => {
-    dispatch(setTraceStoreMaxTraces({ maxTraces }));
-  }, [dispatch, maxTraces]);
+    hyperDBTraceStore.setMaxTraces(maxTraces);
+  }, [maxTraces]);
 
   const observedDBOptions = useMemo(
     () => addCurrentDBOption(getTraceDBOptions(traces), currentDBInfo),
@@ -2488,15 +2484,13 @@ const DevtoolsPanelInner = ({
 
   const clearVisibleTraces = () => {
     if (hasMultipleDBs && activeDBId) {
-      dispatch(
-        clearTraceStoreDB({
-          dbId: activeDBId === unassignedDBId ? undefined : activeDBId,
-        }),
+      hyperDBTraceStore.clearDB(
+        activeDBId === unassignedDBId ? undefined : activeDBId,
       );
       return;
     }
 
-    dispatch(clearTraceStore({}));
+    hyperDBTraceStore.clear();
   };
 
   return (

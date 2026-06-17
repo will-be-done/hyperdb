@@ -1,4 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  setHyperDBHookDepsForTest,
+  useAsyncSelector,
+  useSyncSelector,
+} from "./hooks";
 
 type Subscriber = (ops: unknown[]) => void;
 type MockDB = {
@@ -7,7 +12,7 @@ type MockDB = {
   subscriberCount(): number;
 };
 
-const mocks = vi.hoisted(() => ({
+const mocks = {
   cleanup: undefined as undefined | (() => void),
   db: undefined as unknown as MockDB,
   refs: [] as { current: unknown }[],
@@ -16,9 +21,9 @@ const mocks = vi.hoisted(() => ({
   runSelectorAsync: vi.fn(),
   isNeedToRerunRange: vi.fn(),
   stableSerializeSelectorArgs: vi.fn(),
-}));
+};
 
-vi.mock("react", () => ({
+const fakeReactHooks = {
   useCallback: vi.fn((cb) => cb),
   useEffect: vi.fn((effect) => {
     mocks.cleanup = effect();
@@ -31,25 +36,9 @@ vi.mock("react", () => ({
   }),
   useState: vi.fn((initial) => [initial, mocks.setResult]),
   useSyncExternalStore: vi.fn((_subscribe, getSnapshot) => getSnapshot()),
-}));
+};
 
-vi.mock("./context", () => ({
-  useDB: () => mocks.db,
-}));
-
-vi.mock("../hyperdb/commands/selector/selector", () => ({
-  initCachedSelector: (...args: unknown[]) =>
-    mocks.initCachedSelector(...args),
-  initSelector: vi.fn(),
-  isNeedToRerunRange: (...args: unknown[]) =>
-    mocks.isNeedToRerunRange(...args),
-  runSelectorAsync: (...args: unknown[]) => mocks.runSelectorAsync(...args),
-  select: vi.fn(),
-  stableSerializeSelectorArgs: (...args: unknown[]) =>
-    mocks.stableSerializeSelectorArgs(...args),
-}));
-
-import { useAsyncSelector, useSyncSelector } from "./hooks";
+let restoreHookDeps: (() => void) | undefined;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -101,6 +90,20 @@ describe("useAsyncSelector", () => {
     mocks.isNeedToRerunRange.mockReset();
     mocks.stableSerializeSelectorArgs.mockReset();
     mocks.stableSerializeSelectorArgs.mockReturnValue("args-key");
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...fakeReactHooks,
+      useDB: () => mocks.db,
+      initCachedSelector: (...args) => mocks.initCachedSelector(...args),
+      runSelectorAsync: (...args) => mocks.runSelectorAsync(...args),
+      isNeedToRerunRange: (...args) => mocks.isNeedToRerunRange(...args),
+      stableSerializeSelectorArgs: (...args) =>
+        mocks.stableSerializeSelectorArgs(...args),
+    });
+  });
+
+  afterEach(() => {
+    restoreHookDeps?.();
+    restoreHookDeps = undefined;
   });
 
   it("runs object-form sync selectors through the shared cache", () => {

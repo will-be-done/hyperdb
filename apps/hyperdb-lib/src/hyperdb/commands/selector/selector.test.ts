@@ -37,31 +37,47 @@ const driver = new BptreeInmemDriver();
 const db = new SubscribableDB(new DB(driver));
 execSync(db.loadTables([tasksTable]));
 
-const allTasks = selector(function* () {
-  const tasks = yield* selectFrom(tasksTable, "projectIdState").where((q) =>
-    q.eq("projectId", "1"),
-  );
+const allTasks = selector({
+  name: "allTasks",
+  args: {},
+  handler: function* allTasks() {
+    const tasks = yield* selectFrom(tasksTable, "projectIdState").where((q) =>
+      q.eq("projectId", "1"),
+    );
 
-  return tasks;
+    return tasks;
+  },
 });
 
-const justSelector = selector(function () {
-  return "just selector";
+const justSelector = selector({
+  name: "justSelector",
+  args: {},
+  handler: function* justSelector() {
+    return "just selector";
+  },
 });
 
-const allDoneTasks = selector(function* (state: Task["state"]) {
-  const tasks = yield* allTasks();
+const allDoneTasks = selector({
+  name: "allDoneTasks",
+  args: { state: v.union(v.literal("todo"), v.literal("done")) },
+  handler: function* allDoneTasks({ state }) {
+    const tasks = yield* allTasks({});
 
-  console.log("justSelector", yield* justSelector());
+    console.log("justSelector", yield* justSelector({}));
 
-  return tasks.filter((task) => task.state === state);
+    return tasks.filter((task) => task.state === state);
+  },
 });
 
-const specificTask = selector(function* (id: string) {
-  const tasks = yield* selectFrom(tasksTable, "byId").where((q) =>
-    q.eq("id", id),
-  );
-  return tasks[0];
+const specificTask = selector({
+  name: "specificTask",
+  args: { id: v.string() },
+  handler: function* specificTask({ id }) {
+    const tasks = yield* selectFrom(tasksTable, "byId").where((q) =>
+      q.eq("id", id),
+    );
+    return tasks[0];
+  },
 });
 
 const createTestDB = (
@@ -166,8 +182,10 @@ describe("selector", () => {
       childTrace: true,
       rootTrace: false,
     });
-    expect(metadataSelector.trace).toBe(false);
-    expect(metadataSelector.autoTrace).toBe(true);
+    expect(metadataSelector.trace).toEqual({
+      enabled: true,
+      startOn: "devtoolOpen",
+    });
     expect(metadataSelector.validateArgs).toBe(false);
     expect(traceMeta?.name).toBe("metadataSelector");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
@@ -724,7 +742,7 @@ describe("selector", () => {
   });
 
   test("works with range", () => {
-    const selector = initSelector(db, () => allDoneTasks("done"));
+    const selector = initSelector(db, () => allDoneTasks({ state: "done" }));
 
     const results = [selector.getSnapshot()?.[0]?.id];
     selector.subscribe(() => {
@@ -767,14 +785,18 @@ describe("selector", () => {
     const testDb = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(testDb.loadTables([tasksTable]));
 
-    const taskSelector = selector(function* () {
-      const tasks = yield* selectFrom(tasksTable, "byId").where((q) =>
-        q.eq("id", "task-1"),
-      );
-      return tasks[0];
+    const taskSelector = selector({
+      name: "taskSelector",
+      args: {},
+      handler: function* taskSelector() {
+        const tasks = yield* selectFrom(tasksTable, "byId").where((q) =>
+          q.eq("id", "task-1"),
+        );
+        return tasks[0];
+      },
     });
 
-    const initializedSelector = initSelector(testDb, () => taskSelector());
+    const initializedSelector = initSelector(testDb, () => taskSelector({}));
     expect(initializedSelector.getSnapshot()).toBeUndefined();
 
     const task = {
@@ -800,7 +822,7 @@ describe("selector", () => {
   });
 
   test("works with equal", () => {
-    const selector = initSelector(db, () => specificTask("task-1"));
+    const selector = initSelector(db, () => specificTask({ id: "task-1" }));
 
     console.log("current state", selector.getSnapshot());
     selector.subscribe(() => {
@@ -852,22 +874,30 @@ describe("selector", () => {
     const testDb = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(testDb.loadTables([itemsTable]));
 
-    const project1Selector = selector(function* () {
-      const items = yield* selectFrom(itemsTable, "projectIdOrder").where((q) =>
-        q.eq("projectId", "project1"),
-      );
-      return items;
+    const project1Selector = selector({
+      name: "project1Selector",
+      args: {},
+      handler: function* project1Selector() {
+        const items = yield* selectFrom(itemsTable, "projectIdOrder").where(
+          (q) => q.eq("projectId", "project1"),
+        );
+        return items;
+      },
     });
 
-    const project2Selector = selector(function* () {
-      const items = yield* selectFrom(itemsTable, "projectIdOrder").where((q) =>
-        q.eq("projectId", "project2"),
-      );
-      return items;
+    const project2Selector = selector({
+      name: "project2Selector",
+      args: {},
+      handler: function* project2Selector() {
+        const items = yield* selectFrom(itemsTable, "projectIdOrder").where(
+          (q) => q.eq("projectId", "project2"),
+        );
+        return items;
+      },
     });
 
-    const selector1 = initSelector(testDb, () => project1Selector());
-    const selector2 = initSelector(testDb, () => project2Selector());
+    const selector1 = initSelector(testDb, () => project1Selector({}));
+    const selector2 = initSelector(testDb, () => project2Selector({}));
 
     const project1Results: Item[][] = [selector1.getSnapshot()];
     const project2Results: Item[][] = [selector2.getSnapshot()];
@@ -1111,21 +1141,29 @@ describe("selector", () => {
 
     let childRuns = 0;
 
-    const child = selector(function* nonSerializableChild(filter: {
-      match: (id: string) => boolean;
-    }) {
-      childRuns++;
-      const items = yield* selectFrom(itemsTable, "group").where((q) =>
-        q.eq("group", "a"),
-      );
-      return items.filter((item) => filter.match(item.id));
+    const child = selector({
+      name: "nonSerializableChild",
+      args: { filter: v.any() },
+      handler: function* nonSerializableChild({
+        filter,
+      }: {
+        filter: { match: (id: string) => boolean };
+      }) {
+        childRuns++;
+        const items = yield* selectFrom(itemsTable, "group").where((q) =>
+          q.eq("group", "a"),
+        );
+        return items.filter((item) => filter.match(item.id));
+      },
     });
 
     const parent = selector({
       name: "nonSerializableParent",
       args: {},
       handler: function* nonSerializableParent() {
-        return yield* child({ match: (id) => id.startsWith("keep") });
+        return yield* child({
+          filter: { match: (id: string) => id.startsWith("keep") },
+        });
       },
     });
 
@@ -1734,14 +1772,18 @@ describe("selector", () => {
       ]),
     );
 
-    const orderedSelector = selector(function* () {
-      const items = yield* selectFrom(itemsTable, "projectIdOrder")
-        .where((q) => q.eq("projectId", "project1"))
-        .order("desc");
-      return items;
+    const orderedSelector = selector({
+      name: "orderedSelector",
+      args: {},
+      handler: function* orderedSelector() {
+        const items = yield* selectFrom(itemsTable, "projectIdOrder")
+          .where((q) => q.eq("projectId", "project1"))
+          .order("desc");
+        return items;
+      },
     });
 
-    const initializedSelector = initSelector(testDb, () => orderedSelector());
+    const initializedSelector = initSelector(testDb, () => orderedSelector({}));
     const snapshots: string[][] = [];
     initializedSelector.subscribe(() => {
       snapshots.push(initializedSelector.getSnapshot().map((item) => item.id));

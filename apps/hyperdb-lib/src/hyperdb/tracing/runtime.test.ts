@@ -198,14 +198,18 @@ describe("devtool runtime tracing", () => {
     const db = createDB();
     execSync(db.insert(tasksTable, [task()]));
 
-    const readTaskAction = action(function* readTask() {
-      return yield* selectFrom(tasksTable, "projectState")
-        .where((q) => q.eq("projectId", "project-1"))
-        .limit(5)
-        .order("asc");
+    const readTaskAction = action({
+      name: "readTask",
+      args: {},
+      handler: function* readTask() {
+        return yield* selectFrom(tasksTable, "projectState")
+          .where((q) => q.eq("projectId", "project-1"))
+          .limit(5)
+          .order("asc");
+      },
     });
 
-    const result = syncDispatch(db, readTaskAction());
+    const result = syncDispatch(db, readTaskAction({}));
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
 
     expect(result).toEqual([task()]);
@@ -237,38 +241,46 @@ describe("devtool runtime tracing", () => {
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
 
-    const tracedSelector = createSelector({ trace: true });
-    const readTaskSelector = tracedSelector(
-      function* readTaskBeforeDevtoolOpen() {
+    const tracedSelector = createSelector({
+      trace: { enabled: true, startOn: "load" },
+    });
+    const readTaskSelector = tracedSelector({
+      name: "readTaskBeforeDevtoolOpen",
+      args: {},
+      handler: function* readTaskBeforeDevtoolOpen() {
         return yield* selectFrom(tasksTable, "projectState").where((q) =>
           q.eq("projectId", "project-1"),
         );
       },
-    );
+    });
 
-    expect(select(db, readTaskSelector())).toEqual([task()]);
+    expect(select(db, readTaskSelector({}))).toEqual([task()]);
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.name).toBe("readTaskBeforeDevtoolOpen");
     expect(trace.commandEvents).toHaveLength(1);
   });
 
-  it("does not record devtool-open traces when selector auto trace is disabled", () => {
+  it("does not record traces when selector tracing is disabled", () => {
     const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
     hyperDBTraceStore.clear();
 
-    const manualOnlySelector = createSelector({ autoTrace: false });
-    const readTaskSelector = manualOnlySelector(
-      function* autoTraceDisabledSelector() {
+    const tracingDisabledSelector = createSelector({
+      trace: { enabled: false, startOn: "devtoolOpen" },
+    });
+    const readTaskSelector = tracingDisabledSelector({
+      name: "tracingDisabledSelector",
+      args: {},
+      handler: function* tracingDisabledSelector() {
         return yield* selectFrom(tasksTable, "projectState").where((q) =>
           q.eq("projectId", "project-1"),
         );
       },
-    );
+    });
 
-    expect(select(db, readTaskSelector())).toEqual([task()]);
+    expect(select(db, readTaskSelector({}))).toEqual([task()]);
     expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
   });
 
@@ -380,18 +392,22 @@ describe("devtool runtime tracing", () => {
   it("keeps the same db identity across traited wrappers", () => {
     const db = createDB();
     expect(db.withTraits({ type: "test.identity" }).getId()).toBe(db.getId());
-    const readTaskAction = action(function* readTask() {
-      return yield* selectFrom(tasksTable, "projectState").where((q) =>
-        q.eq("projectId", "project-1"),
-      );
+    const readTaskAction = action({
+      name: "readTask",
+      args: {},
+      handler: function* readTask() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
     });
 
-    syncDispatch(db, readTaskAction());
+    syncDispatch(db, readTaskAction({}));
     syncDispatch(
       db.withTraits({
         type: "test.trait",
       }),
-      readTaskAction(),
+      readTaskAction({}),
     );
 
     const dbIds = new Set(
@@ -404,15 +420,23 @@ describe("devtool runtime tracing", () => {
   it("records an action calling an action as one root with a child frame", () => {
     const db = createDB();
 
-    const childTaskAction = action(function* childAction() {
-      yield* insert(tasksTable, [task()]);
+    const childTaskAction = action({
+      name: "childAction",
+      args: {},
+      handler: function* childAction() {
+        yield* insert(tasksTable, [task()]);
+      },
     });
 
-    const parentTaskAction = action(function* parentAction() {
-      yield* childTaskAction();
+    const parentTaskAction = action({
+      name: "parentAction",
+      args: {},
+      handler: function* parentAction() {
+        yield* childTaskAction({});
+      },
     });
 
-    syncDispatch(db, parentTaskAction());
+    syncDispatch(db, parentTaskAction({}));
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.name).toBe("parentAction");
@@ -428,18 +452,28 @@ describe("devtool runtime tracing", () => {
     const db = createDB();
     execSync(db.insert(tasksTable, [task({ state: "done" })]));
 
-    const allTasksSelector = selector(function* allTasks() {
-      return yield* selectFrom(tasksTable, "projectState").where((q) =>
-        q.eq("projectId", "project-1"),
-      );
+    const allTasksSelector = selector({
+      name: "allTasks",
+      args: {},
+      handler: function* allTasks() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
     });
 
-    const doneTasksSelector = selector(function* doneTasks() {
-      const rows = yield* allTasksSelector();
-      return rows.filter((row) => row.state === "done");
+    const doneTasksSelector = selector({
+      name: "doneTasks",
+      args: {},
+      handler: function* doneTasks() {
+        const rows = yield* allTasksSelector({});
+        return rows.filter((row) => row.state === "done");
+      },
     });
 
-    expect(select(db, doneTasksSelector())).toEqual([task({ state: "done" })]);
+    expect(select(db, doneTasksSelector({}))).toEqual([
+      task({ state: "done" }),
+    ]);
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.kind).toBe("selector");
@@ -477,11 +511,15 @@ describe("devtool runtime tracing", () => {
     expect(select(db, skippedSelector({}))).toEqual([task({ state: "done" })]);
     expect(hyperDBTraceStore.getSnapshot()).toHaveLength(0);
 
-    const parentSelector = selector(function* skippedTraceParentSelector() {
-      return yield* skippedSelector({});
+    const parentSelector = selector({
+      name: "skippedTraceParentSelector",
+      args: {},
+      handler: function* skippedTraceParentSelector() {
+        return yield* skippedSelector({});
+      },
     });
 
-    expect(select(db, parentSelector())).toEqual([task({ state: "done" })]);
+    expect(select(db, parentSelector({}))).toEqual([task({ state: "done" })]);
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.name).toBe("skippedTraceParentSelector");
@@ -490,49 +528,19 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.frameId).toBe(trace.frames[0]?.id);
   });
 
-  it("records a non-generator selector success as a root trace", () => {
-    const db = createDB();
-
-    const plainSelector = selector(function plainValueSelector() {
-      return "plain result";
-    });
-
-    expect(select(db, plainSelector())).toBe("plain result");
-
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
-    expect(trace.kind).toBe("selector");
-    expect(trace.name).toBe("plainValueSelector");
-    expect(trace.status).toBe("success");
-    expect(trace.commandEvents).toHaveLength(0);
-  });
-
-  it("marks non-generator selector errors on the root trace, then rethrows", () => {
-    const db = createDB();
-    const failingSelector = selector(function failingPlainSelector() {
-      throw new Error("plain selector failed");
-    });
-
-    expect(() => select(db, failingSelector())).toThrow(
-      "plain selector failed",
-    );
-
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
-    expect(trace.kind).toBe("selector");
-    expect(trace.name).toBe("failingPlainSelector");
-    expect(trace.status).toBe("error");
-    expect(trace.error?.message).toBe("plain selector failed");
-    expect(trace.commandEvents).toHaveLength(0);
-  });
-
   it("marks select errors on the command and root trace, then rethrows", () => {
     const db = new DB(new BptreeInmemDriver());
-    const failingSelector = selector(function* failingSelector() {
-      return yield* selectFrom(tasksTable, "projectState").where((q) =>
-        q.eq("projectId", "project-1"),
-      );
+    const failingSelector = selector({
+      name: "failingSelector",
+      args: {},
+      handler: function* failingSelector() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
     });
 
-    expect(() => select(db, failingSelector())).toThrow();
+    expect(() => select(db, failingSelector({}))).toThrow();
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.status).toBe("error");
@@ -546,13 +554,17 @@ describe("devtool runtime tracing", () => {
     const db = createDB();
     const updatedTask = task({ title: "Updated", state: "done" });
 
-    const mutateTasks = action(function* mutateTasks() {
-      yield* insert(tasksTable, [task()]);
-      yield* upsert(tasksTable, [updatedTask]);
-      yield* deleteRows(tasksTable, [updatedTask.id]);
+    const mutateTasks = action({
+      name: "mutateTasks",
+      args: {},
+      handler: function* mutateTasks() {
+        yield* insert(tasksTable, [task()]);
+        yield* upsert(tasksTable, [updatedTask]);
+        yield* deleteRows(tasksTable, [updatedTask.id]);
+      },
     });
 
-    syncDispatch(db, mutateTasks());
+    syncDispatch(db, mutateTasks({}));
 
     const trace = hyperDBTraceStore.getSnapshot()[0]!;
     expect(trace.mutationEvents.map((event) => event.kind)).toEqual([
@@ -618,14 +630,20 @@ describe("devtool runtime tracing", () => {
       );
     });
 
-    const readTraceTraitsAction = action(function* traceTraitsAction() {
-      const traits = yield* getCurrentTraits();
-      yield* insert(tasksTable, [task()]);
+    const readTraceTraitsAction = action({
+      name: "traceTraitsAction",
+      args: {},
+      handler: function* traceTraitsAction() {
+        const traits = yield* getCurrentTraits();
+        yield* insert(tasksTable, [task()]);
 
-      return getTraceContextFromTraits(traits)?.trace.name;
+        return getTraceContextFromTraits(traits)?.trace.name;
+      },
     });
 
-    expect(syncDispatch(db, readTraceTraitsAction())).toBe("traceTraitsAction");
+    expect(syncDispatch(db, readTraceTraitsAction({}))).toBe(
+      "traceTraitsAction",
+    );
     expect(observedSubscriberTraces).toEqual(["traceTraitsAction"]);
   });
 
@@ -637,11 +655,15 @@ describe("devtool runtime tracing", () => {
       );
     });
 
-    const mutateTasks = action(function* mutateTasks() {
-      yield* insert(tasksTable, [task()]);
+    const mutateTasks = action({
+      name: "mutateTasks",
+      args: {},
+      handler: function* mutateTasks() {
+        yield* insert(tasksTable, [task()]);
+      },
     });
 
-    syncDispatch(db, mutateTasks());
+    syncDispatch(db, mutateTasks({}));
 
     const traces = hyperDBTraceStore.getSnapshot();
     expect(traces).toHaveLength(1);
