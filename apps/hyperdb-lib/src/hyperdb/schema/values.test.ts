@@ -235,6 +235,13 @@ describe("validators", () => {
     );
   });
 
+  it("passes through values with a declared type", () => {
+    type RuntimeOnly = { fn: () => string };
+    const value: RuntimeOnly = { fn: () => "ok" };
+
+    expect(assertValid(v.pass<RuntimeOnly>(), value)).toBe(value);
+  });
+
   it("validates bigint values", () => {
     expect(assertValid(v.bigint(), 1n)).toBe(1n);
     expect(() => assertValid(v.bigint(), 1)).toThrow(/expected bigint/);

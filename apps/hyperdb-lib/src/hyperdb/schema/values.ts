@@ -72,6 +72,7 @@ type ValidatorKind =
   | "union"
   | "literal"
   | "optional"
+  | "pass"
   | "any";
 
 interface ValidatorOutput<T> {
@@ -129,6 +130,7 @@ export interface OptionalValidator<T>
   readonly inner: Validator<T>;
 }
 
+export type PassValidator<T> = BaseValidator<T, "pass">;
 export type AnyValidator = BaseValidator<any, "any">;
 
 export type Validator<T> = (
@@ -144,6 +146,7 @@ export type Validator<T> = (
   | UnionValidator<readonly Validator<any>[]>
   | LiteralValidator<string | number | bigint | boolean | null>
   | OptionalValidator<any>
+  | PassValidator<any>
   | AnyValidator
 ) &
   ValidatorOutput<T>;
@@ -583,6 +586,15 @@ export const v = {
     ) as RequiredFields<TFields, TKeys>;
 
     return v.object(newFields);
+  },
+
+  pass<T>(): Validator<T> {
+    return {
+      kind: "pass",
+      normalize(value) {
+        return success(value as T);
+      },
+    };
   },
 
   any(): Validator<any> {
