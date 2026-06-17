@@ -2,6 +2,7 @@ import { runCommandGenerator } from "../runner";
 import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Trait } from "../../core/primitives";
+import { defaultTraceOptions, type TraceOptions } from "../../core/tracer";
 import {
   assertValid,
   v,
@@ -28,8 +29,7 @@ export type ActionFn<TReturn, TParams extends any[]> = (
 
 export type ActionArgsSchema = Record<string, Validator<any>>;
 export type ActionFactoryOptions = {
-  trace?: boolean;
-  autoTrace?: boolean;
+  trace?: TraceOptions;
   validateArgs?: boolean;
 };
 
@@ -40,8 +40,7 @@ export type ObjectAction<
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
-  readonly trace?: boolean;
-  readonly autoTrace?: boolean;
+  readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
   readonly handler: (
     args: InferObject<TSchema>,
@@ -61,8 +60,7 @@ const defineActionMetadata = <
   metadata: {
     name: string;
     args?: ActionArgsSchema;
-    trace?: boolean;
-    autoTrace?: boolean;
+    trace: TraceOptions;
     validateArgs?: boolean;
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
@@ -90,11 +88,6 @@ const defineActionMetadata = <
     },
     trace: {
       value: metadata.trace,
-      enumerable: true,
-      configurable: false,
-    },
-    autoTrace: {
-      value: metadata.autoTrace,
       enumerable: true,
       configurable: false,
     },
@@ -126,16 +119,14 @@ export interface ActionBuilder {
   <TSchema extends ActionArgsSchema, TReturn>(
     definition: ActionDefinition<TSchema, TReturn>,
   ): ObjectAction<TReturn, TSchema>;
-  <TReturn, TParams extends any[]>(
-    fn: ActionFn<TReturn, TParams>,
-  ): ActionFn<TReturn, TParams>;
 }
 
 const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
-  trace: false,
-  autoTrace: true,
+  trace: defaultTraceOptions,
   validateArgs: false,
 };
+
+const isTraceDisabled = (trace: TraceOptions): boolean => !trace.enabled;
 
 export function createAction(
   options: ActionFactoryOptions = {},
@@ -153,6 +144,7 @@ export function createAction(
     if (typeof input !== "function") {
       const displayName = assertActionName(input.name);
       const argsValidator = v.object(input.args);
+      const traceDisabled = isTraceDisabled(factoryOptions.trace);
       const wrapped = ((args: InferObject<typeof input.args>) => {
         const normalizedArgs = factoryOptions.validateArgs
           ? assertValid(argsValidator, args)
@@ -165,7 +157,8 @@ export function createAction(
           normalizedArgs,
           {
             trace: factoryOptions.trace,
-            autoTrace: factoryOptions.autoTrace,
+            skipChildTrace: traceDisabled,
+            skipRootTrace: traceDisabled,
           },
         );
       }) as ObjectAction<TReturn, typeof input.args>;
@@ -174,7 +167,6 @@ export function createAction(
         name: displayName,
         args: input.args,
         trace: factoryOptions.trace,
-        autoTrace: factoryOptions.autoTrace,
         validateArgs: factoryOptions.validateArgs,
         handler: input.handler,
       }) as unknown as ActionFn<TReturn, TParams>;
@@ -182,6 +174,7 @@ export function createAction(
 
     const fn = input;
     const displayName = fn.name || "anonymous action";
+    const traceDisabled = isTraceDisabled(factoryOptions.trace);
     const wrapped = ((...args: TParams) =>
       wrapGeneratorWithTraceMeta(
         fn(...args),
@@ -190,14 +183,14 @@ export function createAction(
         positionalTraceArg(args),
         {
           trace: factoryOptions.trace,
-          autoTrace: factoryOptions.autoTrace,
+          skipChildTrace: traceDisabled,
+          skipRootTrace: traceDisabled,
         },
       )) as ActionFn<TReturn, TParams>;
 
     return defineActionMetadata(wrapped, {
       name: displayName,
       trace: factoryOptions.trace,
-      autoTrace: factoryOptions.autoTrace,
       validateArgs: factoryOptions.validateArgs,
       handler: fn as ActionFn<unknown, any[]>,
     }) as ActionFn<TReturn, TParams>;

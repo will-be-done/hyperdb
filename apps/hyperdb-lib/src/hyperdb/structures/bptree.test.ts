@@ -1,8 +1,28 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { assert, describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { jsonCodec } from "lexicodec";
-// import { cloneDeep } from "es-toolkit";
 import { InMemoryBinaryPlusTree } from "./bptree";
+
+const assert = {
+  equal: (actual: unknown, expected: unknown, message?: string) => {
+    expect(actual, message).toBe(expected);
+  },
+  deepEqual: (actual: unknown, expected: unknown, message?: string) => {
+    expect(actual, message).toEqual(expected);
+  },
+  isAbove: (actual: number, expected: number, message?: string) => {
+    expect(actual, message).toBeGreaterThan(expected);
+  },
+  isBelow: (actual: number, expected: number, message?: string) => {
+    expect(actual, message).toBeLessThan(expected);
+  },
+  throws: (fn: () => unknown, message?: string) => {
+    expect(fn).toThrow(message);
+  },
+  ok: (value: unknown, message?: string) => {
+    expect(value, message).toBeTruthy();
+  },
+};
 
 // min = 2, max = 4
 const structuralTests24 = `

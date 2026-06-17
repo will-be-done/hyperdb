@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { DB, execSync } from "../hyperdb/db";
 import { BptreeInmemDriver } from "../hyperdb/drivers/inmemory/bptree-inmem-driver";
@@ -39,8 +39,35 @@ const createDB = (dbName?: string): SubscribableDB => {
   return db;
 };
 
+const restoreGlobalFns: (() => void)[] = [];
+
+const stubGlobal = (name: string, value: unknown) => {
+  const hadOwnValue = Object.prototype.hasOwnProperty.call(globalThis, name);
+  const previousValue = (globalThis as Record<string, unknown>)[name];
+
+  Object.defineProperty(globalThis, name, {
+    value,
+    configurable: true,
+    writable: true,
+  });
+
+  restoreGlobalFns.push(() => {
+    if (hadOwnValue) {
+      Object.defineProperty(globalThis, name, {
+        value: previousValue,
+        configurable: true,
+        writable: true,
+      });
+    } else {
+      delete (globalThis as Record<string, unknown>)[name];
+    }
+  });
+};
+
 afterEach(() => {
-  vi.unstubAllGlobals();
+  for (const restore of restoreGlobalFns.splice(0).reverse()) {
+    restore();
+  }
   hyperDBTraceStore.clear();
 });
 
@@ -190,7 +217,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("respects localStorage open state", () => {
-    vi.stubGlobal("localStorage", {
+    stubGlobal("localStorage", {
       getItem: () => "true",
       setItem: () => {},
     });
@@ -204,7 +231,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("falls back when localStorage.getItem throws", () => {
-    vi.stubGlobal("localStorage", {
+    stubGlobal("localStorage", {
       getItem: () => {
         throw new Error("fail");
       },

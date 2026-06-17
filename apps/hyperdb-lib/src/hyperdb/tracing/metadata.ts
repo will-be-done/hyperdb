@@ -96,7 +96,7 @@ export const wrapGeneratorWithTraceMeta = <TReturn>(
   arg: unknown,
   options: Pick<
     TraceFrameMeta,
-    "trace" | "autoTrace" | "skipRootTrace" | "skipChildTrace"
+    "trace" | "skipRootTrace" | "skipChildTrace"
   > = {},
 ): Generator<unknown, TReturn, unknown> =>
   wrapGeneratorWithExistingTraceMeta(

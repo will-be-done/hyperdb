@@ -60,6 +60,35 @@ const createDisabledStore = <TReturn>(defaultValue: TReturn) => ({
   getSnapshot: () => defaultValue,
 });
 
+const defaultHookDeps = {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  useDB,
+  initCachedSelector,
+  runSelectorAsync,
+  select,
+  isNeedToRerunRange,
+  stableSerializeSelectorArgs,
+  syncDispatch,
+  asyncDispatch,
+};
+
+let hookDeps = defaultHookDeps;
+
+export function setHyperDBHookDepsForTest(
+  deps: Partial<typeof defaultHookDeps>,
+): () => void {
+  hookDeps = { ...defaultHookDeps, ...deps };
+
+  return () => {
+    hookDeps = defaultHookDeps;
+  };
+}
+
 export function useSyncSelector<TSelector extends AnyObjectSelector>(
   options: SyncSelectorEnabledOptions<TSelector>,
 ): SelectorReturn<TSelector>;
@@ -71,24 +100,25 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
     | SyncSelectorEnabledOptions<TSelector>
     | SyncSelectorMaybeDisabledOptions<TSelector>,
 ): SelectorReturn<TSelector> {
-  const db = useDB();
+  const db = hookDeps.useDB();
   const enabled = input.enabled !== false;
-  const argsKey = enabled ? stableSerializeSelectorArgs(input.args) : undefined;
+  const argsKey = enabled
+    ? hookDeps.stableSerializeSelectorArgs(input.args)
+    : undefined;
 
-  const selector = useMemo(() => {
+  const selector = hookDeps.useMemo(() => {
     if (!enabled) {
       return createDisabledStore(
         input.defaultValue as SelectorReturn<TSelector>,
       );
     }
 
-    return initCachedSelector(db, input.selector, input.args, {
+    return hookDeps.initCachedSelector(db, input.selector, input.args, {
       gcTime: input.gcTime,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [db, input.selector, argsKey, enabled, input.defaultValue, input.gcTime]);
 
-  return useSyncExternalStore(
+  return hookDeps.useSyncExternalStore(
     selector.subscribe,
     selector.getSnapshot,
     selector.getSnapshot,
@@ -111,26 +141,27 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
     | AsyncSelectorEnabledOptions<TSelector>
     | AsyncSelectorMaybeDisabledOptions<TSelector>,
 ): SelectorReturn<TSelector> | undefined {
-  const db = useDB();
+  const db = hookDeps.useDB();
   const enabled = input.enabled !== false;
-  const argsKey = enabled ? stableSerializeSelectorArgs(input.args) : undefined;
-  const [result, setResult] = useState<SelectorReturn<TSelector> | undefined>(
-    input.defaultValue,
-  );
-  const selectRangeCmdsRef = useRef<SelectRangeCmd[]>([]);
-  const genRef = useRef<
+  const argsKey = enabled
+    ? hookDeps.stableSerializeSelectorArgs(input.args)
+    : undefined;
+  const [result, setResult] = hookDeps.useState<
+    SelectorReturn<TSelector> | undefined
+  >(input.defaultValue);
+  const selectRangeCmdsRef = hookDeps.useRef<SelectRangeCmd[]>([]);
+  const genRef = hookDeps.useRef<
     () => Generator<unknown, SelectorReturn<TSelector>, unknown>
   >(() => input.selector(input.args));
   genRef.current = () => input.selector(input.args);
 
-  useEffect(() => {
+  hookDeps.useEffect(() => {
     if ("defaultValue" in input) {
       setResult(input.defaultValue);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [argsKey]);
 
-  useEffect(() => {
+  hookDeps.useEffect(() => {
     if (!enabled) {
       return;
     }
@@ -152,7 +183,11 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
           const cmds: SelectRangeCmd[] = [];
           // TODO: we can detetect if CachedDB has already cached value in range,
           // and don't spawn async/await promise that may dramatically improve performance
-          const value = await runSelectorAsync(db, genRef.current, cmds);
+          const value = await hookDeps.runSelectorAsync(
+            db,
+            genRef.current,
+            cmds,
+          );
           if (cancelled) return;
 
           if (rerunRequested) continue;
@@ -176,7 +211,7 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
       // Only skip if we already have cmds AND they don't need rerun
       if (
         selectRangeCmdsRef.current.length > 0 &&
-        !isNeedToRerunRange(selectRangeCmdsRef.current, ops)
+        !hookDeps.isNeedToRerunRange(selectRangeCmdsRef.current, ops)
       ) {
         return;
       }
@@ -198,46 +233,46 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
 }
 
 export function useDispatch() {
-  const db = useDB();
+  const db = hookDeps.useDB();
 
-  return useCallback(
+  return hookDeps.useCallback(
     <TReturn>(action: Generator<unknown, TReturn, unknown>): TReturn => {
-      return syncDispatch(db, action);
+      return hookDeps.syncDispatch(db, action);
     },
     [db],
   );
 }
 
 export function useAsyncDispatch() {
-  const db = useDB();
+  const db = hookDeps.useDB();
 
-  return useCallback(
+  return hookDeps.useCallback(
     <TReturn>(
       action: Generator<unknown, TReturn, unknown>,
     ): Promise<TReturn> => {
-      return asyncDispatch(db, action);
+      return hookDeps.asyncDispatch(db, action);
     },
     [db],
   );
 }
 
 export function useSelect() {
-  const db = useDB();
+  const db = hookDeps.useDB();
 
-  return useCallback(
+  return hookDeps.useCallback(
     <TReturn>(selector: Generator<unknown, TReturn, unknown>): TReturn => {
-      return select(db, selector);
+      return hookDeps.select(db, selector);
     },
     [db],
   );
 }
 
 export function useAsyncSelect() {
-  const db = useDB();
+  const db = hookDeps.useDB();
 
-  return useCallback(
+  return hookDeps.useCallback(
     <TReturn>(gen: Generator<unknown, TReturn, unknown>): Promise<TReturn> => {
-      return runSelectorAsync(db, () => gen);
+      return hookDeps.runSelectorAsync(db, () => gen);
     },
     [db],
   );

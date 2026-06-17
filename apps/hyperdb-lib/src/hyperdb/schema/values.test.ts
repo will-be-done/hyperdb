@@ -1,5 +1,7 @@
-import { assertType, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { assertValid, type Infer, v } from "./values";
+
+const assertType = <T>(_value: T) => {};
 
 describe("validators", () => {
   it("infers primitive, object, optional, union, literal, and array types", () => {

@@ -237,7 +237,9 @@ describe("devtool runtime tracing", () => {
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
 
-    const tracedSelector = createSelector({ trace: true });
+    const tracedSelector = createSelector({
+      trace: { enabled: true, startOn: "load" },
+    });
     const readTaskSelector = tracedSelector(
       function* readTaskBeforeDevtoolOpen() {
         return yield* selectFrom(tasksTable, "projectState").where((q) =>
@@ -253,15 +255,17 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents).toHaveLength(1);
   });
 
-  it("does not record devtool-open traces when selector auto trace is disabled", () => {
+  it("does not record traces when selector tracing is disabled", () => {
     const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
     hyperDBTraceStore.clear();
 
-    const manualOnlySelector = createSelector({ autoTrace: false });
-    const readTaskSelector = manualOnlySelector(
-      function* autoTraceDisabledSelector() {
+    const tracingDisabledSelector = createSelector({
+      trace: { enabled: false, startOn: "devtoolOpen" },
+    });
+    const readTaskSelector = tracingDisabledSelector(
+      function* tracingDisabledSelector() {
         return yield* selectFrom(tasksTable, "projectState").where((q) =>
           q.eq("projectId", "project-1"),
         );

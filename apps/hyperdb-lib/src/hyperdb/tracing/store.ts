@@ -7,6 +7,7 @@ import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable, type ExtractSchema } from "../schema/table";
 import { v } from "../schema/values";
 import {
+  defaultTraceOptions,
   setDefaultHyperDBTracer,
   type HyperDBTracer,
   type MutationEvent,
@@ -22,7 +23,11 @@ import {
   type TraceFrameMeta,
   type TraceStatus,
 } from "../core/tracer";
-export { anonymousTraceMeta, createTraceFrameMeta } from "../core/tracer";
+export {
+  anonymousTraceMeta,
+  createTraceFrameMeta,
+  defaultTraceOptions,
+} from "../core/tracer";
 export type {
   CommandEventKind,
   MutationEvent,
@@ -35,6 +40,7 @@ export type {
   TraceFrame,
   TraceFrameMeta,
   TraceKind,
+  TraceOptions,
   TraceStatus,
 } from "../core/tracer";
 
@@ -497,10 +503,13 @@ export const startRootTrace = (
 ): TraceContext | undefined => {
   if (meta.skipRootTrace) return undefined;
 
-  const traceEnabled = meta.trace ?? false;
-  const autoTrace = meta.autoTrace ?? true;
+  const traceOptions = meta.trace ?? defaultTraceOptions;
 
-  if (!traceEnabled && (!store.isActive() || !autoTrace)) {
+  if (!traceOptions.enabled) {
+    return undefined;
+  }
+
+  if (traceOptions.startOn === "devtoolOpen" && !store.isActive()) {
     return undefined;
   }
 

@@ -166,8 +166,10 @@ describe("selector", () => {
       childTrace: true,
       rootTrace: false,
     });
-    expect(metadataSelector.trace).toBe(false);
-    expect(metadataSelector.autoTrace).toBe(true);
+    expect(metadataSelector.trace).toEqual({
+      enabled: true,
+      startOn: "devtoolOpen",
+    });
     expect(metadataSelector.validateArgs).toBe(false);
     expect(traceMeta?.name).toBe("metadataSelector");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });

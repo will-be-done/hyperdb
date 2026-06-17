@@ -143,8 +143,10 @@ describe("action", () => {
     expect(createTask.kind).toBe("action");
     expect(createTask.name).toBe("createTask");
     expect(createTask.args).toBe(args);
-    expect(createTask.trace).toBe(false);
-    expect(createTask.autoTrace).toBe(true);
+    expect(createTask.trace).toEqual({
+      enabled: true,
+      startOn: "devtoolOpen",
+    });
     expect(createTask.validateArgs).toBe(false);
     expect(traceMeta?.name).toBe("createTask");
     expect(traceMeta?.arg).toEqual({ id: "task-1" });

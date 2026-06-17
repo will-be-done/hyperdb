@@ -1,9 +1,10 @@
-import { assertType, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { defineTable, type ExtractSchema } from "../../schema/table";
 import { selectFrom, or } from "./builder";
 import type { ExtractIndexColumns } from "./builder";
 import { v } from "../../schema/values";
 
+const assertType = <T>(_value: T) => {};
 const typeCheckOnly = false as boolean;
 
 const tasksTable = defineTable("tasks", {
