@@ -16,6 +16,11 @@ import {
 const action = createAction();
 const selector = createSelector();
 
+export type TraceStoreTraceSelection = {
+  visibleTraces: RootTrace[];
+  selectedTrace: RootTrace | undefined;
+};
+
 const normalizedLimit = (maxTraces: number): number => {
   const n = Number(maxTraces);
   return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
@@ -119,7 +124,7 @@ export const traceStoreTraceSelection = selector({
     sortField,
     sortDir,
     selectedTraceId,
-  }) {
+  }): Generator<unknown, TraceStoreTraceSelection, unknown> {
     yield* selectFrom(traceMetaRuntimeTable, "byId").where((q) =>
       q.eq("id", traceMetaId),
     );
