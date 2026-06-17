@@ -25,6 +25,7 @@ import type {
 import { DBTx } from "./db-tx";
 
 export type DBOptions = Partial<CodecOptions> & {
+  dbName?: string;
   traits?: Trait[];
   tracer?: HyperDBTracer | null;
 };
@@ -33,6 +34,7 @@ type DBState = {
   tables: TableDefinition<any, any>[];
   options: CodecOptions;
   id: string;
+  name?: string;
   tracer?: HyperDBTracer | null;
 };
 
@@ -57,6 +59,7 @@ const createDBState = (options: DBOptions): DBState => {
       freezeRows: options.freezeRows ?? false,
     },
     id: createDBId(),
+    name: options.dbName,
     tracer: options.tracer,
   };
 };
@@ -163,6 +166,10 @@ export class DB implements HyperDB {
 
   getId(): string {
     return this.state.id;
+  }
+
+  getDBName(): string | undefined {
+    return this.state.name;
   }
 
   getTracer(): HyperDBTracer | null | undefined {

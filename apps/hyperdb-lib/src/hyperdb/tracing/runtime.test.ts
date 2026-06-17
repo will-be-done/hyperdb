@@ -8,8 +8,8 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import {
-  action,
   asyncDispatch,
+  createAction,
   deleteRows,
   getCurrentTraits,
   insert,
@@ -17,13 +17,18 @@ import {
   upsert,
 } from "../commands/action/builders";
 import { selectFrom } from "../commands/selector/builder";
-import {
-  createSelector,
-  select,
-  selector,
-} from "../commands/selector/selector";
+import { createSelector, select } from "../commands/selector/selector";
 import { getTraceContextFromTraits } from "./context";
-import { hyperDBTraceStore } from "./store";
+import {
+  hyperDBTraceStore,
+  traceRootsRuntimeTable,
+  unassignedTraceDBKey,
+  type RootTrace,
+  type TraceFrame,
+} from "./store";
+
+const action = createAction();
+const selector = createSelector();
 
 type Task = {
   id: string;
@@ -52,7 +57,12 @@ class FakeAsyncDriverTx implements DBDriverTX {
     selectOptions: SelectOptions,
   ) {
     yield* unwrap(Promise.resolve());
-    return yield* this.tx.intervalScan(table, indexName, clauses, selectOptions);
+    return yield* this.tx.intervalScan(
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    );
   }
 
   *insert(tableName: string, values: Row[]) {
@@ -142,6 +152,33 @@ const createAsyncDB = async (): Promise<DB> => {
   return db;
 };
 
+const trace = (overrides: Partial<RootTrace>): RootTrace => ({
+  id: overrides.id ?? "trace-1",
+  kind: overrides.kind ?? "selector",
+  name: overrides.name ?? "trace",
+  arg: undefined,
+  startedAt: overrides.startedAt ?? 0,
+  durationMs: overrides.durationMs,
+  status: overrides.status ?? "success",
+  frames: [],
+  commandEvents: [],
+  mutationEvents: [],
+  ...overrides,
+});
+
+const traceFrame = (cached = false): TraceFrame => ({
+  id: cached ? "cached-frame" : "frame",
+  kind: "selector",
+  name: "frame",
+  arg: undefined,
+  startedAt: 0,
+  status: "success",
+  cached,
+  children: [],
+  commandIds: [],
+  mutationIds: [],
+});
+
 let unsubscribeTraceListener: (() => void) | undefined;
 
 beforeEach(() => {
@@ -201,11 +238,13 @@ describe("devtool runtime tracing", () => {
     execSync(db.insert(tasksTable, [task()]));
 
     const tracedSelector = createSelector({ trace: true });
-    const readTaskSelector = tracedSelector(function* readTaskBeforeDevtoolOpen() {
-      return yield* selectFrom(tasksTable, "projectState").where((q) =>
-        q.eq("projectId", "project-1"),
-      );
-    });
+    const readTaskSelector = tracedSelector(
+      function* readTaskBeforeDevtoolOpen() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    );
 
     expect(select(db, readTaskSelector())).toEqual([task()]);
 
@@ -231,6 +270,111 @@ describe("devtool runtime tracing", () => {
 
     expect(select(db, readTaskSelector())).toEqual([task()]);
     expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
+  });
+
+  it("returns traces ordered by duration through HyperDB indexes", () => {
+    hyperDBTraceStore.addTrace(
+      trace({ id: "slow", name: "slow", durationMs: 30, kind: "selector" }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({ id: "fast", name: "fast", durationMs: 5, kind: "selector" }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({ id: "action", name: "action", durationMs: 20, kind: "action" }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({ id: "running", name: "running", kind: "selector" }),
+    );
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
+            .order("desc")
+            .limit(10);
+          return hyperDBTraceStore.resolveTraceRows(rows);
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["slow", "action", "fast", "running"]);
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
+            .order("asc")
+            .limit(10);
+          return hyperDBTraceStore
+            .resolveTraceRows(rows)
+            .filter((item) => item.kind === "selector");
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["running", "fast", "slow"]);
+  });
+
+  it("filters traces by DB through HyperDB indexes and cached state in memory", () => {
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "db-a-visible",
+        name: "db-a-visible",
+        dbId: "db-a",
+        durationMs: 10,
+        frames: [traceFrame()],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "db-a-cached",
+        name: "db-a-cached",
+        dbId: "db-a",
+        durationMs: 5,
+        frames: [traceFrame(true)],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "db-b-visible",
+        name: "db-b-visible",
+        dbId: "db-b",
+        durationMs: 1,
+        frames: [traceFrame()],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "unassigned",
+        name: "unassigned",
+        durationMs: 20,
+        frames: [traceFrame()],
+      }),
+    );
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbDurationMs")
+            .where((q) => q.eq("dbKey", "db-a"))
+            .order("asc")
+            .limit(10);
+          return hyperDBTraceStore
+            .resolveTraceRows(rows)
+            .filter((item) => item.frames[0]?.cached !== true);
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["db-a-visible"]);
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbStartedAt")
+            .where((q) => q.eq("dbKey", unassignedTraceDBKey))
+            .order("desc")
+            .limit(10);
+          return hyperDBTraceStore.resolveTraceRows(rows);
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["unassigned"]);
   });
 
   it("keeps the same db identity across traited wrappers", () => {
@@ -469,7 +613,9 @@ describe("devtool runtime tracing", () => {
     const observedSubscriberTraces: (string | undefined)[] = [];
 
     db.afterChange(function* afterChange(_db, _table, traits) {
-      observedSubscriberTraces.push(getTraceContextFromTraits(traits)?.trace.name);
+      observedSubscriberTraces.push(
+        getTraceContextFromTraits(traits)?.trace.name,
+      );
     });
 
     const readTraceTraitsAction = action(function* traceTraitsAction() {

@@ -4,12 +4,7 @@ import { DB } from "../runtime/db";
 import { SubscribableDB } from "../runtime/subscribable-db";
 import { SyncDB } from "../runtime/sync-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import {
-  defineTable,
-  type ExtractIndexes,
-  type ExtractSchema,
-  type TableDefinition,
-} from "../schema/table";
+import { defineTable, type ExtractSchema } from "../schema/table";
 import { v } from "../schema/values";
 import {
   setDefaultHyperDBTracer,
@@ -27,10 +22,7 @@ import {
   type TraceFrameMeta,
   type TraceStatus,
 } from "../core/tracer";
-export {
-  anonymousTraceMeta,
-  createTraceFrameMeta,
-} from "../core/tracer";
+export { anonymousTraceMeta, createTraceFrameMeta } from "../core/tracer";
 export type {
   CommandEventKind,
   MutationEvent,
@@ -51,43 +43,54 @@ export type SerializedValue = {
   value: unknown;
 };
 
+export type TraceSortField = "created" | "duration";
+export type TraceSortDir = "asc" | "desc";
+export type TraceQueryKind = "selector" | "action";
+
+export const unassignedTraceDBKey = "__hyperdb_unassigned__";
+
 type TraceListener = () => void;
 
 const traceRootsTable = defineTable("hyperdbTraceRoots", {
   id: v.string(),
   dbId: v.optional(v.string()),
+  dbKey: v.string(),
   dbLabel: v.optional(v.string()),
-  kind: v.union(v.literal("action"), v.literal("selector"), v.literal("unknown")),
+  kind: v.union(
+    v.literal("action"),
+    v.literal("selector"),
+    v.literal("unknown"),
+  ),
   name: v.string(),
   startedAt: v.number(),
   endedAt: v.optional(v.number()),
   durationMs: v.optional(v.number()),
-  status: v.union(v.literal("running"), v.literal("success"), v.literal("error")),
+  status: v.union(
+    v.literal("running"),
+    v.literal("success"),
+    v.literal("error"),
+  ),
+  cached: v.boolean(),
   createdSeq: v.number(),
 })
   .index("byCreatedSeq", ["createdSeq"])
   .index("byDbCreatedSeq", ["dbId", "createdSeq"])
   .index("byStatusCreatedSeq", ["status", "createdSeq"])
   .index("byKindCreatedSeq", ["kind", "createdSeq"])
-  .index("byStartedAt", ["startedAt"]);
+  .index("byStartedAt", ["startedAt"])
+  .index("byDbStartedAt", ["dbKey", "startedAt"])
+  .index("byDurationMs", ["durationMs"])
+  .index("byDbDurationMs", ["dbKey", "durationMs"]);
 
-type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
-const traceRootsRuntimeTable = traceRootsTable as TableDefinition<
-  TraceRootRow,
-  ExtractIndexes<typeof traceRootsTable>,
-  unknown
->;
+export type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
+export const traceRootsRuntimeTable = traceRootsTable;
 
 const traceMetaTable = defineTable("hyperdbTraceMeta", {
   id: v.string(),
   revision: v.number(),
 });
 
-type TraceMetaRow = ExtractSchema<typeof traceMetaTable>;
-export const traceMetaRuntimeTable = traceMetaTable as unknown as TableDefinition<
-  TraceMetaRow,
-  ExtractIndexes<typeof traceMetaTable>
->;
+export const traceMetaRuntimeTable = traceMetaTable;
 
 export const traceMetaId = "trace-meta";
 
@@ -98,6 +101,7 @@ const dbLabels = new Map<string, string>();
 
 type TraceDBIdentified = {
   getId?: () => string;
+  getDBName?: () => string | undefined;
 };
 
 const nextId = (prefix: string): string => {
@@ -128,8 +132,13 @@ export type TraceDBInfo = {
 
 export const getTraceDBInfo = (db: object): TraceDBInfo => {
   const explicitId = (db as TraceDBIdentified).getId?.();
+  const explicitName = (db as TraceDBIdentified).getDBName?.();
 
   if (explicitId) {
+    if (explicitName) {
+      dbLabels.set(explicitId, explicitName);
+    }
+
     if (!dbLabels.has(explicitId)) {
       dbCounter += 1;
       dbLabels.set(explicitId, `DB ${dbCounter}`);
@@ -244,28 +253,7 @@ export class HyperDBTraceStore implements HyperDBTracer {
 
   getSnapshot = (): RootTrace[] => this.snapshot;
 
-  getTraces = (
-    maxTraces: number,
-    kind?: "selector" | "action",
-  ): RootTrace[] => {
-    const n = Number(maxTraces);
-    const limit = Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
-
-    const rows =
-      kind === undefined
-        ? this.db.intervalScan(
-            traceRootsRuntimeTable,
-            "byCreatedSeq",
-            [{}],
-            { order: "desc", limit },
-          )
-        : this.db.intervalScan(
-            traceRootsRuntimeTable,
-            "byKindCreatedSeq",
-            [{ eq: [{ col: "kind", val: kind }] }],
-            { order: "desc", limit },
-          );
-
+  resolveTraceRows = (rows: TraceRootRow[]): RootTrace[] => {
     return rows
       .map((row) => this.payloads.get(row.id))
       .filter((trace): trace is RootTrace => trace !== undefined);
@@ -303,11 +291,9 @@ export class HyperDBTraceStore implements HyperDBTracer {
     const rows =
       dbId === undefined
         ? this.allRows().filter((row) => row.dbId === undefined)
-        : this.db.intervalScan(
-            traceRootsRuntimeTable,
-            "byDbCreatedSeq",
-            [{ eq: [{ col: "dbId", val: dbId }] }],
-          );
+        : this.db.intervalScan(traceRootsRuntimeTable, "byDbCreatedSeq", [
+            { eq: [{ col: "dbId", val: dbId }] },
+          ]);
     if (rows.length === 0) return;
 
     const ids = rows.map((row) => row.id);
@@ -353,10 +339,8 @@ export class HyperDBTraceStore implements HyperDBTracer {
   getCurrentTraceFrameMeta = (context: TraceContext): TraceFrameMeta =>
     getCurrentTraceFrameMeta(context);
 
-  markTraceFrameCached = (
-    context: TraceContext,
-    frame: TraceFrame,
-  ): void => markTraceFrameCached(context, frame);
+  markTraceFrameCached = (context: TraceContext, frame: TraceFrame): void =>
+    markTraceFrameCached(context, frame);
 
   endTraceSuccess = (context: TraceContext): void => endTraceSuccess(context);
 
@@ -436,22 +420,17 @@ export class HyperDBTraceStore implements HyperDBTracer {
   }
 
   private allRows(): TraceRootRow[] {
-    return this.db.intervalScan(
-      traceRootsRuntimeTable,
-      "byCreatedSeq",
-      [{}],
-      { order: "desc" },
-    );
+    return this.db.intervalScan(traceRootsRuntimeTable, "byCreatedSeq", [{}], {
+      order: "desc",
+    });
   }
 
   private refreshSnapshot(): void {
     this.snapshot = this.db
-      .intervalScan(
-        traceRootsRuntimeTable,
-        "byCreatedSeq",
-        [{}],
-        { order: "desc", limit: this.maxTraces },
-      )
+      .intervalScan(traceRootsRuntimeTable, "byCreatedSeq", [{}], {
+        order: "desc",
+        limit: this.maxTraces,
+      })
       .map((row) => this.payloads.get(row.id))
       .filter((trace): trace is RootTrace => trace !== undefined);
   }
@@ -460,13 +439,15 @@ export class HyperDBTraceStore implements HyperDBTracer {
     return omitUndefined({
       id: trace.id,
       dbId: trace.dbId,
+      dbKey: trace.dbId ?? unassignedTraceDBKey,
       dbLabel: trace.dbLabel,
       kind: trace.kind,
       name: trace.name,
       startedAt: trace.startedAt,
       endedAt: trace.endedAt,
-      durationMs: trace.durationMs,
+      durationMs: trace.durationMs ?? 0,
       status: trace.status,
+      cached: trace.frames[0]?.cached === true,
       createdSeq: this.createdSeqByTraceId.get(trace.id) ?? 0,
     });
   }

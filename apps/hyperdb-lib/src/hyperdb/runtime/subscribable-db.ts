@@ -128,6 +128,10 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getId();
   }
 
+  getDBName(): string | undefined {
+    return this.subDb.getDBName?.();
+  }
+
   getTracer(): HyperDBTracer | null | undefined {
     return this.subDb.getTracer?.();
   }
@@ -516,6 +520,10 @@ export class SubscribableDB implements HyperDB {
 
   getId(): string {
     return this.db.getId();
+  }
+
+  getDBName(): string | undefined {
+    return this.db.getDBName?.();
   }
 
   getTracer(): HyperDBTracer | null | undefined {
