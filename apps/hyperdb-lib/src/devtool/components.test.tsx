@@ -43,7 +43,7 @@ const restoreGlobalFns: (() => void)[] = [];
 
 const stubGlobal = (name: string, value: unknown) => {
   const hadOwnValue = Object.prototype.hasOwnProperty.call(globalThis, name);
-  const previousValue = (globalThis as Record<string, unknown>)[name];
+  const previousDescriptor = Object.getOwnPropertyDescriptor(globalThis, name);
 
   Object.defineProperty(globalThis, name, {
     value,
@@ -52,12 +52,8 @@ const stubGlobal = (name: string, value: unknown) => {
   });
 
   restoreGlobalFns.push(() => {
-    if (hadOwnValue) {
-      Object.defineProperty(globalThis, name, {
-        value: previousValue,
-        configurable: true,
-        writable: true,
-      });
+    if (hadOwnValue && previousDescriptor) {
+      Object.defineProperty(globalThis, name, previousDescriptor);
     } else {
       delete (globalThis as Record<string, unknown>)[name];
     }

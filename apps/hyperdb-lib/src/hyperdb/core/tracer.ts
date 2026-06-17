@@ -18,10 +18,10 @@ export type TraceOptions = {
   startOn: TraceStartOn;
 };
 
-export const defaultTraceOptions: TraceOptions = {
+export const defaultTraceOptions: TraceOptions = Object.freeze({
   enabled: true,
   startOn: "devtoolOpen",
-};
+});
 
 export type TraceError = {
   name?: string;

@@ -33,48 +33,56 @@ const tasksTables = defineTable("tasks", {
   orderToken: v.string(),
 }).index("title", ["title"], { type: "hash" });
 
-const updateAction = action(function* () {
-  const task: Task = {
-    type: "task",
-    id: "task-1",
-    title: "Task 1",
-    state: "todo",
-    projectId: "project-1",
-    orderToken: "b",
-  };
+const updateAction = action({
+  name: "updateAction",
+  args: {},
+  handler: function* updateAction() {
+    const task: Task = {
+      type: "task",
+      id: "task-1",
+      title: "Task 1",
+      state: "todo",
+      projectId: "project-1",
+      orderToken: "b",
+    };
 
-  yield* upsert(tasksTables, [task]);
+    yield* upsert(tasksTables, [task]);
+  },
 });
 
-const insertAction = action(function* () {
-  const task: Task = {
-    type: "task",
-    id: "task-1",
-    title: "Task 1",
-    state: "todo",
-    projectId: "project-1",
-    orderToken: "a",
-  };
+const insertAction = action({
+  name: "insertAction",
+  args: {},
+  handler: function* insertAction() {
+    const task: Task = {
+      type: "task",
+      id: "task-1",
+      title: "Task 1",
+      state: "todo",
+      projectId: "project-1",
+      orderToken: "a",
+    };
 
-  yield* insert(tasksTables, [task]);
+    yield* insert(tasksTables, [task]);
 
-  const tasks = yield* selectFrom(tasksTables, "title").where((q) =>
-    q.eq("title", "Task 1"),
-  );
+    const tasks = yield* selectFrom(tasksTables, "title").where((q) =>
+      q.eq("title", "Task 1"),
+    );
 
-  yield* updateAction();
+    yield* updateAction({});
 
-  const tasks2 = yield* selectFrom(tasksTables, "title").where((q) =>
-    q.eq("title", "Task 1"),
-  );
+    const tasks2 = yield* selectFrom(tasksTables, "title").where((q) =>
+      q.eq("title", "Task 1"),
+    );
 
-  yield* deleteRows(tasksTables, ["task-1"]);
+    yield* deleteRows(tasksTables, ["task-1"]);
 
-  const tasks3 = yield* selectFrom(tasksTables, "title").where((q) =>
-    q.eq("title", "Task 1"),
-  );
+    const tasks3 = yield* selectFrom(tasksTables, "title").where((q) =>
+      q.eq("title", "Task 1"),
+    );
 
-  return [tasks, tasks2, tasks3];
+    return [tasks, tasks2, tasks3];
+  },
 });
 
 describe("action", () => {
@@ -205,7 +213,7 @@ describe("action", () => {
     const db = new DB(driver);
     execSync(db.loadTables([tasksTables]));
 
-    expect(syncDispatch(db, insertAction())).toEqual([
+    expect(syncDispatch(db, insertAction({}))).toEqual([
       [
         {
           type: "task",
