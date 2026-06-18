@@ -115,9 +115,6 @@ function sanitizeWithValidatorShape(
           key,
         ]);
       }
-      if (!(key in validator.fields)) {
-        return fail(`unexpected object field ${key}`, [...path, key]);
-      }
     }
 
     for (const [key, fieldValidator] of Object.entries(validator.fields)) {

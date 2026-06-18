@@ -57,6 +57,20 @@ export const unassignedTraceDBKey = "__hyperdb_unassigned__";
 
 type TraceListener = () => void;
 
+const scheduleTraceNotification = (callback: () => void): void => {
+  if (typeof globalThis.setTimeout === "function") {
+    globalThis.setTimeout(callback, 0);
+    return;
+  }
+
+  if (typeof globalThis.queueMicrotask === "function") {
+    globalThis.queueMicrotask(callback);
+    return;
+  }
+
+  void Promise.resolve().then(callback);
+};
+
 const traceRootsTable = defineTable("hyperdbTraceRoots", {
   id: v.string(),
   dbId: v.optional(v.string()),
@@ -393,7 +407,7 @@ export class HyperDBTraceStore implements HyperDBTracer {
     if (this.notifyQueued) return;
 
     this.notifyQueued = true;
-    queueMicrotask(() => {
+    scheduleTraceNotification(() => {
       this.notifyQueued = false;
       this.bumpRevision();
 
