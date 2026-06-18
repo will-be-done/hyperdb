@@ -926,7 +926,11 @@ describe("Database Operations Edge Cases", async () => {
 
         const results = await db.intervalScan(testTable, "byToken", [{}]);
 
-        console.log(results);
+        expect(results.map((record) => record.token)).toEqual([
+          "Zs2SG",
+          "a064m",
+          "a3HqIV",
+        ]);
       });
 
       it("should handle various scan bound combinations", async () => {

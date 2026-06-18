@@ -757,6 +757,7 @@ class IdbDriverTx implements DBDriverTX {
   private onFinish: () => void;
   private committed = false;
   private rolledback = false;
+  private finishCalled = false;
   private done: Promise<void>;
   private startedAt: number;
 
@@ -775,12 +776,12 @@ class IdbDriverTx implements DBDriverTX {
 
   *commit(): Generator<DBCmd, void> {
     this.throwIfDone();
-    this.committed = true;
 
     yield* unwrapCb(async () => {
       try {
         this.tx.commit?.();
         await this.done;
+        this.committed = true;
         logIdbOperation("transaction commit", this.startedAt, {
           mode: this.tx.mode,
         });
@@ -795,14 +796,13 @@ class IdbDriverTx implements DBDriverTX {
         );
         throw error;
       } finally {
-        this.onFinish();
+        this.finish();
       }
     });
   }
 
   *rollback(): Generator<DBCmd, void> {
     this.throwIfDone();
-    this.rolledback = true;
 
     yield* unwrapCb(async () => {
       abortQuietly(this.tx);
@@ -811,10 +811,11 @@ class IdbDriverTx implements DBDriverTX {
       } catch {
         // Abort is the expected rollback path.
       } finally {
+        this.rolledback = true;
         logIdbOperation("transaction rollback", this.startedAt, {
           mode: this.tx.mode,
         });
-        this.onFinish();
+        this.finish();
       }
     });
   }
@@ -873,6 +874,13 @@ class IdbDriverTx implements DBDriverTX {
     if (this.committed || this.rolledback) {
       throw new Error("Transaction already finished");
     }
+  }
+
+  private finish(): void {
+    if (this.finishCalled) return;
+
+    this.finishCalled = true;
+    this.onFinish();
   }
 }
 
