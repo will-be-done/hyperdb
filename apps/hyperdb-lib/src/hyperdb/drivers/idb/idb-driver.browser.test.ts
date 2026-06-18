@@ -52,7 +52,52 @@ async function createDB(): Promise<DB> {
   return new DB(await openIndexedDBDriver(dbName));
 }
 
+type GetAllRecordsHost = {
+  getAllRecords: (options?: unknown) => IDBRequest<unknown>;
+};
+
+function spyOnGetAllRecords<T extends object>(prototype: T) {
+  return "getAllRecords" in prototype
+    ? vi.spyOn(prototype as T & GetAllRecordsHost, "getAllRecords")
+    : undefined;
+}
+
 describe("IdbDriver", () => {
+  it("stores rows in native per-table object stores", async () => {
+    dbCounter += 1;
+    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(dbName);
+
+    const driver = await openIndexedDBDriver(dbName);
+    const db = new DB(driver);
+    await execAsync(db.loadTables([tasksTable]));
+    driver.close();
+
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(dbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Failed to inspect IDB database"));
+    });
+
+    try {
+      expect(rawDb.objectStoreNames.contains("rows")).toBe(false);
+      expect(rawDb.objectStoreNames.contains("indexEntries")).toBe(false);
+      expect(rawDb.objectStoreNames.contains("hyperdb:idbTasks")).toBe(true);
+
+      const tx = rawDb.transaction("hyperdb:idbTasks", "readonly");
+      const store = tx.objectStore("hyperdb:idbTasks");
+      expect(Array.from(store.indexNames).sort()).toEqual([
+        "byId",
+        "byProjectRank",
+        "byTitle",
+      ]);
+    } finally {
+      rawDb.close();
+      await deleteDatabase(dbName);
+    }
+  });
+
   it("loads tables and supports insert, scan, upsert, and delete", async () => {
     const db = await createDB();
     await execAsync(db.loadTables([tasksTable]));
@@ -166,9 +211,11 @@ describe("IdbDriver", () => {
     };
     await execAsync(db.insert(tasksTable, [first, second]));
 
-    const getAllSpy = vi.spyOn(IDBObjectStore.prototype, "getAll");
+    const getAllRecordsSpy = spyOnGetAllRecords(IDBIndex.prototype);
+    const indexGetAllSpy = vi.spyOn(IDBIndex.prototype, "getAll");
     const getSpy = vi.spyOn(IDBObjectStore.prototype, "get");
-    const openCursorSpy = vi.spyOn(IDBObjectStore.prototype, "openCursor");
+    const storeOpenCursorSpy = vi.spyOn(IDBObjectStore.prototype, "openCursor");
+    const indexOpenCursorSpy = vi.spyOn(IDBIndex.prototype, "openCursor");
 
     try {
       await expect(
@@ -179,13 +226,98 @@ describe("IdbDriver", () => {
         ),
       ).resolves.toEqual([second, first]);
 
-      expect(getAllSpy).toHaveBeenCalled();
+      expect(
+        (getAllRecordsSpy?.mock.calls.length ?? 0) + indexGetAllSpy.mock.calls.length,
+      ).toBeGreaterThan(0);
       expect(getSpy).not.toHaveBeenCalled();
-      expect(openCursorSpy).not.toHaveBeenCalled();
+      expect(storeOpenCursorSpy).not.toHaveBeenCalled();
+      expect(indexOpenCursorSpy).not.toHaveBeenCalled();
     } finally {
-      getAllSpy.mockRestore();
+      getAllRecordsSpy?.mockRestore();
+      indexGetAllSpy.mockRestore();
       getSpy.mockRestore();
-      openCursorSpy.mockRestore();
+      storeOpenCursorSpy.mockRestore();
+      indexOpenCursorSpy.mockRestore();
+    }
+  });
+
+  it("uses the table object store directly for full id-index scans", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+
+    const first = {
+      id: "task-1",
+      title: "First",
+      projectId: "project-1",
+      rank: 2,
+    };
+    const second = {
+      id: "task-2",
+      title: "Second",
+      projectId: "project-1",
+      rank: 1,
+    };
+    await execAsync(db.insert(tasksTable, [second, first]));
+
+    const storeGetAllRecordsSpy = spyOnGetAllRecords(IDBObjectStore.prototype);
+    const storeGetAllSpy = vi.spyOn(IDBObjectStore.prototype, "getAll");
+    const indexGetAllRecordsSpy = spyOnGetAllRecords(IDBIndex.prototype);
+    const indexGetAllSpy = vi.spyOn(IDBIndex.prototype, "getAll");
+
+    try {
+      await expect(
+        execAsync(db.intervalScan(tasksTable, "byId", [{}])),
+      ).resolves.toEqual([first, second]);
+
+      expect(
+        (storeGetAllRecordsSpy?.mock.calls.length ?? 0) +
+          storeGetAllSpy.mock.calls.length,
+      ).toBeGreaterThan(0);
+      expect(indexGetAllRecordsSpy?.mock.calls.length ?? 0).toBe(0);
+      expect(indexGetAllSpy).not.toHaveBeenCalled();
+    } finally {
+      storeGetAllRecordsSpy?.mockRestore();
+      storeGetAllSpy.mockRestore();
+      indexGetAllRecordsSpy?.mockRestore();
+      indexGetAllSpy.mockRestore();
+    }
+  });
+
+  it("uses primary-key get for exact id-index scans", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+
+    const first = {
+      id: "task-1",
+      title: "First",
+      projectId: "project-1",
+      rank: 2,
+    };
+    const second = {
+      id: "task-2",
+      title: "Second",
+      projectId: "project-1",
+      rank: 1,
+    };
+    await execAsync(db.insert(tasksTable, [first, second]));
+
+    const getSpy = vi.spyOn(IDBObjectStore.prototype, "get");
+    const indexGetAllSpy = vi.spyOn(IDBIndex.prototype, "getAll");
+
+    try {
+      await expect(
+        execAsync(
+          db.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "task-2" }] },
+          ]),
+        ),
+      ).resolves.toEqual([second]);
+
+      expect(getSpy).toHaveBeenCalledWith("task-2");
+      expect(indexGetAllSpy).not.toHaveBeenCalled();
+    } finally {
+      getSpy.mockRestore();
+      indexGetAllSpy.mockRestore();
     }
   });
 
@@ -233,6 +365,53 @@ describe("IdbDriver", () => {
         ]),
       ),
     ).toEqual([{ id: "row-1", title: "A" }]);
+  });
+
+  it("resets old side-table IDB layout", async () => {
+    dbCounter += 1;
+    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(dbName);
+
+    const oldDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(dbName, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore("rows", { keyPath: ["tableName", "id"] });
+        db.createObjectStore("indexEntries", {
+          keyPath: ["tableName", "indexName", "sortKey", "id"],
+        });
+        db.createObjectStore("tableMetadata", { keyPath: "tableName" });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Failed to create old IDB layout"));
+    });
+    oldDb.close();
+
+    const driver = await openIndexedDBDriver(dbName);
+    const db = new DB(driver);
+    await execAsync(db.loadTables([tasksTable]));
+
+    expect(await execAsync(db.intervalScan(tasksTable, "byId", [{}]))).toEqual(
+      [],
+    );
+    driver.close();
+
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(dbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Failed to inspect reset layout"));
+    });
+
+    try {
+      expect(rawDb.objectStoreNames.contains("rows")).toBe(false);
+      expect(rawDb.objectStoreNames.contains("indexEntries")).toBe(false);
+      expect(rawDb.objectStoreNames.contains("hyperdb:idbTasks")).toBe(true);
+    } finally {
+      rawDb.close();
+      await deleteDatabase(dbName);
+    }
   });
 
   it("skips index rebuild when table definitions match after reopen", async () => {
@@ -298,7 +477,7 @@ describe("IdbDriver", () => {
     await execAsync(oldDb.loadTables([reloadTableV1]));
     await execAsync(oldDb.insert(reloadTableV1, [{ id: "row-1", title: "A" }]));
 
-    const newDriver = await openIndexedDBDriver(dbName, { version: 2 });
+    const newDriver = await openIndexedDBDriver(dbName, { version: 3 });
     const newDb = new DB(newDriver);
     await execAsync(newDb.loadTables([reloadTableV2]));
 
@@ -359,5 +538,60 @@ describe("IdbDriver", () => {
     expect(await asyncDispatch(db, createTask({}))).toEqual([
       { id: "commit", title: "Commit", projectId: "project-1", rank: 2 },
     ]);
+  });
+
+  it("uses relaxed durability by default and allows overrides", async () => {
+    dbCounter += 1;
+    const relaxedDbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(relaxedDbName);
+    dbCounter += 1;
+    const strictDbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(strictDbName);
+
+    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+
+    try {
+      const relaxedDb = new DB(await openIndexedDBDriver(relaxedDbName));
+      await execAsync(relaxedDb.loadTables([tasksTable]));
+      await execAsync(
+        relaxedDb.insert(tasksTable, [
+          { id: "task-1", title: "First", projectId: "project-1", rank: 1 },
+        ]),
+      );
+
+      expect(
+        txSpy.mock.calls.some(
+          ([, mode, options]) =>
+            mode === "readwrite" &&
+            (options as IDBTransactionOptions | undefined)?.durability ===
+              "relaxed",
+        ),
+      ).toBe(true);
+
+      txSpy.mockClear();
+
+      const strictDb = new DB(
+        await openIndexedDBDriver(strictDbName, { durability: "strict" }),
+      );
+      await execAsync(strictDb.loadTables([tasksTable]));
+      await execAsync(
+        strictDb.insert(tasksTable, [
+          { id: "task-1", title: "First", projectId: "project-1", rank: 1 },
+        ]),
+      );
+
+      expect(
+        txSpy.mock.calls.some(
+          ([, mode, options]) =>
+            mode === "readwrite" &&
+            (options as IDBTransactionOptions | undefined)?.durability ===
+              "strict",
+        ),
+      ).toBe(true);
+    } finally {
+      txSpy.mockRestore();
+      await deleteDatabase(relaxedDbName);
+      await deleteDatabase(strictDbName);
+    }
   });
 });

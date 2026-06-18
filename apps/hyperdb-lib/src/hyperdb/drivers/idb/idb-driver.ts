@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import AwaitLock from "await-lock";
 import { unwrapCb, type DBCmd } from "../../commands/async";
 import type { DBDriver, DBDriverTX } from "../../core/driver";
 import {
@@ -17,24 +16,16 @@ import {
 } from "../../storage/codec";
 import {
   assertSafeTableDefinition,
+  getSqliteIndexSortKeyValue,
   sqliteIndexSortColumns,
   sqliteIndexSortKeyMode,
-  getSqliteIndexSortKeyValue,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
 
-type StoredRow = {
-  tableName: string;
+type NativeStoredRecord = {
   id: string;
-  data: unknown;
-};
-
-type StoredIndexEntry = {
-  tableName: string;
-  indexName: string;
-  sortKey: string;
-  id: string;
-  data?: unknown;
+  row: unknown;
+  indexes: Record<string, string>;
 };
 
 type StoredTableMetadata = {
@@ -43,22 +34,38 @@ type StoredTableMetadata = {
 };
 
 type StoreMode = "readonly" | "readwrite";
+type LockRelease = () => void;
 
 export type OpenIndexedDBDriverOptions = {
   indexedDB?: IDBFactory;
   version?: number;
+  durability?: IDBTransactionDurability;
   onBlocked?: (event: IDBVersionChangeEvent) => void;
   onVersionChange?: (event: IDBVersionChangeEvent) => void;
 };
 
-const ROWS_STORE = "rows";
-const INDEX_ENTRIES_STORE = "indexEntries";
+const OLD_ROWS_STORE = "rows";
+const OLD_INDEX_ENTRIES_STORE = "indexEntries";
 const TABLE_METADATA_STORE = "tableMetadata";
-const DEFAULT_VERSION = 2;
-const TABLE_INDEX_SIGNATURE_VERSION = 2;
+const TABLE_STORE_PREFIX = "hyperdb:";
+const TABLE_INDEX_SIGNATURE_VERSION = 3;
 const IDB_READ_BATCH_SIZE = 1000;
 const STALE_CONNECTION_MESSAGE =
   "IndexedDB connection is stale; reopen the driver";
+
+type IdbRecord<T> = {
+  key: IDBValidKey;
+  primaryKey: IDBValidKey;
+  value: T;
+};
+
+type GetAllRecordsSource<T> = {
+  getAllRecords?: (options?: {
+    query?: IDBValidKey | IDBKeyRange | null;
+    count?: number;
+    direction?: IDBCursorDirection;
+  }) => IDBRequest<IdbRecord<T>[]>;
+};
 
 function nowMs(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
@@ -131,13 +138,18 @@ function abortQuietly(tx: IDBTransaction): void {
   }
 }
 
-function decodeStoredRow(row: StoredRow): Row {
-  return decodeValueFromStorage(row.data) as Row;
+function tableStoreName(tableName: string): string {
+  return `${TABLE_STORE_PREFIX}${tableName}`;
+}
+
+function decodeStoredRecord(record: NativeStoredRecord): Row {
+  return decodeValueFromStorage(record.row) as Row;
 }
 
 function createIndexSignature(tableDef: TableDefinition): string {
   return JSON.stringify({
     version: TABLE_INDEX_SIGNATURE_VERSION,
+    layout: "native-table-store",
     sortKeyMode: tableDef.schemaValidator ? "scan" : "stored",
     indexes: Object.keys(tableDef.indexes).sort().map((indexName) => {
       const indexDef = tableDef.indexes[indexName];
@@ -213,7 +225,7 @@ function createSortKeyRanges(
   tableDef: TableDefinition,
   indexName: string,
   clauses: WhereClause[],
-): IDBKeyRange[] {
+): (IDBKeyRange | undefined)[] {
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
@@ -226,7 +238,7 @@ function createSortKeyRanges(
     validateHashBounds(indexName, filterColumns, rawBounds);
   }
 
-  const ranges: IDBKeyRange[] = [];
+  const ranges: (IDBKeyRange | undefined)[] = [];
 
   for (const rawBound of rawBounds) {
     const bound = {
@@ -235,16 +247,6 @@ function createSortKeyRanges(
       lte: expandBoundTuple(rawBound.lte, sortColumns.length, MAX),
       lt: expandBoundTuple(rawBound.lt, sortColumns.length, MIN),
     };
-
-    if (!bound.gte && !bound.gt && !bound.lte && !bound.lt) {
-      ranges.push(
-        IDBKeyRange.bound(
-          [tableDef.tableName, indexName],
-          [tableDef.tableName, indexName, []],
-        ),
-      );
-      continue;
-    }
 
     const lowerSortKey = bound.gte
       ? encodeSqliteSortKeyTuple(bound.gte, mode)
@@ -257,45 +259,91 @@ function createSortKeyRanges(
         ? encodeSqliteSortKeyTuple(bound.lt, mode)
         : undefined;
 
-    const lower = lowerSortKey
-      ? bound.gt
-        ? [tableDef.tableName, indexName, lowerSortKey, []]
-        : [tableDef.tableName, indexName, lowerSortKey]
-      : [tableDef.tableName, indexName];
-    const upper = upperSortKey
-      ? bound.lt
-        ? [tableDef.tableName, indexName, upperSortKey]
-        : [tableDef.tableName, indexName, upperSortKey, []]
-      : [tableDef.tableName, indexName, []];
+    if (lowerSortKey !== undefined && upperSortKey !== undefined) {
+      ranges.push(
+        IDBKeyRange.bound(
+          lowerSortKey,
+          upperSortKey,
+          bound.gt !== undefined,
+          bound.lt !== undefined,
+        ),
+      );
+      continue;
+    }
 
-    ranges.push(IDBKeyRange.bound(lower, upper));
+    if (lowerSortKey !== undefined) {
+      ranges.push(IDBKeyRange.lowerBound(lowerSortKey, bound.gt !== undefined));
+      continue;
+    }
+
+    if (upperSortKey !== undefined) {
+      ranges.push(IDBKeyRange.upperBound(upperSortKey, bound.lt !== undefined));
+      continue;
+    }
+
+    ranges.push(undefined);
   }
 
   return ranges;
 }
 
-function sortedUniqueEntries(
-  entries: StoredIndexEntry[],
+function isIdOnlyIndex(tableDef: TableDefinition, indexName: string): boolean {
+  const indexDef = tableDef.indexes[indexName];
+  return indexDef?.cols.length === 1 && String(indexDef.cols[0]) === "id";
+}
+
+function isUnfilteredClauses(clauses: WhereClause[]): boolean {
+  return clauses.every(
+    (clause) =>
+      (!clause.eq || clause.eq.length === 0) &&
+      (!clause.gte || clause.gte.length === 0) &&
+      (!clause.gt || clause.gt.length === 0) &&
+      (!clause.lte || clause.lte.length === 0) &&
+      (!clause.lt || clause.lt.length === 0),
+  );
+}
+
+function exactIdFromClauses(clauses: WhereClause[]): string | undefined {
+  if (clauses.length !== 1) return undefined;
+  const [clause] = clauses;
+  const hasRange =
+    (clause.gte && clause.gte.length > 0) ||
+    (clause.gt && clause.gt.length > 0) ||
+    (clause.lte && clause.lte.length > 0) ||
+    (clause.lt && clause.lt.length > 0);
+  if (hasRange || !clause.eq || clause.eq.length !== 1) return undefined;
+
+  const [condition] = clause.eq;
+  return condition.col === "id" && typeof condition.val === "string"
+    ? condition.val
+    : undefined;
+}
+
+function sortAndLimitRecords(
+  records: NativeStoredRecord[],
+  indexName: string,
   selectOptions: SelectOptions,
-): StoredIndexEntry[] {
-  entries.sort((left, right) => {
-    if (left.sortKey < right.sortKey) return -1;
-    if (left.sortKey > right.sortKey) return 1;
+): NativeStoredRecord[] {
+  records.sort((left, right) => {
+    const leftSortKey = left.indexes[indexName];
+    const rightSortKey = right.indexes[indexName];
+    if (leftSortKey < rightSortKey) return -1;
+    if (leftSortKey > rightSortKey) return 1;
     if (left.id < right.id) return -1;
     if (left.id > right.id) return 1;
     return 0;
   });
 
   if (selectOptions.order === "desc") {
-    entries.reverse();
+    records.reverse();
   }
 
   const seenIds = new Set<string>();
-  const result: StoredIndexEntry[] = [];
-  for (const entry of entries) {
-    if (seenIds.has(entry.id)) continue;
-    seenIds.add(entry.id);
-    result.push(entry);
+  const result: NativeStoredRecord[] = [];
+  for (const record of records) {
+    if (seenIds.has(record.id)) continue;
+    seenIds.add(record.id);
+    result.push(record);
     if (
       selectOptions.limit !== undefined &&
       result.length >= selectOptions.limit
@@ -307,16 +355,130 @@ function sortedUniqueEntries(
   return result;
 }
 
-async function getAllFromCursor<T>(
-  store: IDBObjectStore,
-  range: IDBKeyRange,
+function indexKeyPath(indexName: string): string {
+  return `indexes.${indexName}`;
+}
+
+function createNativeRecordFromStorageRow(
+  tableDef: TableDefinition,
+  storageRow: Row,
+): NativeStoredRecord {
+  const indexes: Record<string, string> = {};
+
+  for (const indexName of Object.keys(tableDef.indexes)) {
+    const sortKey = getSqliteIndexSortKeyValue(tableDef, indexName, storageRow);
+    if (sortKey !== null) {
+      indexes[indexName] = sortKey;
+    }
+  }
+
+  return {
+    id: storageRow.id,
+    row: storageRow,
+    indexes,
+  };
+}
+
+function createNativeRecord(
+  tableDef: TableDefinition,
+  row: Row,
+): NativeStoredRecord {
+  return createNativeRecordFromStorageRow(
+    tableDef,
+    encodeValueForStorage(row) as Row,
+  );
+}
+
+function advanceRange(
+  range: IDBKeyRange | undefined,
+  lastKey: IDBValidKey,
+  direction: IDBCursorDirection,
+): IDBKeyRange {
+  if (direction === "prev" || direction === "prevunique") {
+    if (range?.lower !== undefined) {
+      return IDBKeyRange.bound(range.lower, lastKey, range.lowerOpen, true);
+    }
+    return IDBKeyRange.upperBound(lastKey, true);
+  }
+
+  if (range?.upper !== undefined) {
+    return IDBKeyRange.bound(lastKey, range.upper, true, range.upperOpen);
+  }
+  return IDBKeyRange.lowerBound(lastKey, true);
+}
+
+async function getAllRecords<T>(
+  source: IDBObjectStore | IDBIndex,
+  query: IDBKeyRange | undefined,
+  options: { limit?: number; direction?: IDBCursorDirection } = {},
 ): Promise<T[]> {
+  const getAllRecordsFn = (source as GetAllRecordsSource<T>).getAllRecords;
+  const direction = options.direction ?? "next";
+
+  if (typeof getAllRecordsFn === "function") {
+    const results: T[] = [];
+    let currentQuery = query;
+
+    while (true) {
+      const remaining =
+        options.limit === undefined ? undefined : options.limit - results.length;
+      if (remaining !== undefined && remaining <= 0) return results;
+
+      const count =
+        remaining === undefined
+          ? IDB_READ_BATCH_SIZE
+          : Math.min(remaining, IDB_READ_BATCH_SIZE);
+      const records = await requestToPromise<IdbRecord<T>[]>(
+        getAllRecordsFn.call(source, {
+          query: currentQuery,
+          count,
+          direction,
+        }),
+      );
+
+      results.push(...records.map((record) => record.value));
+      if (records.length < count) return results;
+
+      currentQuery = advanceRange(
+        query,
+        records[records.length - 1].key,
+        direction,
+      );
+    }
+  }
+
+  if (source instanceof IDBIndex) {
+    const canPushLimit = direction !== "prev" && direction !== "prevunique";
+    const values = await requestToPromise(
+      canPushLimit && options.limit !== undefined
+        ? source.getAll(query, options.limit)
+        : source.getAll(query),
+    );
+    const ordered =
+      direction === "prev" || direction === "prevunique"
+        ? [...values].reverse()
+        : values;
+    return options.limit === undefined
+      ? (ordered as T[])
+      : (ordered.slice(0, options.limit) as T[]);
+  }
+
   const results: T[] = [];
-  let currentRange = range;
+  let currentQuery = query;
 
   while (true) {
-    const keysRequest = store.getAllKeys(currentRange, IDB_READ_BATCH_SIZE);
-    const valuesRequest = store.getAll(currentRange, IDB_READ_BATCH_SIZE);
+    const remaining =
+      options.limit === undefined ? undefined : options.limit - results.length;
+    if (remaining !== undefined && remaining <= 0) return results;
+
+    const count =
+      direction === "prev" || direction === "prevunique"
+        ? IDB_READ_BATCH_SIZE
+        : remaining === undefined
+          ? IDB_READ_BATCH_SIZE
+          : Math.min(remaining, IDB_READ_BATCH_SIZE);
+    const keysRequest = source.getAllKeys(currentQuery, count);
+    const valuesRequest = source.getAll(currentQuery, count);
     const [keys, values] = await Promise.all([
       requestToPromise(keysRequest),
       requestToPromise(valuesRequest),
@@ -324,108 +486,71 @@ async function getAllFromCursor<T>(
 
     results.push(...(values as T[]));
 
-    if (keys.length < IDB_READ_BATCH_SIZE) {
-      return results;
+    if (keys.length < count) {
+      const ordered =
+        direction === "prev" || direction === "prevunique"
+          ? [...results].reverse()
+          : results;
+      return options.limit === undefined ? ordered : ordered.slice(0, options.limit);
     }
 
-    const lastKey = keys[keys.length - 1];
-    currentRange =
-      range.upper === undefined
-        ? IDBKeyRange.lowerBound(lastKey, true)
-        : IDBKeyRange.bound(lastKey, range.upper, true, range.upperOpen);
+    currentQuery = advanceRange(currentQuery, keys[keys.length - 1], "next");
   }
 }
 
-async function deleteFromCursor(
-  store: IDBObjectStore,
-  range: IDBKeyRange,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = store.openCursor(range);
+class AsyncReadWriteLock {
+  private activeReaders = 0;
+  private writerActive = false;
+  private waitingReaders: Array<(release: LockRelease) => void> = [];
+  private waitingWriters: Array<(release: LockRelease) => void> = [];
 
-    request.onerror = () =>
-      reject(request.error ?? new Error("IDB cursor delete failed"));
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        resolve();
-        return;
-      }
+  acquireRead(): Promise<LockRelease> {
+    if (!this.writerActive && this.waitingWriters.length === 0) {
+      this.activeReaders++;
+      return Promise.resolve(() => this.releaseRead());
+    }
 
-      cursor.delete();
-      cursor.continue();
-    };
-  });
-}
-
-function tableRange(tableName: string): IDBKeyRange {
-  return IDBKeyRange.bound([tableName], [tableName, []]);
-}
-
-function rowKey(tableName: string, id: string): [string, string] {
-  return [tableName, id];
-}
-
-function indexEntriesForRow(
-  tableDef: TableDefinition,
-  row: Row,
-): StoredIndexEntry[] {
-  const storageRow = encodeValueForStorage(row) as Row;
-  const result: StoredIndexEntry[] = [];
-
-  for (const indexName of Object.keys(tableDef.indexes)) {
-    const sortKey = getSqliteIndexSortKeyValue(tableDef, indexName, storageRow);
-    if (sortKey === null) continue;
-
-    result.push({
-      tableName: tableDef.tableName,
-      indexName,
-      sortKey,
-      id: storageRow.id,
-      data: storageRow,
+    return new Promise((resolve) => {
+      this.waitingReaders.push(resolve);
     });
   }
 
-  return result;
-}
+  acquireWrite(): Promise<LockRelease> {
+    if (!this.writerActive && this.activeReaders === 0) {
+      this.writerActive = true;
+      return Promise.resolve(() => this.releaseWrite());
+    }
 
-async function deleteIndexEntriesForRow(
-  entriesStore: IDBObjectStore,
-  tableDef: TableDefinition,
-  row: Row,
-): Promise<void> {
-  for (const entry of indexEntriesForRow(tableDef, row)) {
-    await requestToPromise(
-      entriesStore.delete([
-        entry.tableName,
-        entry.indexName,
-        entry.sortKey,
-        entry.id,
-      ]),
-    );
+    return new Promise((resolve) => {
+      this.waitingWriters.push(resolve);
+    });
   }
-}
 
-async function writeRow(
-  rowsStore: IDBObjectStore,
-  entriesStore: IDBObjectStore,
-  tableDef: TableDefinition,
-  row: Row,
-  mode: "add" | "put",
-): Promise<void> {
-  const storageRow = encodeValueForStorage(row) as Row;
-  const record: StoredRow = {
-    tableName: tableDef.tableName,
-    id: storageRow.id,
-    data: storageRow,
-  };
+  private releaseRead(): void {
+    this.activeReaders--;
+    this.drain();
+  }
 
-  await requestToPromise(
-    mode === "add" ? rowsStore.add(record) : rowsStore.put(record),
-  );
+  private releaseWrite(): void {
+    this.writerActive = false;
+    this.drain();
+  }
 
-  for (const entry of indexEntriesForRow(tableDef, row)) {
-    await requestToPromise(entriesStore.put(entry));
+  private drain(): void {
+    if (this.writerActive || this.activeReaders > 0) return;
+
+    const writer = this.waitingWriters.shift();
+    if (writer) {
+      this.writerActive = true;
+      writer(() => this.releaseWrite());
+      return;
+    }
+
+    const readers = this.waitingReaders.splice(0);
+    this.activeReaders = readers.length;
+    for (const reader of readers) {
+      reader(() => this.releaseRead());
+    }
   }
 }
 
@@ -440,11 +565,11 @@ async function performInsert(
   try {
     validateBatchIds(values);
 
-    const rowsStore = tx.objectStore(ROWS_STORE);
-    const entriesStore = tx.objectStore(INDEX_ENTRIES_STORE);
-    for (const value of values) {
-      await writeRow(rowsStore, entriesStore, tableDef, value, "add");
-    }
+    const store = tx.objectStore(tableStoreName(tableDef.tableName));
+    const requests = values.map((value) =>
+      requestToPromise(store.add(createNativeRecord(tableDef, value))),
+    );
+    await Promise.all(requests);
     logIdbOperation("insert", startedAt, {
       tableName: tableDef.tableName,
       rowCount: values.length,
@@ -474,21 +599,11 @@ async function performUpsert(
   try {
     validateBatchIds(values);
 
-    const rowsStore = tx.objectStore(ROWS_STORE);
-    const entriesStore = tx.objectStore(INDEX_ENTRIES_STORE);
-    for (const value of values) {
-      const existing = await requestToPromise<StoredRow | undefined>(
-        rowsStore.get(rowKey(tableDef.tableName, value.id)),
-      );
-      if (existing) {
-        await deleteIndexEntriesForRow(
-          entriesStore,
-          tableDef,
-          decodeStoredRow(existing),
-        );
-      }
-      await writeRow(rowsStore, entriesStore, tableDef, value, "put");
-    }
+    const store = tx.objectStore(tableStoreName(tableDef.tableName));
+    const requests = values.map((value) =>
+      requestToPromise(store.put(createNativeRecord(tableDef, value))),
+    );
+    await Promise.all(requests);
     logIdbOperation("upsert", startedAt, {
       tableName: tableDef.tableName,
       rowCount: values.length,
@@ -514,29 +629,15 @@ async function performDelete(
 ): Promise<void> {
   if (ids.length === 0) return;
   const startedAt = nowMs();
-  let deletedCount = 0;
 
   try {
-    const rowsStore = tx.objectStore(ROWS_STORE);
-    const entriesStore = tx.objectStore(INDEX_ENTRIES_STORE);
-    for (const id of ids) {
-      const existing = await requestToPromise<StoredRow | undefined>(
-        rowsStore.get(rowKey(tableDef.tableName, id)),
-      );
-      if (!existing) continue;
-
-      await deleteIndexEntriesForRow(
-        entriesStore,
-        tableDef,
-        decodeStoredRow(existing),
-      );
-      await requestToPromise(rowsStore.delete(rowKey(tableDef.tableName, id)));
-      deletedCount++;
-    }
+    const store = tx.objectStore(tableStoreName(tableDef.tableName));
+    const requests = ids.map((id) => requestToPromise(store.delete(id)));
+    await Promise.all(requests);
 
     logIdbOperation("delete", startedAt, {
       tableName: tableDef.tableName,
-      rowCount: deletedCount,
+      rowCount: ids.length,
     });
   } catch (error) {
     logIdbOperation(
@@ -544,7 +645,7 @@ async function performDelete(
       startedAt,
       {
         tableName: tableDef.tableName,
-        rowCount: deletedCount,
+        rowCount: ids.length,
       },
       error,
     );
@@ -574,30 +675,64 @@ async function performScan(
   }
 
   try {
-    const entriesStore = tx.objectStore(INDEX_ENTRIES_STORE);
-    const rowsStore = tx.objectStore(ROWS_STORE);
-    const entries: StoredIndexEntry[] = [];
+    const store = tx.objectStore(tableStoreName(tableName));
+    const direction: IDBCursorDirection =
+      selectOptions.order === "desc" ? "prev" : "next";
 
-    for (const range of createSortKeyRanges(tableDef, indexName, clauses)) {
-      entries.push(
-        ...(await getAllFromCursor<StoredIndexEntry>(entriesStore, range)),
+    if (isIdOnlyIndex(tableDef, indexName)) {
+      const exactId = exactIdFromClauses(clauses);
+      if (exactId !== undefined) {
+        const record = await requestToPromise<NativeStoredRecord | undefined>(
+          store.get(exactId),
+        );
+        const result = record ? [decodeStoredRecord(record)] : [];
+        logIdbOperation("scan", startedAt, {
+          tableName,
+          indexName,
+          rowCount: result.length,
+        });
+        return result;
+      }
+
+      if (
+        isUnfilteredClauses(clauses) &&
+        selectOptions.limit === undefined
+      ) {
+        const records = await getAllRecords<NativeStoredRecord>(store, undefined, {
+          direction,
+        });
+        const result = records.map(decodeStoredRecord);
+        logIdbOperation("scan", startedAt, {
+          tableName,
+          indexName,
+          rowCount: result.length,
+        });
+        return result;
+      }
+    }
+
+    const index = store.index(indexName);
+    const ranges = createSortKeyRanges(tableDef, indexName, clauses);
+    const canPushLimit = ranges.length === 1;
+    const records: NativeStoredRecord[] = [];
+
+    for (const range of ranges) {
+      const remaining =
+        canPushLimit && selectOptions.limit !== undefined
+          ? selectOptions.limit - records.length
+          : undefined;
+      if (remaining !== undefined && remaining <= 0) break;
+
+      records.push(
+        ...(await getAllRecords<NativeStoredRecord>(index, range, {
+          direction,
+          limit: remaining,
+        })),
       );
     }
 
-    const result: Row[] = [];
-    for (const entry of sortedUniqueEntries(entries, selectOptions)) {
-      if (entry.data !== undefined) {
-        result.push(decodeValueFromStorage(entry.data) as Row);
-        continue;
-      }
-
-      const storedRow = await requestToPromise<StoredRow | undefined>(
-        rowsStore.get(rowKey(tableName, entry.id)),
-      );
-      if (storedRow) {
-        result.push(decodeStoredRow(storedRow));
-      }
-    }
+    const sorted = sortAndLimitRecords(records, indexName, selectOptions);
+    const result = sorted.map(decodeStoredRecord);
 
     logIdbOperation("scan", startedAt, {
       tableName,
@@ -652,7 +787,6 @@ class IdbDriverTx implements DBDriverTX {
         logIdbOperation("transaction commit", this.startedAt, {
           mode: this.tx.mode,
         });
-        this.onFinish();
       } catch (error) {
         logIdbOperation(
           "transaction commit",
@@ -663,6 +797,8 @@ class IdbDriverTx implements DBDriverTX {
           error,
         );
         throw error;
+      } finally {
+        this.onFinish();
       }
     });
   }
@@ -677,11 +813,12 @@ class IdbDriverTx implements DBDriverTX {
         await this.done;
       } catch {
         // Abort is the expected rollback path.
+      } finally {
+        logIdbOperation("transaction rollback", this.startedAt, {
+          mode: this.tx.mode,
+        });
+        this.onFinish();
       }
-      logIdbOperation("transaction rollback", this.startedAt, {
-        mode: this.tx.mode,
-      });
-      this.onFinish();
     });
   }
 
@@ -744,19 +881,24 @@ class IdbDriverTx implements DBDriverTX {
 
 export class IdbDriver implements DBDriver {
   private db: IDBDatabase;
+  private readonly dbName: string;
+  private readonly factory: IDBFactory;
+  private readonly options: OpenIndexedDBDriverOptions;
   private tableDefinitions = new Map<string, TableDefinition>();
-  private lock = new AwaitLock();
+  private lock = new AsyncReadWriteLock();
   private closedReason: Error | null = null;
 
   constructor(
+    dbName: string,
     db: IDBDatabase,
-    options: Pick<OpenIndexedDBDriverOptions, "onVersionChange"> = {},
+    factory: IDBFactory,
+    options: OpenIndexedDBDriverOptions = {},
   ) {
+    this.dbName = dbName;
     this.db = db;
-    this.db.onversionchange = (event) => {
-      options.onVersionChange?.(event);
-      this.close(staleConnectionError(event));
-    };
+    this.factory = factory;
+    this.options = options;
+    this.attachVersionChangeHandler();
   }
 
   close(reason: Error = new Error("IndexedDB connection is closed")): void {
@@ -767,87 +909,49 @@ export class IdbDriver implements DBDriver {
   }
 
   *beginTx(): Generator<DBCmd, DBDriverTX> {
-    yield* unwrapCb(async () => {
-      await this.lock.acquireAsync();
-    });
+    const release = yield* unwrapCb(async () => this.lock.acquireWrite());
 
     let tx: IDBTransaction;
     try {
       this.throwIfClosed();
+      const storeNames = this.loadedStoreNames();
       const startedAt = nowMs();
-      tx = this.db.transaction([ROWS_STORE, INDEX_ENTRIES_STORE], "readwrite");
+      tx = this.createTransaction(storeNames, "readwrite");
       logIdbOperation("transaction start", startedAt, {
         mode: tx.mode,
       });
-      return new IdbDriverTx(tx, this.tableDefinitions, () => {
-        this.lock.release();
-      }, startedAt);
+      return new IdbDriverTx(tx, this.tableDefinitions, release, startedAt);
     } catch (error) {
-      this.lock.release();
+      release();
       throw error;
     }
   }
 
   *loadTables(tableDefinitions: TableDefinition<any>[]): Generator<DBCmd, void> {
-    yield* this.withTransaction(
-      "readwrite",
-      async (tx) => {
+    yield* unwrapCb(async () => {
+      const release = await this.lock.acquireWrite();
+      try {
+        this.throwIfClosed();
         for (const tableDef of tableDefinitions) {
           assertSafeTableDefinition(tableDef);
         }
 
-        const rowsStore = tx.objectStore(ROWS_STORE);
-        const entriesStore = tx.objectStore(INDEX_ENTRIES_STORE);
-        const metadataStore = tx.objectStore(TABLE_METADATA_STORE);
+        await this.ensureSchema(tableDefinitions);
+        await this.refreshTableMetadata(tableDefinitions);
 
         for (const tableDef of tableDefinitions) {
-          const indexSignature = createIndexSignature(tableDef);
-          const metadata = await requestToPromise<
-            StoredTableMetadata | undefined
-          >(metadataStore.get(tableDef.tableName));
-
-          if (metadata?.indexSignature === indexSignature) {
-            this.tableDefinitions.set(tableDef.tableName, tableDef);
-            continue;
-          }
-
-          const startedAt = nowMs();
-          await deleteFromCursor(entriesStore, tableRange(tableDef.tableName));
-          const rows = await getAllFromCursor<StoredRow>(
-            rowsStore,
-            tableRange(tableDef.tableName),
-          );
-
-          for (const row of rows) {
-            for (const entry of indexEntriesForRow(
-              tableDef,
-              decodeStoredRow(row),
-            )) {
-              await requestToPromise(entriesStore.put(entry));
-            }
-          }
-
-          await requestToPromise(
-            metadataStore.put({
-              tableName: tableDef.tableName,
-              indexSignature,
-            } satisfies StoredTableMetadata),
-          );
           this.tableDefinitions.set(tableDef.tableName, tableDef);
-          logIdbOperation("rebuild indexes", startedAt, {
-            tableName: tableDef.tableName,
-            rowCount: rows.length,
-          });
         }
-      },
-      [TABLE_METADATA_STORE],
-    );
+      } finally {
+        release();
+      }
+    });
   }
 
   *insert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", async (tx) => {
+    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
       await performInsert(tx, tableDef, values);
     });
   }
@@ -855,7 +959,7 @@ export class IdbDriver implements DBDriver {
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", async (tx) => {
+    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
       await performUpsert(tx, tableDef, values);
     });
   }
@@ -863,7 +967,7 @@ export class IdbDriver implements DBDriver {
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", async (tx) => {
+    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
       await performDelete(tx, tableDef, values);
     });
   }
@@ -874,22 +978,156 @@ export class IdbDriver implements DBDriver {
     clauses: WhereClause[],
     selectOptions: SelectOptions,
   ): Generator<DBCmd, unknown[]> {
-    return yield* this.withTransaction("readonly", async (tx) =>
-      performScan(
-        tx,
-        this.tableDefinitions,
-        table,
-        indexName,
-        clauses,
-        selectOptions,
+    return yield* this.withTransaction(
+      "readonly",
+      [tableStoreName(table)],
+      async (tx) =>
+        performScan(
+          tx,
+          this.tableDefinitions,
+          table,
+          indexName,
+          clauses,
+          selectOptions,
+        ),
+    );
+  }
+
+  private async ensureSchema(
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<void> {
+    if (!(await this.needsSchemaUpgrade(tableDefinitions))) return;
+
+    const nextVersion = this.db.version + 1;
+    this.db.close();
+    this.db = await openRequestToPromise(
+      this.factory.open(this.dbName, nextVersion),
+      this.options,
+      (db, tx) => applySchemaUpgrade(db, tx, tableDefinitions),
+    );
+    this.attachVersionChangeHandler();
+  }
+
+  private async needsSchemaUpgrade(
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<boolean> {
+    if (!this.db.objectStoreNames.contains(TABLE_METADATA_STORE)) return true;
+    if (this.db.objectStoreNames.contains(OLD_ROWS_STORE)) return true;
+    if (this.db.objectStoreNames.contains(OLD_INDEX_ENTRIES_STORE)) return true;
+
+    for (const tableDef of tableDefinitions) {
+      const storeName = tableStoreName(tableDef.tableName);
+      if (!this.db.objectStoreNames.contains(storeName)) return true;
+
+      const tx = this.db.transaction(storeName, "readonly");
+      const store = tx.objectStore(storeName);
+      const expectedIndexes = new Set(Object.keys(tableDef.indexes));
+      const actualIndexes = Array.from(store.indexNames);
+      let storeNeedsUpgrade = actualIndexes.length !== expectedIndexes.size;
+
+      for (const indexName of actualIndexes) {
+        if (!expectedIndexes.has(indexName)) {
+          storeNeedsUpgrade = true;
+          continue;
+        }
+        if (store.index(indexName).keyPath !== indexKeyPath(indexName)) {
+          storeNeedsUpgrade = true;
+        }
+      }
+      await txDone(tx);
+      if (storeNeedsUpgrade) return true;
+    }
+
+    return false;
+  }
+
+  private async refreshTableMetadata(
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<void> {
+    const storeNames = [
+      TABLE_METADATA_STORE,
+      ...tableDefinitions.map((tableDef) => tableStoreName(tableDef.tableName)),
+    ];
+    const tx = this.createTransaction(storeNames, "readwrite");
+    const done = txDone(tx);
+
+    try {
+      const metadataStore = tx.objectStore(TABLE_METADATA_STORE);
+
+      for (const tableDef of tableDefinitions) {
+        const indexSignature = createIndexSignature(tableDef);
+        const metadata = await requestToPromise<
+          StoredTableMetadata | undefined
+        >(metadataStore.get(tableDef.tableName));
+
+        if (metadata?.indexSignature !== indexSignature) {
+          await this.rewriteTableRecords(tx, tableDef);
+          await requestToPromise(
+            metadataStore.put({
+              tableName: tableDef.tableName,
+              indexSignature,
+            } satisfies StoredTableMetadata),
+          );
+        }
+      }
+
+      tx.commit?.();
+      await done;
+    } catch (error) {
+      abortQuietly(tx);
+      try {
+        await done;
+      } catch {
+        // Preserve original metadata refresh error.
+      }
+      throw error;
+    }
+  }
+
+  private async rewriteTableRecords(
+    tx: IDBTransaction,
+    tableDef: TableDefinition,
+  ): Promise<void> {
+    const startedAt = nowMs();
+    const store = tx.objectStore(tableStoreName(tableDef.tableName));
+    const records = await getAllRecords<NativeStoredRecord>(store, undefined);
+    const requests = records.map((record) =>
+      requestToPromise(
+        store.put(
+          createNativeRecordFromStorageRow(tableDef, record.row as Row),
+        ),
       ),
     );
+    await Promise.all(requests);
+    logIdbOperation("rebuild indexes", startedAt, {
+      tableName: tableDef.tableName,
+      rowCount: records.length,
+    });
+  }
+
+  private createTransaction(
+    storeNames: string[],
+    mode: StoreMode,
+  ): IDBTransaction {
+    const options =
+      mode === "readwrite"
+        ? { durability: this.options.durability ?? "relaxed" }
+        : undefined;
+    return this.db.transaction(storeNames, mode, options);
   }
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef) throw new Error(`Table ${tableName} not found`);
     return tableDef;
+  }
+
+  private loadedStoreNames(): string[] {
+    const storeNames = [...this.tableDefinitions.keys()].map(tableStoreName);
+    if (storeNames.length === 0) {
+      throw new Error("No tables loaded");
+    }
+    return storeNames;
   }
 
   private throwIfClosed(): void {
@@ -900,21 +1138,21 @@ export class IdbDriver implements DBDriver {
 
   private *withTransaction<T>(
     mode: StoreMode,
+    storeNames: string[],
     run: (tx: IDBTransaction) => Promise<T>,
-    extraStores: string[] = [],
   ): Generator<DBCmd, T> {
     return yield* unwrapCb(async () => {
-      await this.lock.acquireAsync();
+      const release =
+        mode === "readonly"
+          ? await this.lock.acquireRead()
+          : await this.lock.acquireWrite();
       let tx: IDBTransaction | undefined;
       let done: Promise<void> | undefined;
       const transactionStartedAt = nowMs();
 
       try {
         this.throwIfClosed();
-        tx = this.db.transaction(
-          [ROWS_STORE, INDEX_ENTRIES_STORE, ...extraStores],
-          mode,
-        );
+        tx = this.createTransaction(storeNames, mode);
         logIdbOperation("transaction start", transactionStartedAt, {
           mode,
         });
@@ -949,34 +1187,84 @@ export class IdbDriver implements DBDriver {
         }
         throw error;
       } finally {
-        this.lock.release();
+        release();
       }
     });
+  }
+
+  private attachVersionChangeHandler(): void {
+    this.db.onversionchange = (event) => {
+      this.options.onVersionChange?.(event);
+      this.close(staleConnectionError(event));
+    };
+  }
+}
+
+function applyBaseUpgrade(db: IDBDatabase): void {
+  if (db.objectStoreNames.contains(OLD_ROWS_STORE)) {
+    db.deleteObjectStore(OLD_ROWS_STORE);
+  }
+  if (db.objectStoreNames.contains(OLD_INDEX_ENTRIES_STORE)) {
+    db.deleteObjectStore(OLD_INDEX_ENTRIES_STORE);
+  }
+  if (!db.objectStoreNames.contains(TABLE_METADATA_STORE)) {
+    db.createObjectStore(TABLE_METADATA_STORE, {
+      keyPath: "tableName",
+    });
+  }
+}
+
+function applySchemaUpgrade(
+  db: IDBDatabase,
+  tx: IDBTransaction,
+  tableDefinitions: TableDefinition<any>[],
+): void {
+  const resetOldLayout =
+    db.objectStoreNames.contains(OLD_ROWS_STORE) ||
+    db.objectStoreNames.contains(OLD_INDEX_ENTRIES_STORE);
+
+  if (resetOldLayout && db.objectStoreNames.contains(TABLE_METADATA_STORE)) {
+    db.deleteObjectStore(TABLE_METADATA_STORE);
+  }
+
+  applyBaseUpgrade(db);
+
+  for (const tableDef of tableDefinitions) {
+    const storeName = tableStoreName(tableDef.tableName);
+    const store = db.objectStoreNames.contains(storeName)
+      ? tx.objectStore(storeName)
+      : db.createObjectStore(storeName, { keyPath: "id" });
+    const expectedIndexes = new Set(Object.keys(tableDef.indexes));
+
+    for (const indexName of Array.from(store.indexNames)) {
+      if (
+        !expectedIndexes.has(indexName) ||
+        store.index(indexName).keyPath !== indexKeyPath(indexName)
+      ) {
+        store.deleteIndex(indexName);
+      }
+    }
+
+    for (const indexName of expectedIndexes) {
+      if (!store.indexNames.contains(indexName)) {
+        store.createIndex(indexName, indexKeyPath(indexName));
+      }
+    }
   }
 }
 
 function openRequestToPromise(
   request: IDBOpenDBRequest,
   options: Pick<OpenIndexedDBDriverOptions, "onBlocked"> = {},
+  upgrade: (db: IDBDatabase, tx: IDBTransaction) => void = applyBaseUpgrade,
 ): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(ROWS_STORE)) {
-        db.createObjectStore(ROWS_STORE, {
-          keyPath: ["tableName", "id"],
-        });
+      if (!request.transaction) {
+        reject(new Error("IndexedDB upgrade transaction is missing"));
+        return;
       }
-      if (!db.objectStoreNames.contains(INDEX_ENTRIES_STORE)) {
-        db.createObjectStore(INDEX_ENTRIES_STORE, {
-          keyPath: ["tableName", "indexName", "sortKey", "id"],
-        });
-      }
-      if (!db.objectStoreNames.contains(TABLE_METADATA_STORE)) {
-        db.createObjectStore(TABLE_METADATA_STORE, {
-          keyPath: "tableName",
-        });
-      }
+      upgrade(request.result, request.transaction);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () =>
@@ -996,9 +1284,10 @@ export async function openIndexedDBDriver(
     throw new Error("IndexedDB is not available in this environment");
   }
 
-  const db = await openRequestToPromise(
-    factory.open(dbName, options.version ?? DEFAULT_VERSION),
-    options,
-  );
-  return new IdbDriver(db, options);
+  const request =
+    options.version === undefined
+      ? factory.open(dbName)
+      : factory.open(dbName, options.version);
+  const db = await openRequestToPromise(request, options);
+  return new IdbDriver(dbName, db, factory, options);
 }
