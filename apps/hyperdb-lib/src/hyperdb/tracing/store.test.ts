@@ -9,7 +9,9 @@ import {
 } from "./store";
 
 const flushTraceNotifications = async (): Promise<void> => {
-  await Promise.resolve();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 };
 
 describe("devtool tracing store", () => {
@@ -104,7 +106,7 @@ describe("devtool tracing store", () => {
     unsubscribe();
   });
 
-  it("coalesces listener notifications into a microtask", async () => {
+  it("coalesces listener notifications into an async task", async () => {
     const store = new HyperDBTraceStore();
     let notifyCount = 0;
     const unsubscribe = store.subscribe(() => {
@@ -118,6 +120,9 @@ describe("devtool tracing store", () => {
     endTraceSuccess(context);
 
     expect(store.getSnapshot()[0]?.status).toBe("success");
+    expect(notifyCount).toBe(0);
+
+    await Promise.resolve();
     expect(notifyCount).toBe(0);
 
     await flushTraceNotifications();
