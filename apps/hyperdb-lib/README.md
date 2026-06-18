@@ -4,6 +4,14 @@ HyperDB is a small local database API with typed schemas, indexed queries,
 generator-based selectors/actions, pluggable storage drivers, React hooks, and a
 React devtool.
 
+HyperDB works in three layers:
+
+- Tables define stored row shape and named indexes.
+- Queries, selectors, and actions are generator commands that describe reads and
+  writes without calling storage directly.
+- A `DB` runs those commands against a driver. Drivers provide the actual
+  storage backend, such as in-memory B+ trees, SQLite, or IndexedDB.
+
 ## Schema
 
 Define tables with `defineTable`. Every table must have a string `id`; HyperDB
@@ -156,8 +164,6 @@ const baseDb = new DB(new BptreeInmemDriver(), {
   runtimeValidation: true,
   freezeArgs: true,
   freezeRows: false,
-  trace: true,
-  autoTrace: true,
   tracer: hyperDBTraceStore,
 });
 
@@ -173,8 +179,6 @@ Runtime options:
 - `freezeArgs`: deep-freeze selector args used by cached selectors/runs.
 - `freezeRows`: deep-freeze rows after write normalization.
 - `traits`: initial metadata traits attached to the DB.
-- `trace`: record traces even before the devtool is open.
-- `autoTrace`: allow listener/devtool-activated tracing. Defaults to `true`.
 - `tracer`: per-DB tracer implementation used to configure tracing behavior for
   this database instead of using the global default tracer.
 
@@ -192,14 +196,25 @@ Storage is provided by drivers:
 - `BptreeInmemDriver`: in-memory driver, good for tests and ephemeral local data.
 - `SqlDriver`: synchronous SQLite-compatible driver.
 - `AsyncSqlDriver`: async SQLite-compatible driver.
+- `IdbDriver`: async IndexedDB driver for browser persistence.
 
 ```ts
-import { initSqlJsWasm } from "./src/hyperdb/drivers/sqlite/init-sql-js-wasm";
+import {
+  DB,
+  BptreeInmemDriver,
+  execAsync,
+  initSqlJsWasm,
+  openIndexedDBDriver,
+} from "@will-be-done/hyperdb-lib";
 
 const memoryDb = new DB(new BptreeInmemDriver());
 
 const sqliteDriver = await initSqlJsWasm();
 const sqliteDb = new DB(sqliteDriver);
+
+const idbDriver = await openIndexedDBDriver("my-app-db");
+const idbDb = new DB(idbDriver);
+await execAsync(idbDb.loadTables([tasksTable]));
 ```
 
 SQLite helpers currently live next to the drivers:
@@ -207,9 +222,14 @@ SQLite helpers currently live next to the drivers:
 `sql.js`, and `src/hyperdb/drivers/sqlite/init-wa-sqlite.ts` returns an
 `AsyncSqlDriver` backed by `wa-sqlite`.
 
+Use `execAsync`/`asyncDispatch` with IndexedDB and async SQLite. The in-memory
+driver and synchronous SQLite driver can also be used through `SyncDB`,
+`execSync`, and `syncDispatch`.
+
 The storage codec normalizes values before they reach drivers. SQLite encodes
 `bigint`, `ArrayBuffer`, and typed-array/data-view values around JSON storage;
-the in-memory driver stores normalized JS values directly.
+the IndexedDB driver uses the same storage encoding and sort-key ordering as the
+SQLite driver; the in-memory driver stores normalized JS values directly.
 
 ## React And Devtools
 

@@ -9,7 +9,11 @@
     ".": "./src/index.ts",
     "./react": "./src/react.ts",
     "./devtool": "./src/devtool/index.ts",
-    "./tracing": "./src/hyperdb/tracing/index.ts"
+    "./tracing": "./src/hyperdb/tracing/index.ts",
+    "./drivers/inmemory": "./src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",
+    "./drivers/sqlite": "./src/hyperdb/drivers/sqlite/index.ts",
+    "./drivers/sqlite/wasm": "./src/hyperdb/drivers/sqlite/wasm.ts",
+    "./drivers/idb": "./src/hyperdb/drivers/idb/idb-driver.ts"
   },
   "scripts": {
     "build": "vite build && tsc",
@@ -37,12 +41,14 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/sql.js": "^1.4.9",
+    "@vitest/browser-playwright": "4.1.5",
     "dependency-cruiser": "^17.4.3",
     "eslint": "^9.39.1",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-unused-imports": "^4.3.0",
     "globals": "^16.5.0",
+    "playwright": "^1.61.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "typescript": "~5.9.3",

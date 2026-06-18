@@ -1,14 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, expect, it } from "vitest";
-import type { DBDriver } from "../core/driver";
 import type { Row, Value, WhereClause } from "../core/primitives";
-import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
+import { AsyncDB } from "../test-utils/async-db";
+import { createDriverFactories } from "../test-utils/driver-factories";
 import { DB } from "./db";
-import { SyncDB } from "./sync-db";
 
 const stringTable = defineTable("indexTypesString", {
   id: v.string(),
@@ -289,53 +287,53 @@ const cases: IndexTypeCase[] = [
   },
 ];
 
-const driverFactories: [string, () => Promise<DBDriver>][] = [
-  ["SqlDriver", () => initSqlJsWasm()],
-  ["BptreeInmemDriver", async () => new BptreeInmemDriver()],
-];
-
 describe("runtime index value types", () => {
-  for (const [driverName, createDriver] of driverFactories) {
+  for (const [driverName, createDriver] of createDriverFactories()) {
     describe(driverName, () => {
       for (const testCase of cases) {
         it(`indexes and scans ${testCase.name} values`, async () => {
-          const db = new SyncDB(new DB(await createDriver()));
-          db.loadTables([testCase.table]);
-          db.insert(testCase.table, testCase.rows);
+          const db = new AsyncDB(new DB(await createDriver()));
+          await db.loadTables([testCase.table]);
+          await db.insert(testCase.table, testCase.rows);
 
           expect(
-            db
-              .intervalScan(testCase.table, "byValue", [{}])
-              .map((row) => row.id),
+            (await db.intervalScan(testCase.table, "byValue", [{}])).map(
+              (row) => row.id,
+            ),
           ).toEqual(testCase.scanIds);
 
           const eqClause = [{ eq: [{ col: "value", val: testCase.eqValue }] }];
           expect(
-            db
-              .intervalScan(testCase.table, "byValue", eqClause)
-              .map((row) => row.id),
+            (await db.intervalScan(testCase.table, "byValue", eqClause)).map(
+              (row) => row.id,
+            ),
           ).toEqual(testCase.eqIds);
           expect(
-            db
-              .intervalScan(testCase.table, "byValueHash", eqClause)
+            (
+              await db.intervalScan(testCase.table, "byValueHash", eqClause)
+            )
               .map((row) => row.id)
               .sort(),
           ).toEqual([...testCase.eqIds].sort());
 
           if (testCase.range) {
             expect(
-              db
-                .intervalScan(testCase.table, "byValue", testCase.range.clauses)
-                .map((row) => row.id),
+              (
+                await db.intervalScan(
+                  testCase.table,
+                  "byValue",
+                  testCase.range.clauses,
+                )
+              ).map((row) => row.id),
             ).toEqual(testCase.range.ids);
           }
         });
       }
 
       it("indexes primitive fields from union object variants", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([unionObjectTable]);
-        db.insert(unionObjectTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([unionObjectTable]);
+        await db.insert(unionObjectTable, [
           {
             id: "task-2",
             type: "task",
@@ -365,36 +363,36 @@ describe("runtime index value types", () => {
         ]);
 
         expect(
-          db
-            .intervalScan(unionObjectTable, "byContent", [{}])
-            .map((row) => row.id),
+          (await db.intervalScan(unionObjectTable, "byContent", [{}])).map(
+            (row) => row.id,
+          ),
         ).toEqual(["task-1", "task-2"]);
 
         expect(
-          db
-            .intervalScan(unionObjectTable, "byContent", [
+          (
+            await db.intervalScan(unionObjectTable, "byContent", [
               { eq: [{ col: "content", val: "Ship fix" }] },
             ])
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["task-1"]);
         expect(
-          db
-            .intervalScan(unionObjectTable, "byCount", [
+          (
+            await db.intervalScan(unionObjectTable, "byCount", [
               { gt: [{ col: "count", val: 1 }] },
             ])
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["task-2"]);
         expect(
-          db
-            .intervalScan(unionObjectTable, "byTemplate", [
+          (
+            await db.intervalScan(unionObjectTable, "byTemplate", [
               { eq: [{ col: "template", val: "Daily review" }] },
             ])
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["template-3"]);
         expect(
-          db
-            .intervalScan(unionObjectTable, "byUnionType", [{}])
-            .map((row) => row.id),
+          (await db.intervalScan(unionObjectTable, "byUnionType", [{}])).map(
+            (row) => row.id,
+          ),
         ).toEqual(["task-2", "task-1", "template-3", "template-4"]);
       });
     });

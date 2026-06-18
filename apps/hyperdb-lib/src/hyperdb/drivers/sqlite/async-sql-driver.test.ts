@@ -1,15 +1,9 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { defineTable } from "../../schema/table";
-import SQLiteAsyncESMFactory from "wa-sqlite/dist/wa-sqlite-async.mjs";
-import sqlWasmUrl from "wa-sqlite/dist/wa-sqlite-async.wasm?url";
-import * as SQLite from "wa-sqlite";
-import { MemoryAsyncVFS } from "wa-sqlite/src/examples/MemoryAsyncVFS.js";
-import { AsyncSqlDriver } from "./async-sql-driver";
 import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
-import { normalizeWasmUrl } from "./wasm-url";
 import { v } from "../../schema/values";
+import { initWasmIDBAsync } from "./init-wa-sqlite";
 
 type Task = {
   type: "task";
@@ -34,27 +28,8 @@ const tasksTable = defineTable("tasks", {
   .index("byTitle", ["title"], { type: "hash" })
   .index("projectIdState", ["projectId", "state", "lastToggledAt"]);
 
-const wasmBinaryPath = (url: string): string =>
-  normalizeWasmUrl(url).replace(/^\/node_modules\//, "node_modules/");
-
 describe("db", async () => {
-  for (const driver of [
-    async () => {
-      const module = await SQLiteAsyncESMFactory({
-        wasmBinary: readFileSync(wasmBinaryPath(sqlWasmUrl)),
-      });
-
-      const sqlite3 = SQLite.Factory(module);
-
-      // @ts-expect-error wrong typing here
-      const vfs = await MemoryAsyncVFS.create("my-db", module);
-      sqlite3.vfs_register(vfs, true);
-
-      const db = await sqlite3.open_v2("test-db");
-
-      return new AsyncSqlDriver(sqlite3, db);
-    },
-  ]) {
+  for (const driver of [initWasmIDBAsync]) {
     it("works", async () => {
       const db = new DB(await driver());
 

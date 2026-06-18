@@ -8,7 +8,4 @@ export * from "./runtime/subscribable-db";
 export * from "./schema/table";
 export * from "./schema/values";
 export * from "./tracing";
-export * from "./drivers/sqlite/sql-driver";
-export * from "./drivers/sqlite/async-sql-driver";
-export * from "./drivers/inmemory/bptree-inmem-driver";
 export * from "../react";

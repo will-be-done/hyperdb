@@ -1,4 +1,8 @@
 export function normalizeWasmUrl(url: string): string {
+  if (typeof window !== "undefined") {
+    return url;
+  }
+
   if (url.startsWith("/@fs/")) {
     return url.slice("/@fs".length);
   }
@@ -7,6 +11,10 @@ export function normalizeWasmUrl(url: string): string {
 }
 
 export function normalizeWasmFetchUrl(url: string): string {
+  if (typeof window !== "undefined") {
+    return url;
+  }
+
   if (url.startsWith("/@fs/")) {
     return `file://${url.slice("/@fs".length)}`;
   }

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { DB } from "./db";
-import { SyncDB, SyncDBTx } from "./sync-db";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
+import { AsyncDB, type AsyncDBTx } from "../test-utils/async-db";
+import { createDriverFactories } from "../test-utils/driver-factories";
 import { v } from "../schema/values";
 
 type Task = {
@@ -20,19 +19,19 @@ const tasksTable = defineTable("tasks", {
   .index("byTitles", ["title"]);
 
 describe("Database Transactions", async () => {
-  for (const [driver, name] of [
-    [async () => await initSqlJsWasm(), "SqlDriver"],
-    [async () => new BptreeInmemDriver(), "BptreeInmemDriver"],
-  ] as const) {
+  for (const [name, createDriver] of createDriverFactories()) {
     describe(`${name}`, () => {
       it("basic transaction operations", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
-        const makeScan = (idxName: "byId" | "byIds", d: SyncDBTx | SyncDB) =>
-          d.intervalScan(tasksTable, idxName, [
+        const makeScan = async (
+          idxName: "byId" | "byIds",
+          d: AsyncDBTx | AsyncDB,
+        ) =>
+          await d.intervalScan(tasksTable, idxName, [
             {
               eq: [{ col: "id", val: "task-1" }],
             },
@@ -46,48 +45,48 @@ describe("Database Transactions", async () => {
           id: "task-2",
           title: "Task 2",
         };
-        tx.insert(tasksTable, [task1, task2]);
+        await tx.insert(tasksTable, [task1, task2]);
 
-        const btreeTxData = makeScan("byIds", tx);
-        const hashTxData = makeScan("byId", tx);
+        const btreeTxData = await makeScan("byIds", tx);
+        const hashTxData = await makeScan("byId", tx);
         expect(btreeTxData.length).toBe(1);
         expect(btreeTxData).toEqual(hashTxData);
 
-        tx.upsert(tasksTable, [{ ...task1, title: "Task 11" }]);
-        tx.rollback();
+        await tx.upsert(tasksTable, [{ ...task1, title: "Task 11" }]);
+        await tx.rollback();
 
-        const btreeData = makeScan("byIds", db);
-        const hashData = makeScan("byId", db);
+        const btreeData = await makeScan("byIds", db);
+        const hashData = await makeScan("byId", db);
 
         expect(btreeData.length).toBe(0);
         expect(hashData.length).toBe(0);
       });
 
       it.skip("transaction commit makes changes visible", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         const task: Task = {
           id: "task-commit",
           title: "Commit Test",
         };
 
-        tx.insert(tasksTable, [task]);
+        await tx.insert(tasksTable, [task]);
 
         // Changes should not be visible in main db before commit
         const beforeCommit = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-commit" }] },
           ]),
         );
         expect(beforeCommit.length).toBe(0);
 
-        tx.commit();
+        await tx.commit();
 
         // Changes should be visible in main db after commit
         const afterCommit = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-commit" }] },
           ]),
         );
@@ -96,42 +95,42 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction rollback discards changes", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data
         const initialTask: Task = {
           id: "task-initial",
           title: "Initial Task",
         };
-        db.insert(tasksTable, [initialTask]);
+        await db.insert(tasksTable, [initialTask]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Insert new task in transaction
         const newTask: Task = {
           id: "task-rollback",
           title: "Rollback Test",
         };
-        tx.insert(tasksTable, [newTask]);
+        await tx.insert(tasksTable, [newTask]);
 
         // Upsert existing task in transaction
-        tx.upsert(tasksTable, [{ ...initialTask, title: "Updated Title" }]);
+        await tx.upsert(tasksTable, [{ ...initialTask, title: "Updated Title" }]);
 
         // Delete existing task in transaction
-        tx.delete(tasksTable, ["task-initial"]);
+        await tx.delete(tasksTable, ["task-initial"]);
 
         // Rollback changes
-        tx.rollback();
+        await tx.rollback();
 
         // New task should not exist
-        const newTaskResult = db.intervalScan(tasksTable, "byId", [
+        const newTaskResult = await db.intervalScan(tasksTable, "byId", [
           { eq: [{ col: "id", val: "task-rollback" }] },
         ]);
         expect(newTaskResult.length).toBe(0);
 
         // Original task should be unchanged
-        const originalTaskResult = db.intervalScan(tasksTable, "byId", [
+        const originalTaskResult = await db.intervalScan(tasksTable, "byId", [
           { eq: [{ col: "id", val: "task-initial" }] },
         ]);
         expect(originalTaskResult.length).toBe(1);
@@ -139,21 +138,21 @@ describe("Database Transactions", async () => {
       });
 
       it.skip("transaction isolation - reads don't see uncommitted changes", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const task1: Task = {
           id: "task-isolation-1",
           title: "Isolation Test 1",
         };
 
-        const tx1 = db.beginTx();
-        tx1.insert(tasksTable, [task1]);
+        const tx1 = await db.beginTx();
+        await tx1.insert(tasksTable, [task1]);
 
         // Another transaction should not see uncommitted changes
-        const tx2 = db.beginTx();
+        const tx2 = await db.beginTx();
         const tx2Result = Array.from(
-          tx2.intervalScan(tasksTable, "byId", [
+          await tx2.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-isolation-1" }] },
           ]),
         );
@@ -161,18 +160,18 @@ describe("Database Transactions", async () => {
 
         // Main db should not see uncommitted changes
         const dbResult = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-isolation-1" }] },
           ]),
         );
         expect(dbResult.length).toBe(0);
 
-        tx1.commit();
-        tx2.rollback();
+        await tx1.commit();
+        await tx2.rollback();
 
         // Now the committed changes should be visible
         const finalResult = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-isolation-1" }] },
           ]),
         );
@@ -180,39 +179,39 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction with multiple operations", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data
         const task1: Task = { id: "task-1", title: "Task 1" };
         const task2: Task = { id: "task-2", title: "Task 2" };
-        db.insert(tasksTable, [task1, task2]);
+        await db.insert(tasksTable, [task1, task2]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Insert new task
         const task3: Task = { id: "task-3", title: "Task 3" };
-        tx.insert(tasksTable, [task3]);
+        await tx.insert(tasksTable, [task3]);
 
         // Upsert existing task
-        tx.upsert(tasksTable, [{ ...task1, title: "Updated Task 1" }]);
+        await tx.upsert(tasksTable, [{ ...task1, title: "Updated Task 1" }]);
 
         // Delete existing task
-        tx.delete(tasksTable, ["task-2"]);
+        await tx.delete(tasksTable, ["task-2"]);
 
         // Check transaction state before commit
         const txTask1 = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-1" }] },
           ]),
         );
         const txTask2 = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-2" }] },
           ]),
         );
         const txTask3 = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-3" }] },
           ]),
         );
@@ -221,21 +220,21 @@ describe("Database Transactions", async () => {
         expect(txTask2.length).toBe(0); // Deleted
         expect(txTask3[0]).toEqual(task3);
 
-        tx.commit();
+        await tx.commit();
 
         // Verify final state in main db
         const finalTask1 = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-1" }] },
           ]),
         );
         const finalTask2 = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-2" }] },
           ]),
         );
         const finalTask3 = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-3" }] },
           ]),
         );
@@ -246,10 +245,10 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction with btree range queries", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         const tasks: Task[] = [
           { id: "task-a", title: "Apple" },
@@ -258,11 +257,11 @@ describe("Database Transactions", async () => {
           { id: "task-d", title: "Date" },
         ];
 
-        tx.insert(tasksTable, tasks);
+        await tx.insert(tasksTable, tasks);
 
         // Range query on title
         const rangeResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "Banana" }],
               lt: [{ col: "title", val: "Date" }],
@@ -276,11 +275,11 @@ describe("Database Transactions", async () => {
           "Cherry",
         ]);
 
-        tx.commit();
+        await tx.commit();
 
         // Verify range query works after commit
         const postCommitResult = Array.from(
-          db.intervalScan(tasksTable, "byTitles", [
+          await db.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "Banana" }],
               lt: [{ col: "title", val: "Date" }],
@@ -296,82 +295,82 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction error handling - double commit throws", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-error", title: "Error Test" };
-        tx.insert(tasksTable, [task]);
+        await tx.insert(tasksTable, [task]);
 
-        tx.commit();
+        await tx.commit();
 
         // Second commit should throw
-        expect(() => tx.commit()).toThrow();
+        await expect(tx.commit()).rejects.toThrow();
       });
 
       it("transaction error handling - double rollback throws", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-error", title: "Error Test" };
-        tx.insert(tasksTable, [task]);
+        await tx.insert(tasksTable, [task]);
 
-        tx.rollback();
+        await tx.rollback();
 
         // Second rollback should throw
-        expect(() => tx.rollback()).toThrow();
+        await expect(tx.rollback()).rejects.toThrow();
       });
 
       it("transaction error handling - operations after commit throw", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-error", title: "Error Test" };
-        tx.insert(tasksTable, [task]);
-        tx.commit();
+        await tx.insert(tasksTable, [task]);
+        await tx.commit();
 
         // Operations after commit should throw
-        expect(() => tx.insert(tasksTable, [task])).toThrow();
-        expect(() => tx.upsert(tasksTable, [task])).toThrow();
-        expect(() => tx.delete(tasksTable, ["task-error"])).toThrow();
+        await expect(tx.insert(tasksTable, [task])).rejects.toThrow();
+        await expect(tx.upsert(tasksTable, [task])).rejects.toThrow();
+        await expect(tx.delete(tasksTable, ["task-error"])).rejects.toThrow();
       });
 
       it("transaction error handling - operations after rollback throw", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-error", title: "Error Test" };
-        tx.insert(tasksTable, [task]);
-        tx.rollback();
+        await tx.insert(tasksTable, [task]);
+        await tx.rollback();
 
         // Operations after rollback should throw
-        expect(() => tx.insert(tasksTable, [task])).toThrow();
-        expect(() => tx.upsert(tasksTable, [task])).toThrow();
-        expect(() => tx.delete(tasksTable, ["task-error"])).toThrow();
+        await expect(tx.insert(tasksTable, [task])).rejects.toThrow();
+        await expect(tx.upsert(tasksTable, [task])).rejects.toThrow();
+        await expect(tx.delete(tasksTable, ["task-error"])).rejects.toThrow();
       });
 
       it("transaction empty operations", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
-        const tx = db.beginTx();
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
+        const tx = await db.beginTx();
 
         // Empty operations should not throw
-        tx.insert(tasksTable, []);
-        tx.upsert(tasksTable, []);
-        tx.delete(tasksTable, []);
+        await tx.insert(tasksTable, []);
+        await tx.upsert(tasksTable, []);
+        await tx.delete(tasksTable, []);
 
-        tx.commit();
+        await tx.commit();
 
         // Should complete without errors
         expect(true).toBe(true);
       });
 
       it("hash index equality queries in transactions", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const tasks: Task[] = [
           { id: "task-1", title: "Same Title" },
@@ -379,12 +378,12 @@ describe("Database Transactions", async () => {
           { id: "task-3", title: "Different Title" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Hash index query for same title
         const sameTitleResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Same Title" }] },
           ]),
         );
@@ -397,7 +396,7 @@ describe("Database Transactions", async () => {
 
         // Hash index query for different title
         const differentTitleResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Different Title" }] },
           ]),
         );
@@ -405,11 +404,11 @@ describe("Database Transactions", async () => {
         expect(differentTitleResults.length).toBe(1);
         expect(differentTitleResults[0].id).toBe("task-3");
 
-        tx.commit();
+        await tx.commit();
 
         // Verify after commit
         const postCommitResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Same Title" }] },
           ]),
         );
@@ -417,8 +416,8 @@ describe("Database Transactions", async () => {
       });
 
       it("btree index range queries in transactions", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const tasks: Task[] = [
           { id: "task-1", title: "Apple" },
@@ -428,12 +427,12 @@ describe("Database Transactions", async () => {
           { id: "task-5", title: "Elderberry" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Range query: titles >= "Banana" and < "Date"
         const rangeResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "Banana" }],
               lt: [{ col: "title", val: "Date" }],
@@ -449,7 +448,7 @@ describe("Database Transactions", async () => {
 
         // Range query: titles > "Cherry"
         const greaterResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gt: [{ col: "title", val: "Cherry" }],
             },
@@ -462,47 +461,47 @@ describe("Database Transactions", async () => {
           "Elderberry",
         ]);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("transaction updates visible through both hash and btree indexes", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data
         const task: Task = { id: "task-update", title: "Original" };
-        db.insert(tasksTable, [task]);
+        await db.insert(tasksTable, [task]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Upsert task
         const updatedTask: Task = { id: "task-update", title: "Updated" };
-        tx.upsert(tasksTable, [updatedTask]);
+        await tx.upsert(tasksTable, [updatedTask]);
 
         // Query via built-in hash id index
         const hashResult = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-update" }] },
           ]),
         );
 
         // Query via btree index (id)
         const btreeResult = Array.from(
-          tx.intervalScan(tasksTable, "byIds", [
+          await tx.intervalScan(tasksTable, "byIds", [
             { eq: [{ col: "id", val: "task-update" }] },
           ]),
         );
 
         // Query via hash index (title)
         const titleHashResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Updated" }] },
           ]),
         );
 
         // Query via btree index (title)
         const titleBtreeResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             { eq: [{ col: "title", val: "Updated" }] },
           ]),
         );
@@ -519,18 +518,18 @@ describe("Database Transactions", async () => {
 
         // Old title should not be found
         const oldTitleResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Original" }] },
           ]),
         );
         expect(oldTitleResult.length).toBe(0);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("transaction deletes remove from both hash and btree indexes", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data
         const tasks: Task[] = [
@@ -538,37 +537,37 @@ describe("Database Transactions", async () => {
           { id: "task-2", title: "Delete" },
           { id: "task-3", title: "Keep" },
         ];
-        db.insert(tasksTable, tasks);
+        await db.insert(tasksTable, tasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Delete one task
-        tx.delete(tasksTable, ["task-2"]);
+        await tx.delete(tasksTable, ["task-2"]);
 
         // Check via hash index (id)
         const hashIdResult = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-2" }] },
           ]),
         );
 
         // Check via btree index (id)
         const btreeIdResult = Array.from(
-          tx.intervalScan(tasksTable, "byIds", [
+          await tx.intervalScan(tasksTable, "byIds", [
             { eq: [{ col: "id", val: "task-2" }] },
           ]),
         );
 
         // Check via hash index (title)
         const hashTitleResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Delete" }] },
           ]),
         );
 
         // Check via btree index (title)
         const btreeTitleResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             { eq: [{ col: "title", val: "Delete" }] },
           ]),
         );
@@ -580,40 +579,40 @@ describe("Database Transactions", async () => {
 
         // Remaining tasks should still be visible
         const remainingTasks = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Keep" }] },
           ]),
         );
         expect(remainingTasks.length).toBe(2);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("transaction with mixed operations on different indexes", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Initial data
         const initialTasks: Task[] = [
           { id: "task-1", title: "Alpha" },
           { id: "task-2", title: "Beta" },
         ];
-        db.insert(tasksTable, initialTasks);
+        await db.insert(tasksTable, initialTasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Insert new task
-        tx.insert(tasksTable, [{ id: "task-3", title: "Gamma" }]);
+        await tx.insert(tasksTable, [{ id: "task-3", title: "Gamma" }]);
 
         // Upsert existing task
-        tx.upsert(tasksTable, [{ id: "task-1", title: "Alpha-Updated" }]);
+        await tx.upsert(tasksTable, [{ id: "task-1", title: "Alpha-Updated" }]);
 
         // Delete existing task
-        tx.delete(tasksTable, ["task-2"]);
+        await tx.delete(tasksTable, ["task-2"]);
 
         // Test range query on btree
         const rangeResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "Alpha" }],
             },
@@ -628,7 +627,7 @@ describe("Database Transactions", async () => {
 
         // Test exact query on hash
         const exactResult = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Gamma" }] },
           ]),
         );
@@ -636,11 +635,11 @@ describe("Database Transactions", async () => {
         expect(exactResult.length).toBe(1);
         expect(exactResult[0].id).toBe("task-3");
 
-        tx.commit();
+        await tx.commit();
 
         // Verify final state
         const finalTasks = Array.from(
-          db.intervalScan(tasksTable, "byIds", [
+          await db.intervalScan(tasksTable, "byIds", [
             {
               gte: [{ col: "id", val: "" }],
             },
@@ -655,26 +654,26 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction rollback preserves original index state", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Initial data
         const initialTasks: Task[] = [
           { id: "task-1", title: "Keep" },
           { id: "task-2", title: "Keep" },
         ];
-        db.insert(tasksTable, initialTasks);
+        await db.insert(tasksTable, initialTasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Make various changes
-        tx.insert(tasksTable, [{ id: "task-3", title: "New" }]);
-        tx.upsert(tasksTable, [{ id: "task-1", title: "Modified" }]);
-        tx.delete(tasksTable, ["task-2"]);
+        await tx.insert(tasksTable, [{ id: "task-3", title: "New" }]);
+        await tx.upsert(tasksTable, [{ id: "task-1", title: "Modified" }]);
+        await tx.delete(tasksTable, ["task-2"]);
 
         // Verify changes are visible in transaction
         const txResults = Array.from(
-          tx.intervalScan(tasksTable, "byIds", [
+          await tx.intervalScan(tasksTable, "byIds", [
             {
               gte: [{ col: "id", val: "" }],
             },
@@ -682,17 +681,17 @@ describe("Database Transactions", async () => {
         );
         expect(txResults.length).toBe(2); // task-1 (modified) and task-3 (new)
 
-        tx.rollback();
+        await tx.rollback();
 
         // Verify original state is preserved
         const finalHashResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Keep" }] },
           ]),
         );
 
         const finalBtreeResults = Array.from(
-          db.intervalScan(tasksTable, "byTitles", [
+          await db.intervalScan(tasksTable, "byTitles", [
             { eq: [{ col: "title", val: "Keep" }] },
           ]),
         );
@@ -702,18 +701,18 @@ describe("Database Transactions", async () => {
 
         // New task should not exist
         const newTaskResults = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-3" }] },
           ]),
         );
         expect(newTaskResults.length).toBe(0);
 
-        const nextTx = db.beginTx();
-        nextTx.insert(tasksTable, [{ id: "task-4", title: "Next" }]);
-        nextTx.commit();
+        const nextTx = await db.beginTx();
+        await nextTx.insert(tasksTable, [{ id: "task-4", title: "Next" }]);
+        await nextTx.commit();
 
         const nextTaskResults = Array.from(
-          db.intervalScan(tasksTable, "byIds", [
+          await db.intervalScan(tasksTable, "byIds", [
             { eq: [{ col: "id", val: "task-4" }] },
           ]),
         );
@@ -721,8 +720,8 @@ describe("Database Transactions", async () => {
       });
 
       it("transaction with limit on different index types", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const tasks: Task[] = [
           { id: "task-1", title: "Same" },
@@ -732,12 +731,12 @@ describe("Database Transactions", async () => {
           { id: "task-5", title: "Same" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Test limit on hash index
         const hashLimited = Array.from(
-          tx.intervalScan(
+          await tx.intervalScan(
             tasksTable,
             "byTitle",
             [{ eq: [{ col: "title", val: "Same" }] }],
@@ -748,7 +747,7 @@ describe("Database Transactions", async () => {
 
         // Test limit on btree index
         const btreeLimited = Array.from(
-          tx.intervalScan(
+          await tx.intervalScan(
             tasksTable,
             "byTitles",
             [{ eq: [{ col: "title", val: "Same" }] }],
@@ -759,7 +758,7 @@ describe("Database Transactions", async () => {
 
         // Test limit on btree range query
         const rangeApple = Array.from(
-          tx.intervalScan(
+          await tx.intervalScan(
             tasksTable,
             "byIds",
             [
@@ -772,12 +771,12 @@ describe("Database Transactions", async () => {
         );
         expect(rangeApple.length).toBe(4);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("complex query patterns - multiple where clauses", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const tasks: Task[] = [
           { id: "task-1", title: "Alpha" },
@@ -785,12 +784,12 @@ describe("Database Transactions", async () => {
           { id: "task-3", title: "Gamma" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Multiple where clauses on btree index
         const multiClauseResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             { eq: [{ col: "title", val: "Alpha" }] },
             { eq: [{ col: "title", val: "Gamma" }] },
           ]),
@@ -802,101 +801,110 @@ describe("Database Transactions", async () => {
           "Gamma",
         ]);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("edge case - empty results", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Query empty database
         const emptyResults = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "nonexistent" }] },
           ]),
         );
         expect(emptyResults.length).toBe(0);
 
         // Insert some data then query for nonexistent
-        tx.insert(tasksTable, [{ id: "task-1", title: "Exists" }]);
+        await tx.insert(tasksTable, [{ id: "task-1", title: "Exists" }]);
 
         const noMatchResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "DoesNotExist" }] },
           ]),
         );
         expect(noMatchResults.length).toBe(0);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("edge case - duplicate inserts and updates", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-dup", title: "Original" };
 
         // Insert rejects duplicate ids instead of silently replacing them.
-        tx.insert(tasksTable, [task]);
-        expect(() => tx.insert(tasksTable, [task])).toThrow(
+        await tx.insert(tasksTable, [task]);
+        await expect(tx.insert(tasksTable, [task])).rejects.toThrow(
           /duplicate|exists|unique/i,
         );
 
+        if (name === "IdbDriver") {
+          await tx.rollback();
+          const afterAbortedTx = await db.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "task-dup" }] },
+          ]);
+          expect(afterAbortedTx.length).toBe(0);
+          return;
+        }
+
         // Failed duplicate insert should not create extra index entries.
         const afterInserts = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-dup" }] },
           ]),
         );
         expect(afterInserts.length).toBe(1);
 
         // Multiple updates
-        tx.upsert(tasksTable, [{ ...task, title: "Updated1" }]);
-        tx.upsert(tasksTable, [{ ...task, title: "Updated2" }]);
+        await tx.upsert(tasksTable, [{ ...task, title: "Updated1" }]);
+        await tx.upsert(tasksTable, [{ ...task, title: "Updated2" }]);
 
         // Should have latest upsert
         const afterUpserts = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-dup" }] },
           ]),
         );
         expect(afterUpserts.length).toBe(1);
         expect(afterUpserts[0].title).toBe("Updated2");
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("edge case - upsert then delete in transaction", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data
         const task: Task = { id: "task-ud", title: "Original" };
-        db.insert(tasksTable, [task]);
+        await db.insert(tasksTable, [task]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Upsert then delete
-        tx.upsert(tasksTable, [{ ...task, title: "Updated" }]);
-        tx.delete(tasksTable, ["task-ud"]);
+        await tx.upsert(tasksTable, [{ ...task, title: "Updated" }]);
+        await tx.delete(tasksTable, ["task-ud"]);
 
         // Should not exist
         const result = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-ud" }] },
           ]),
         );
         expect(result.length).toBe(0);
 
-        tx.commit();
+        await tx.commit();
 
         // Should not exist after commit
         const finalResult = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-ud" }] },
           ]),
         );
@@ -904,30 +912,30 @@ describe("Database Transactions", async () => {
       });
 
       it("edge case - insert then delete in transaction", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         const task: Task = { id: "task-id", title: "Temp" };
 
         // Insert then delete
-        tx.insert(tasksTable, [task]);
-        tx.delete(tasksTable, ["task-id"]);
+        await tx.insert(tasksTable, [task]);
+        await tx.delete(tasksTable, ["task-id"]);
 
         // Should not exist
         const result = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-id" }] },
           ]),
         );
         expect(result.length).toBe(0);
 
-        tx.commit();
+        await tx.commit();
 
         // Should not exist after commit
         const finalResult = Array.from(
-          db.intervalScan(tasksTable, "byId", [
+          await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-id" }] },
           ]),
         );
@@ -935,34 +943,34 @@ describe("Database Transactions", async () => {
       });
 
       it("edge case - delete nonexistent record", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Delete nonexistent record should not throw
-        tx.delete(tasksTable, ["nonexistent"]);
+        await tx.delete(tasksTable, ["nonexistent"]);
 
         // Insert some data
-        tx.insert(tasksTable, [{ id: "task-1", title: "Exists" }]);
+        await tx.insert(tasksTable, [{ id: "task-1", title: "Exists" }]);
 
         // Delete nonexistent again
-        tx.delete(tasksTable, ["still-nonexistent"]);
+        await tx.delete(tasksTable, ["still-nonexistent"]);
 
         // Existing data should still be there
         const result = Array.from(
-          tx.intervalScan(tasksTable, "byId", [
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-1" }] },
           ]),
         );
         expect(result.length).toBe(1);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("edge case - boundary values in btree queries", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         const tasks: Task[] = [
           { id: "task-1", title: "" }, // Empty string
@@ -971,12 +979,12 @@ describe("Database Transactions", async () => {
           { id: "task-4", title: "ZZZZZ" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Query including empty string
         const fromEmpty = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "" }],
               lte: [{ col: "title", val: "A" }],
@@ -987,7 +995,7 @@ describe("Database Transactions", async () => {
 
         // Query at upper boundary
         const upperBoundary = Array.from(
-          tx.intervalScan(tasksTable, "byTitles", [
+          await tx.intervalScan(tasksTable, "byTitles", [
             {
               gte: [{ col: "title", val: "Z" }],
             },
@@ -999,14 +1007,14 @@ describe("Database Transactions", async () => {
           "ZZZZZ",
         ]);
 
-        tx.commit();
+        await tx.commit();
       });
 
       it("performance test - large transaction with mixed operations", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Insert many records
         const insertTasks: Task[] = [];
@@ -1016,7 +1024,7 @@ describe("Database Transactions", async () => {
             title: `Task ${i}`,
           });
         }
-        tx.insert(tasksTable, insertTasks);
+        await tx.insert(tasksTable, insertTasks);
 
         // Upsert some records
         const updateTasks: Task[] = [];
@@ -1026,18 +1034,18 @@ describe("Database Transactions", async () => {
             title: `Updated Task ${i}`,
           });
         }
-        tx.upsert(tasksTable, updateTasks);
+        await tx.upsert(tasksTable, updateTasks);
 
         // Delete some records
         const deleteIds: string[] = [];
         for (let i = 1; i < 50; i += 2) {
           deleteIds.push(`task-${i.toString().padStart(3, "0")}`);
         }
-        tx.delete(tasksTable, deleteIds);
+        await tx.delete(tasksTable, deleteIds);
 
         // Query to verify state
         const remainingTasks = Array.from(
-          tx.intervalScan(tasksTable, "byIds", [
+          await tx.intervalScan(tasksTable, "byIds", [
             {
               gte: [{ col: "id", val: "task-000" }],
               lt: [{ col: "id", val: "task-050" }],
@@ -1052,11 +1060,11 @@ describe("Database Transactions", async () => {
         const updatedTask = remainingTasks.find((t) => t.id === "task-000");
         expect(updatedTask?.title).toBe("Updated Task 0");
 
-        tx.commit();
+        await tx.commit();
 
         // Final verification
         const finalCount = Array.from(
-          db.intervalScan(tasksTable, "byIds", [
+          await db.intervalScan(tasksTable, "byIds", [
             {
               gte: [{ col: "id", val: "" }],
             },
@@ -1066,8 +1074,8 @@ describe("Database Transactions", async () => {
       });
 
       it("hash index with multiple records having same value", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert multiple tasks with same title (hash index value)
         const tasks: Task[] = [
@@ -1077,12 +1085,12 @@ describe("Database Transactions", async () => {
           { id: "task-4", title: "Unique" },
         ];
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Query for duplicate titles via hash index
         const duplicateResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Duplicate" }] },
           ]),
         );
@@ -1096,7 +1104,7 @@ describe("Database Transactions", async () => {
 
         // Query for unique title
         const uniqueResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Unique" }] },
           ]),
         );
@@ -1104,11 +1112,11 @@ describe("Database Transactions", async () => {
         expect(uniqueResults.length).toBe(1);
         expect(uniqueResults[0].id).toBe("task-4");
 
-        tx.commit();
+        await tx.commit();
 
         // Verify after commit
         const postCommitDuplicates = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Duplicate" }] },
           ]),
         );
@@ -1116,27 +1124,27 @@ describe("Database Transactions", async () => {
       });
 
       it.skip("hash index consistency between transaction and direct operations", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Direct operations outside transaction
         const directTasks: Task[] = [
           { id: "direct-1", title: "Direct" },
           { id: "direct-2", title: "Direct" },
         ];
-        db.insert(tasksTable, directTasks);
+        await db.insert(tasksTable, directTasks);
 
         // Transaction operations
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
         const txTasks: Task[] = [
           { id: "tx-1", title: "Direct" }, // Same title as direct operations
           { id: "tx-2", title: "TxOnly" },
         ];
-        tx.insert(tasksTable, txTasks);
+        await tx.insert(tasksTable, txTasks);
 
         // Query within transaction should see both direct and tx operations
         const txResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Direct" }] },
           ]),
         );
@@ -1149,7 +1157,7 @@ describe("Database Transactions", async () => {
 
         // Query outside transaction should only see direct operations
         const directResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Direct" }] },
           ]),
         );
@@ -1159,11 +1167,11 @@ describe("Database Transactions", async () => {
           "direct-2",
         ]);
 
-        tx.commit();
+        await tx.commit();
 
         // After commit, all should be visible
         const finalResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Direct" }] },
           ]),
         );
@@ -1171,8 +1179,8 @@ describe("Database Transactions", async () => {
       });
 
       it.skip("hash index upsert and delete with multiple values", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert tasks with duplicate titles
         const tasks: Task[] = [
@@ -1181,19 +1189,19 @@ describe("Database Transactions", async () => {
           { id: "task-3", title: "Same" },
           { id: "task-4", title: "Different" },
         ];
-        db.insert(tasksTable, tasks);
+        await db.insert(tasksTable, tasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Upsert one of the tasks with "Same" title
-        tx.upsert(tasksTable, [{ id: "task-2", title: "Updated" }]);
+        await tx.upsert(tasksTable, [{ id: "task-2", title: "Updated" }]);
 
         // Delete another task with "Same" title
-        tx.delete(tasksTable, ["task-3"]);
+        await tx.delete(tasksTable, ["task-3"]);
 
         // Check remaining "Same" titled tasks
         const sameResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Same" }] },
           ]),
         );
@@ -1202,7 +1210,7 @@ describe("Database Transactions", async () => {
 
         // Check updated task
         const updatedResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Updated" }] },
           ]),
         );
@@ -1211,18 +1219,18 @@ describe("Database Transactions", async () => {
 
         // Check different task still exists
         const differentResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Different" }] },
           ]),
         );
         expect(differentResults.length).toBe(1);
         expect(differentResults[0].id).toBe("task-4");
 
-        tx.commit();
+        await tx.commit();
 
         // Verify final state
         const finalSame = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Same" }] },
           ]),
         );
@@ -1231,8 +1239,8 @@ describe("Database Transactions", async () => {
       });
 
       it("hash index rollback with multiple values", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert initial data with duplicates
         const initialTasks: Task[] = [
@@ -1240,33 +1248,33 @@ describe("Database Transactions", async () => {
           { id: "keep-2", title: "Keep" },
           { id: "keep-3", title: "Keep" },
         ];
-        db.insert(tasksTable, initialTasks);
+        await db.insert(tasksTable, initialTasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Add more tasks with same title
-        tx.insert(tasksTable, [{ id: "temp-1", title: "Keep" }]);
-        tx.insert(tasksTable, [{ id: "temp-2", title: "Keep" }]);
+        await tx.insert(tasksTable, [{ id: "temp-1", title: "Keep" }]);
+        await tx.insert(tasksTable, [{ id: "temp-2", title: "Keep" }]);
 
         // Upsert one existing task
-        tx.upsert(tasksTable, [{ id: "keep-1", title: "Modified" }]);
+        await tx.upsert(tasksTable, [{ id: "keep-1", title: "Modified" }]);
 
         // Delete one existing task
-        tx.delete(tasksTable, ["keep-2"]);
+        await tx.delete(tasksTable, ["keep-2"]);
 
         // Verify transaction state
         const txKeepResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Keep" }] },
           ]),
         );
         expect(txKeepResults.length).toBe(3); // keep-3 + temp-1 + temp-2
 
-        tx.rollback();
+        await tx.rollback();
 
         // Verify original state is preserved
         const finalResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Keep" }] },
           ]),
         );
@@ -1279,7 +1287,7 @@ describe("Database Transactions", async () => {
 
         // Modified title should not exist
         const modifiedResults = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Modified" }] },
           ]),
         );
@@ -1287,8 +1295,8 @@ describe("Database Transactions", async () => {
       });
 
       it("hash index with limit and multiple values", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Insert many tasks with same title
         const tasks: Task[] = [];
@@ -1299,12 +1307,12 @@ describe("Database Transactions", async () => {
           });
         }
 
-        const tx = db.beginTx();
-        tx.insert(tasksTable, tasks);
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, tasks);
 
         // Test limit functionality
         const limitedResults = Array.from(
-          tx.intervalScan(
+          await tx.intervalScan(
             tasksTable,
             "byTitle",
             [{ eq: [{ col: "title", val: "Many" }] }],
@@ -1316,7 +1324,7 @@ describe("Database Transactions", async () => {
 
         // Test limit 0
         const zeroLimitResults = Array.from(
-          tx.intervalScan(
+          await tx.intervalScan(
             tasksTable,
             "byTitle",
             [{ eq: [{ col: "title", val: "Many" }] }],
@@ -1328,18 +1336,18 @@ describe("Database Transactions", async () => {
 
         // Test no limit
         const noLimitResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Many" }] },
           ]),
         );
 
         expect(noLimitResults.length).toBe(10);
 
-        tx.commit();
+        await tx.commit();
 
         // Test limit after commit
         const postCommitLimited = Array.from(
-          db.intervalScan(
+          await db.intervalScan(
             tasksTable,
             "byTitle",
             [{ eq: [{ col: "title", val: "Many" }] }],
@@ -1351,8 +1359,8 @@ describe("Database Transactions", async () => {
       });
 
       it("hash index mixed operations preserving value groups", async () => {
-        const db = new SyncDB(new DB(await driver()));
-        db.loadTables([tasksTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([tasksTable]);
 
         // Initial data with multiple value groups
         const initialTasks: Task[] = [
@@ -1362,26 +1370,26 @@ describe("Database Transactions", async () => {
           { id: "b2", title: "Beta" },
           { id: "g1", title: "Gamma" },
         ];
-        db.insert(tasksTable, initialTasks);
+        await db.insert(tasksTable, initialTasks);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
 
         // Add to existing groups
-        tx.insert(tasksTable, [{ id: "a3", title: "Alpha" }]);
-        tx.insert(tasksTable, [{ id: "b3", title: "Beta" }]);
+        await tx.insert(tasksTable, [{ id: "a3", title: "Alpha" }]);
+        await tx.insert(tasksTable, [{ id: "b3", title: "Beta" }]);
 
         // Create new group
-        tx.insert(tasksTable, [{ id: "d1", title: "Delta" }]);
+        await tx.insert(tasksTable, [{ id: "d1", title: "Delta" }]);
 
         // Upsert within group (move from one group to another)
-        tx.upsert(tasksTable, [{ id: "g1", title: "Alpha" }]); // Gamma -> Alpha
+        await tx.upsert(tasksTable, [{ id: "g1", title: "Alpha" }]); // Gamma -> Alpha
 
         // Delete from groups
-        tx.delete(tasksTable, ["a2", "b1"]);
+        await tx.delete(tasksTable, ["a2", "b1"]);
 
         // Verify Alpha group (a1, a3, g1 - a2)
         const alphaResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Alpha" }] },
           ]),
         );
@@ -1394,7 +1402,7 @@ describe("Database Transactions", async () => {
 
         // Verify Beta group (b2, b3 - b1)
         const betaResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Beta" }] },
           ]),
         );
@@ -1403,7 +1411,7 @@ describe("Database Transactions", async () => {
 
         // Verify Gamma group (empty)
         const gammaResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Gamma" }] },
           ]),
         );
@@ -1411,18 +1419,18 @@ describe("Database Transactions", async () => {
 
         // Verify Delta group (d1)
         const deltaResults = Array.from(
-          tx.intervalScan(tasksTable, "byTitle", [
+          await tx.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Delta" }] },
           ]),
         );
         expect(deltaResults.length).toBe(1);
         expect(deltaResults[0].id).toBe("d1");
 
-        tx.commit();
+        await tx.commit();
 
         // Verify consistency after commit
         const finalAlpha = Array.from(
-          db.intervalScan(tasksTable, "byTitle", [
+          await db.intervalScan(tasksTable, "byTitle", [
             { eq: [{ col: "title", val: "Alpha" }] },
           ]),
         );
