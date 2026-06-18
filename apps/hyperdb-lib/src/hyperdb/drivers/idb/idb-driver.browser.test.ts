@@ -31,6 +31,12 @@ const reloadTableV2 = defineTable("idbReload", {
   title: v.string(),
 }).index("byTitle", ["title"]);
 
+const rawRowsTable = defineTable("idbRawRows", {
+  id: v.string(),
+  count: v.bigint(),
+  bytes: v.arrayBuffer(),
+}).index("byCount", ["count"]);
+
 const action = createAction();
 let dbCounter = 0;
 
@@ -54,6 +60,11 @@ async function createDB(): Promise<DB> {
 
 type GetAllRecordsHost = {
   getAllRecords: (options?: unknown) => IDBRequest<unknown>;
+};
+
+type RawStoredRecord = {
+  row: Record<string, unknown>;
+  indexes: Record<string, string>;
 };
 
 function spyOnGetAllRecords<T extends object>(prototype: T) {
@@ -92,6 +103,57 @@ describe("IdbDriver", () => {
         "byProjectRank",
         "byTitle",
       ]);
+    } finally {
+      rawDb.close();
+      await deleteDatabase(dbName);
+    }
+  });
+
+  it("stores IDB row payloads without storage encoding wrappers", async () => {
+    dbCounter += 1;
+    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(dbName);
+
+    const bytes = new Uint8Array([1, 2, 3]).buffer;
+    const driver = await openIndexedDBDriver(dbName);
+    const db = new DB(driver);
+    await execAsync(db.loadTables([rawRowsTable]));
+    await execAsync(
+      db.insert(rawRowsTable, [{ id: "row-1", count: 42n, bytes }]),
+    );
+    driver.close();
+
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(dbName);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error("Failed to inspect raw row"));
+    });
+
+    try {
+      const tx = rawDb.transaction("hyperdb:idbRawRows", "readonly");
+      const done = new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () =>
+          reject(tx.error ?? new Error("Raw row inspection aborted"));
+        tx.onerror = () =>
+          reject(tx.error ?? new Error("Raw row inspection failed"));
+      });
+      const stored = await new Promise<RawStoredRecord>((resolve, reject) => {
+        const request = tx.objectStore("hyperdb:idbRawRows").get("row-1");
+        request.onsuccess = () => resolve(request.result as RawStoredRecord);
+        request.onerror = () =>
+          reject(request.error ?? new Error("Failed to read raw row"));
+      });
+      await done;
+
+      expect(stored.row.count).toBe(42n);
+      expect(stored.row.bytes).toBeInstanceOf(ArrayBuffer);
+      expect(stored.row.count).not.toEqual({
+        $hyperdbType: "bigint",
+        value: "42",
+      });
+      expect(stored.indexes.byCount).toEqual(expect.any(String));
     } finally {
       rawDb.close();
       await deleteDatabase(dbName);

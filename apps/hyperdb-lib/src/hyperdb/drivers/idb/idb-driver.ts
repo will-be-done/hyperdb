@@ -10,10 +10,7 @@ import {
 } from "../../core/primitives";
 import { convertWhereToBound } from "../../core/query/bounds";
 import type { TableDefinition } from "../../schema/table";
-import {
-  decodeValueFromStorage,
-  encodeValueForStorage,
-} from "../../storage/codec";
+import { decodeValueFromStorage } from "../../storage/codec";
 import {
   assertSafeTableDefinition,
   getSqliteIndexSortKeyValue,
@@ -48,7 +45,7 @@ const OLD_ROWS_STORE = "rows";
 const OLD_INDEX_ENTRIES_STORE = "indexEntries";
 const TABLE_METADATA_STORE = "tableMetadata";
 const TABLE_STORE_PREFIX = "hyperdb:";
-const TABLE_INDEX_SIGNATURE_VERSION = 3;
+const TABLE_INDEX_SIGNATURE_VERSION = 4;
 const IDB_READ_BATCH_SIZE = 1000;
 const STALE_CONNECTION_MESSAGE =
   "IndexedDB connection is stale; reopen the driver";
@@ -143,13 +140,14 @@ function tableStoreName(tableName: string): string {
 }
 
 function decodeStoredRecord(record: NativeStoredRecord): Row {
-  return decodeValueFromStorage(record.row) as Row;
+  return record.row as Row;
 }
 
 function createIndexSignature(tableDef: TableDefinition): string {
   return JSON.stringify({
     version: TABLE_INDEX_SIGNATURE_VERSION,
     layout: "native-table-store",
+    rowStorage: "raw",
     sortKeyMode: tableDef.schemaValidator ? "scan" : "stored",
     indexes: Object.keys(tableDef.indexes).sort().map((indexName) => {
       const indexDef = tableDef.indexes[indexName];
@@ -359,22 +357,22 @@ function indexKeyPath(indexName: string): string {
   return `indexes.${indexName}`;
 }
 
-function createNativeRecordFromStorageRow(
+function createNativeRecordFromRow(
   tableDef: TableDefinition,
-  storageRow: Row,
+  row: Row,
 ): NativeStoredRecord {
   const indexes: Record<string, string> = {};
 
   for (const indexName of Object.keys(tableDef.indexes)) {
-    const sortKey = getSqliteIndexSortKeyValue(tableDef, indexName, storageRow);
+    const sortKey = getSqliteIndexSortKeyValue(tableDef, indexName, row);
     if (sortKey !== null) {
       indexes[indexName] = sortKey;
     }
   }
 
   return {
-    id: storageRow.id,
-    row: storageRow,
+    id: row.id,
+    row,
     indexes,
   };
 }
@@ -383,10 +381,7 @@ function createNativeRecord(
   tableDef: TableDefinition,
   row: Row,
 ): NativeStoredRecord {
-  return createNativeRecordFromStorageRow(
-    tableDef,
-    encodeValueForStorage(row) as Row,
-  );
+  return createNativeRecordFromRow(tableDef, row);
 }
 
 function advanceRange(
@@ -1094,7 +1089,10 @@ export class IdbDriver implements DBDriver {
     const requests = records.map((record) =>
       requestToPromise(
         store.put(
-          createNativeRecordFromStorageRow(tableDef, record.row as Row),
+          createNativeRecordFromRow(
+            tableDef,
+            decodeValueFromStorage(record.row) as Row,
+          ),
         ),
       ),
     );
