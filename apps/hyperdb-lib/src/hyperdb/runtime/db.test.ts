@@ -78,10 +78,7 @@ const bigintHashErrorTable = defineTable("bigintHashError", {
 }).index("byValueHash", ["value"], { type: "hash" });
 
 describe("db", async () => {
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     it("insert, delete, upsert - " + driver.constructor.name, () => {
       const db = new SyncDB(new DB(driver));
       db.loadTables([tasksTable, taskTemplatesTable]);
@@ -147,10 +144,7 @@ describe("db", async () => {
     });
   }
 
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     it(
       "insert, upsert, and delete existence semantics - " +
         driver.constructor.name,
@@ -212,10 +206,7 @@ describe("db", async () => {
     );
   }
 
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     it("select multiple rows " + driver.constructor.name, () => {
       const db = new SyncDB(new DB(driver));
       db.loadTables([tasksTable]);
@@ -255,10 +246,7 @@ describe("db", async () => {
     });
   }
 
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     it("works with hash " + driver.constructor.name, () => {
       const db = new SyncDB(new DB(driver));
       db.loadTables([tasksTable]);
@@ -356,9 +344,7 @@ describe("db", async () => {
       db.intervalScan(bigintHashErrorTable, "byValueHash", [
         { lte: [{ col: "value", val: 1n }] },
       ]),
-    ).toThrow(
-      /Hash index should have exactly one equality condition.*\["1"\]/,
-    );
+    ).toThrow(/Hash index should have exactly one equality condition.*\["1"\]/);
   });
 
   // for (const driver of [
@@ -411,10 +397,7 @@ describe("db", async () => {
   //   );
   // }
 
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     it("works with todo app" + driver.constructor.name, () => {
       const db = new SyncDB(new DB(driver));
       db.loadTables([tasksTable, taskTemplatesTable]);
@@ -586,10 +569,7 @@ describe("db", async () => {
 });
 
 describe("Database Operations Edge Cases", async () => {
-  for (const driver of [
-    await initSqlJsWasm(),
-    new BptreeInmemDriver(),
-  ]) {
+  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     describe(`${driver.constructor.name}`, () => {
       it("should handle empty database scans", () => {
         const testTable = defineTable("test", {
@@ -622,9 +602,7 @@ describe("Database Operations Edge Cases", async () => {
           ),
         );
 
-        const db = new SyncDB(
-          new DB(driver, { runtimeValidation: true }),
-        );
+        const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
         db.loadTables([docsTable]);
 
         const stringDocument = {
@@ -709,9 +687,7 @@ describe("Database Operations Edge Cases", async () => {
           .index("byPostTitleHash", ["title"], { type: "hash" })
           .index("byPostTitleSlug", ["title", "slug"]);
 
-        const db = new SyncDB(
-          new DB(driver, { runtimeValidation: true }),
-        );
+        const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
         db.loadTables([documentsTable]);
 
         const messages = Array.from({ length: 50 }, (_, index) => ({
