@@ -522,14 +522,18 @@ describe("db", async () => {
         state: "todo" | "done",
         alwaysIncludeTaskIds: string[] = [],
       ) {
-        const tasks: Task[] = await db.intervalScan(tasksTable, "projectIdState", [
-          {
-            eq: [
-              { col: "projectId", val: projectId },
-              { col: "state", val: state },
-            ],
-          },
-        ]);
+        const tasks: Task[] = await db.intervalScan(
+          tasksTable,
+          "projectIdState",
+          [
+            {
+              eq: [
+                { col: "projectId", val: projectId },
+                { col: "state", val: state },
+              ],
+            },
+          ],
+        );
         tasks.push(...(await taskByIds(alwaysIncludeTaskIds)));
         return tasks;
       };
@@ -572,7 +576,6 @@ describe("db", async () => {
   }
 });
 
-if (typeof globalThis.indexedDB === "undefined") {
 describe("Database Operations Edge Cases", async () => {
   for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     describe(`${driver.constructor.name}`, () => {
@@ -1581,4 +1584,3 @@ describe("Database Operations Edge Cases", async () => {
     });
   }
 });
-}
