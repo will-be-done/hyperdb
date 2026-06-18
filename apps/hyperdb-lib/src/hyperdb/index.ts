@@ -10,5 +10,8 @@ export * from "./schema/values";
 export * from "./tracing";
 export * from "./drivers/sqlite/sql-driver";
 export * from "./drivers/sqlite/async-sql-driver";
+export * from "./drivers/sqlite/init-sql-js-wasm";
+export * from "./drivers/sqlite/init-wa-sqlite";
 export * from "./drivers/inmemory/bptree-inmem-driver";
+export * from "./drivers/idb/idb-driver";
 export * from "../react";

@@ -6,6 +6,8 @@ import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
+import { AsyncDB } from "../test-utils/async-db";
+import { createDriverFactories } from "../test-utils/driver-factories";
 
 export const fractionalCompare = <T extends { id: string; orderToken: string }>(
   item1: T,
@@ -78,10 +80,10 @@ const bigintHashErrorTable = defineTable("bigintHashError", {
 }).index("byValueHash", ["value"], { type: "hash" });
 
 describe("db", async () => {
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
-    it("insert, delete, upsert - " + driver.constructor.name, () => {
-      const db = new SyncDB(new DB(driver));
-      db.loadTables([tasksTable, taskTemplatesTable]);
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    it("insert, delete, upsert - " + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable, taskTemplatesTable]);
       const updatedTask = (): Task => ({
         id: "task-1",
         title: "updated",
@@ -112,30 +114,30 @@ describe("db", async () => {
           lastToggledAt: 1,
         },
       ];
-      db.insert(tasksTable, tasks);
+      await db.insert(tasksTable, tasks);
 
       expect(
-        db.intervalScan(tasksTable, "ids", [
+        await db.intervalScan(tasksTable, "ids", [
           {
             eq: [{ col: "id", val: "task-1" }],
           },
         ]),
       ).toEqual([tasks[0]]);
 
-      db.upsert(tasksTable, [updatedTask()]);
+      await db.upsert(tasksTable, [updatedTask()]);
 
       expect(
-        db.intervalScan(tasksTable, "ids", [
+        await db.intervalScan(tasksTable, "ids", [
           {
             eq: [{ col: "id", val: "task-1" }],
           },
         ]),
       ).toEqual([updatedTask()]);
 
-      db.delete(tasksTable, ["task-1"]);
+      await db.delete(tasksTable, ["task-1"]);
 
       expect(
-        db.intervalScan(tasksTable, "ids", [
+        await db.intervalScan(tasksTable, "ids", [
           {
             eq: [{ col: "id", val: "task-1" }],
           },
@@ -144,13 +146,12 @@ describe("db", async () => {
     });
   }
 
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
+  for (const [driverName, createDriver] of createDriverFactories()) {
     it(
-      "insert, upsert, and delete existence semantics - " +
-        driver.constructor.name,
-      () => {
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([writeSemanticsTable]);
+      "insert, upsert, and delete existence semantics - " + driverName,
+      async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([writeSemanticsTable]);
 
         const selectById = (id: string) =>
           db.intervalScan(writeSemanticsTable, "byId", [
@@ -165,51 +166,51 @@ describe("db", async () => {
           optionalValue: "kept only until replacement",
         };
 
-        db.insert(writeSemanticsTable, [initialRecord]);
-        expect(selectById(initialRecord.id)).toEqual([initialRecord]);
+        await db.insert(writeSemanticsTable, [initialRecord]);
+        expect(await selectById(initialRecord.id)).toEqual([initialRecord]);
 
-        expect(() =>
+        await expect(
           db.insert(writeSemanticsTable, [
             {
               id: initialRecord.id,
               value: "duplicate insert",
             },
           ]),
-        ).toThrow(/duplicate|constraint|unique|exists/i);
-        expect(selectById(initialRecord.id)).toEqual([initialRecord]);
+        ).rejects.toThrow(/duplicate|constraint|unique|exists/i);
+        expect(await selectById(initialRecord.id)).toEqual([initialRecord]);
 
         const replacementRecord = {
           id: initialRecord.id,
           value: "replacement",
         };
-        db.upsert(writeSemanticsTable, [replacementRecord]);
-        expect(selectById(initialRecord.id)).toEqual([replacementRecord]);
+        await db.upsert(writeSemanticsTable, [replacementRecord]);
+        expect(await selectById(initialRecord.id)).toEqual([replacementRecord]);
 
         const upsertedRecord = {
           id: "new-from-upsert",
           value: "created by upsert",
         };
-        db.upsert(writeSemanticsTable, [upsertedRecord]);
-        expect(selectById(upsertedRecord.id)).toEqual([upsertedRecord]);
+        await db.upsert(writeSemanticsTable, [upsertedRecord]);
+        expect(await selectById(upsertedRecord.id)).toEqual([upsertedRecord]);
 
-        db.delete(writeSemanticsTable, [replacementRecord.id]);
-        expect(selectById(replacementRecord.id)).toEqual([]);
+        await db.delete(writeSemanticsTable, [replacementRecord.id]);
+        expect(await selectById(replacementRecord.id)).toEqual([]);
 
-        expect(() =>
+        await expect(
           db.delete(writeSemanticsTable, [
             replacementRecord.id,
             "never-existed",
           ]),
-        ).not.toThrow();
-        expect(selectById(upsertedRecord.id)).toEqual([upsertedRecord]);
+        ).resolves.toBeUndefined();
+        expect(await selectById(upsertedRecord.id)).toEqual([upsertedRecord]);
       },
     );
   }
 
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
-    it("select multiple rows " + driver.constructor.name, () => {
-      const db = new SyncDB(new DB(driver));
-      db.loadTables([tasksTable]);
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    it("select multiple rows " + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable]);
 
       const tasks: Task[] = [
         {
@@ -231,10 +232,10 @@ describe("db", async () => {
           lastToggledAt: 1,
         },
       ];
-      db.insert(tasksTable, tasks);
+      await db.insert(tasksTable, tasks);
 
       expect(
-        db.intervalScan(tasksTable, "ids", [
+        await db.intervalScan(tasksTable, "ids", [
           {
             eq: [{ col: "id", val: "task-1" }],
           },
@@ -246,10 +247,10 @@ describe("db", async () => {
     });
   }
 
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
-    it("works with hash " + driver.constructor.name, () => {
-      const db = new SyncDB(new DB(driver));
-      db.loadTables([tasksTable]);
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    it("works with hash " + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable]);
 
       const justTask: Task = {
         id: "task-1",
@@ -271,9 +272,9 @@ describe("db", async () => {
         lastToggledAt: 0,
       };
 
-      db.insert(tasksTable, [justTask, justTask2]);
+      await db.insert(tasksTable, [justTask, justTask2]);
       expect(
-        db.intervalScan(tasksTable, "byTitle", [
+        await db.intervalScan(tasksTable, "byTitle", [
           {
             lte: [{ col: "title", val: "Task 1" }],
             gte: [{ col: "title", val: "Task 1" }],
@@ -281,10 +282,10 @@ describe("db", async () => {
         ]),
       ).toEqual([justTask, justTask2]);
 
-      db.upsert(tasksTable, [{ ...justTask2, title: "Task 2" }]);
+      await db.upsert(tasksTable, [{ ...justTask2, title: "Task 2" }]);
 
       expect(
-        db.intervalScan(tasksTable, "byTitle", [
+        await db.intervalScan(tasksTable, "byTitle", [
           {
             lte: [{ col: "title", val: "Task 1" }],
             gte: [{ col: "title", val: "Task 1" }],
@@ -292,9 +293,9 @@ describe("db", async () => {
         ]),
       ).toEqual([justTask]);
 
-      db.delete(tasksTable, ["task-1"]);
+      await db.delete(tasksTable, ["task-1"]);
       expect(
-        db.intervalScan(tasksTable, "byTitle", [
+        await db.intervalScan(tasksTable, "byTitle", [
           {
             lte: [{ col: "title", val: "Task 1" }],
             gte: [{ col: "title", val: "Task 1" }],
@@ -397,10 +398,10 @@ describe("db", async () => {
   //   );
   // }
 
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
-    it("works with todo app" + driver.constructor.name, () => {
-      const db = new SyncDB(new DB(driver));
-      db.loadTables([tasksTable, taskTemplatesTable]);
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    it("works with todo app" + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable, taskTemplatesTable]);
 
       const tasks: Task[] = [
         {
@@ -440,7 +441,7 @@ describe("db", async () => {
           lastToggledAt: 3,
         },
       ];
-      db.insert(tasksTable, tasks);
+      await db.insert(tasksTable, tasks);
 
       const templates: TaskTemplate[] = [
         {
@@ -463,43 +464,43 @@ describe("db", async () => {
         },
       ];
 
-      db.insert(taskTemplatesTable, templates);
+      await db.insert(taskTemplatesTable, templates);
 
-      const taskByIds = function (ids: string[]) {
+      const taskByIds = async function (ids: string[]) {
         const tasks: Task[] = [];
 
         for (const id of ids) {
           tasks.push(
-            ...db.intervalScan(tasksTable, "ids", [
+            ...(await db.intervalScan(tasksTable, "ids", [
               { eq: [{ col: "id", val: id }] },
-            ]),
+            ])),
           );
         }
 
         return tasks;
       };
 
-      const templateByIds = function (ids: string[]) {
+      const templateByIds = async function (ids: string[]) {
         const templates: TaskTemplate[] = [];
 
         for (const id of ids) {
           templates.push(
-            ...db.intervalScan(taskTemplatesTable, "ids", [
+            ...(await db.intervalScan(taskTemplatesTable, "ids", [
               {
                 eq: [{ col: "id", val: id }],
               },
-            ]),
+            ])),
           );
         }
 
         return templates;
       };
 
-      const templateChildrenIds = function (
+      const templateChildrenIds = async function (
         projectId: string,
         alwaysIncludeChildIds: string[] = [],
       ) {
-        const templates: TaskTemplate[] = db.intervalScan(
+        const templates: TaskTemplate[] = await db.intervalScan(
           taskTemplatesTable,
           "projectId",
           [
@@ -510,18 +511,18 @@ describe("db", async () => {
         );
 
         if (alwaysIncludeChildIds.length > 0) {
-          templates.push(...templateByIds(alwaysIncludeChildIds));
+          templates.push(...(await templateByIds(alwaysIncludeChildIds)));
         }
 
         return templates;
       };
 
-      const taskWithStateChildrenIds = function (
+      const taskWithStateChildrenIds = async function (
         projectId: string,
         state: "todo" | "done",
         alwaysIncludeTaskIds: string[] = [],
       ) {
-        const tasks: Task[] = db.intervalScan(tasksTable, "projectIdState", [
+        const tasks: Task[] = await db.intervalScan(tasksTable, "projectIdState", [
           {
             eq: [
               { col: "projectId", val: projectId },
@@ -529,37 +530,40 @@ describe("db", async () => {
             ],
           },
         ]);
-        tasks.push(...taskByIds(alwaysIncludeTaskIds));
+        tasks.push(...(await taskByIds(alwaysIncludeTaskIds)));
         return tasks;
       };
 
-      const childrenIds = function (
+      const childrenIds = async function (
         projectId: string,
         alwaysIncludeChildIds: string[] = [],
       ) {
-        const todoTasks = taskWithStateChildrenIds(
+        const todoTasks = await taskWithStateChildrenIds(
           projectId,
           "todo",
           alwaysIncludeChildIds,
         );
-        const templates = templateChildrenIds(projectId, alwaysIncludeChildIds);
+        const templates = await templateChildrenIds(
+          projectId,
+          alwaysIncludeChildIds,
+        );
 
         return [...todoTasks, ...templates]
           .sort(fractionalCompare)
           .map((p) => p.id);
       };
 
-      expect(taskWithStateChildrenIds("1", "done", [])).toEqual([
+      expect(await taskWithStateChildrenIds("1", "done", [])).toEqual([
         tasks[0],
         tasks[2],
       ]);
-      expect(taskWithStateChildrenIds("1", "done", ["task-4"])).toEqual([
+      expect(await taskWithStateChildrenIds("1", "done", ["task-4"])).toEqual([
         tasks[0],
         tasks[2],
         tasks[3],
       ]);
 
-      expect(childrenIds("1", [])).toEqual([
+      expect(await childrenIds("1", [])).toEqual([
         "task-2",
         "template-1",
         "template-2",
@@ -568,6 +572,7 @@ describe("db", async () => {
   }
 });
 
+if (typeof globalThis.indexedDB === "undefined") {
 describe("Database Operations Edge Cases", async () => {
   for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
     describe(`${driver.constructor.name}`, () => {
@@ -1576,3 +1581,4 @@ describe("Database Operations Edge Cases", async () => {
     });
   }
 });
+}
