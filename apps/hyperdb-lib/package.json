@@ -9,7 +9,11 @@
     ".": "./src/index.ts",
     "./react": "./src/react.ts",
     "./devtool": "./src/devtool/index.ts",
-    "./tracing": "./src/hyperdb/tracing/index.ts"
+    "./tracing": "./src/hyperdb/tracing/index.ts",
+    "./drivers/inmemory": "./src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",
+    "./drivers/sqlite": "./src/hyperdb/drivers/sqlite/index.ts",
+    "./drivers/sqlite/wasm": "./src/hyperdb/drivers/sqlite/wasm.ts",
+    "./drivers/idb": "./src/hyperdb/drivers/idb/idb-driver.ts"
   },
   "scripts": {
     "build": "vite build && tsc",

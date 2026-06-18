@@ -1,3 +1,5 @@
+/// <reference lib="dom" />
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { unwrapCb, type DBCmd } from "../../commands/async";
 import type { DBDriver, DBDriverTX } from "../../core/driver";
