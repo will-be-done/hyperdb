@@ -79,6 +79,10 @@ export type SelectorFactoryOptions = {
   trace?: TraceOptions;
   validateArgs?: boolean;
 };
+export type SelectorFactoryConfigureOptions = {
+  trace?: Partial<TraceOptions>;
+  validateArgs?: boolean;
+};
 
 export type ObjectSelector<
   TReturn,
@@ -172,8 +176,8 @@ const defineSelectorMetadata = <
     args?: SelectorArgsSchema;
     skipTrace?: SelectorTraceSkip;
     memoization?: SelectorMemoization;
-    trace: TraceOptions;
-    validateArgs?: boolean;
+    trace: TraceOptions | (() => TraceOptions);
+    validateArgs?: boolean | (() => boolean);
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
 ): TFn => {
@@ -204,12 +208,18 @@ const defineSelectorMetadata = <
       configurable: false,
     },
     trace: {
-      value: metadata.trace,
+      get:
+        typeof metadata.trace === "function"
+          ? metadata.trace
+          : () => metadata.trace,
       enumerable: true,
       configurable: false,
     },
     validateArgs: {
-      value: metadata.validateArgs,
+      get:
+        typeof metadata.validateArgs === "function"
+          ? metadata.validateArgs
+          : () => metadata.validateArgs,
       enumerable: true,
       configurable: false,
     },
@@ -240,6 +250,7 @@ export interface SelectorBuilder {
   <TSchema extends SelectorArgsSchema, TReturn>(
     definition: SelectorDefinition<TSchema, TReturn>,
   ): ObjectSelector<TReturn, TSchema>;
+  configure(options: SelectorFactoryConfigureOptions): void;
 }
 
 const defaultSelectorFactoryOptions: Required<SelectorFactoryOptions> = {
@@ -255,6 +266,22 @@ export function createSelector(
   const factoryOptions = {
     ...defaultSelectorFactoryOptions,
     ...options,
+    trace: {
+      ...defaultSelectorFactoryOptions.trace,
+      ...options.trace,
+    },
+  };
+
+  const configure = (nextOptions: SelectorFactoryConfigureOptions): void => {
+    if (nextOptions.trace !== undefined) {
+      factoryOptions.trace = {
+        ...factoryOptions.trace,
+        ...nextOptions.trace,
+      };
+    }
+    if (nextOptions.validateArgs !== undefined) {
+      factoryOptions.validateArgs = nextOptions.validateArgs;
+    }
   };
 
   const buildSelector = <TSchema extends SelectorArgsSchema, TReturn>(
@@ -262,14 +289,14 @@ export function createSelector(
   ): ObjectSelector<TReturn, TSchema> => {
     const displayName = assertSelectorName(definition.name);
     const skipTrace = normalizeSelectorTraceSkip(definition.skipTrace);
-    const traceDisabled = isTraceDisabled(factoryOptions.trace);
-    const runnerSkipTrace = {
-      childTrace: skipTrace.childTrace || traceDisabled,
-      rootTrace: skipTrace.rootTrace || traceDisabled,
-    };
     const memoization = normalizeSelectorMemoization(definition.memoization);
     const argsValidator = v.object(definition.args);
     const wrapped = ((args: InferObject<typeof definition.args>) => {
+      const traceDisabled = isTraceDisabled(factoryOptions.trace);
+      const runnerSkipTrace = {
+        childTrace: skipTrace.childTrace || traceDisabled,
+        rootTrace: skipTrace.rootTrace || traceDisabled,
+      };
       const normalizedArgs = factoryOptions.validateArgs
         ? assertValid(argsValidator, args)
         : args;
@@ -303,13 +330,16 @@ export function createSelector(
       args: definition.args,
       skipTrace: definition.skipTrace,
       memoization,
-      trace: factoryOptions.trace,
-      validateArgs: factoryOptions.validateArgs,
+      trace: () => factoryOptions.trace,
+      validateArgs: () => factoryOptions.validateArgs,
       handler: definition.handler,
     });
   };
 
-  return buildSelector as SelectorBuilder;
+  const builder = buildSelector as SelectorBuilder;
+  builder.configure = configure;
+
+  return builder;
 }
 
 type RunSelectorOptions = Pick<CommandRunnerOptions, "ops" | "childMemo">;
@@ -496,6 +526,7 @@ const getSelectorFactoryOptions = (
 const traceSelectorCacheHit = (entry: SelectorCacheEntry<unknown>): void => {
   const skipTrace = getSelectorTraceSkip(entry.selector);
   const factoryOptions = getSelectorFactoryOptions(entry.selector);
+  const traceDisabled = isTraceDisabled(factoryOptions.trace);
   recordCachedRootTrace(
     createTraceFrameMeta(
       "selector",
@@ -503,8 +534,8 @@ const traceSelectorCacheHit = (entry: SelectorCacheEntry<unknown>): void => {
       entry.args,
       {
         trace: factoryOptions.trace,
-        skipChildTrace: skipTrace.childTrace,
-        skipRootTrace: skipTrace.rootTrace,
+        skipChildTrace: skipTrace.childTrace || traceDisabled,
+        skipRootTrace: skipTrace.rootTrace || traceDisabled,
       },
     ),
     entry.db,

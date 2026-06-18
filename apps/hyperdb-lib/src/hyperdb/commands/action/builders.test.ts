@@ -160,6 +160,24 @@ describe("action", () => {
     expect(traceMeta?.arg).toEqual({ id: "task-1" });
   });
 
+  it("object-form action can skip tracing", () => {
+    const skipped = action({
+      name: "skippedAction",
+      args: {},
+      skipTrace: true,
+      handler: function* () {
+        return "done";
+      },
+    });
+
+    const gen = skipped({});
+    const traceMeta = getGeneratorTraceMeta(gen);
+
+    expect(skipped.skipTrace).toBe(true);
+    expect(traceMeta?.skipChildTrace).toBe(true);
+    expect(traceMeta?.skipRootTrace).toBe(true);
+  });
+
   it("createAction can enable and disable object args validation", () => {
     const validatingAction = createAction({ validateArgs: true });
     const looseAction = createAction({ validateArgs: false });
@@ -185,6 +203,36 @@ describe("action", () => {
     );
     expect(() => validated({ id: "task-1" })).not.toThrow();
     expect(() => loose({ id: 123 } as never)).not.toThrow();
+  });
+
+  it("action builder configure updates existing actions", () => {
+    const configurableAction = createAction({
+      trace: { enabled: true, startOn: "devtoolOpen" },
+      validateArgs: false,
+    });
+
+    const configured = configurableAction({
+      name: "configuredAction",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    configurableAction.configure({
+      trace: { startOn: "load" },
+      validateArgs: true,
+    });
+
+    const gen = configured({ id: "task-1" });
+    const traceMeta = getGeneratorTraceMeta(gen);
+
+    expect(configured.trace).toEqual({ enabled: true, startOn: "load" });
+    expect(configured.validateArgs).toBe(true);
+    expect(traceMeta?.trace).toEqual({ enabled: true, startOn: "load" });
+    expect(() => configured({ id: 123 } as never)).toThrow(
+      "expected string at id",
+    );
   });
 
   it("object-form action requires an explicit name", () => {

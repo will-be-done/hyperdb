@@ -24,8 +24,18 @@ import {
 } from "./commands";
 
 export type ActionArgsSchema = Record<string, Validator<any>>;
+export type ActionTraceSkip =
+  | boolean
+  | {
+      childTrace: boolean;
+      rootTrace: boolean;
+    };
 export type ActionFactoryOptions = {
   trace?: TraceOptions;
+  validateArgs?: boolean;
+};
+export type ActionFactoryConfigureOptions = {
+  trace?: Partial<TraceOptions>;
   validateArgs?: boolean;
 };
 
@@ -36,6 +46,7 @@ export type ObjectAction<
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
+  readonly skipTrace?: ActionTraceSkip;
   readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
   readonly handler: (
@@ -46,7 +57,30 @@ export type ObjectAction<
 export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
+  skipTrace?: ActionTraceSkip;
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
+};
+
+type NormalizedActionTraceSkip = {
+  childTrace: boolean;
+  rootTrace: boolean;
+};
+
+const normalizeActionTraceSkip = (
+  skipTrace: ActionTraceSkip | undefined,
+): NormalizedActionTraceSkip => {
+  if (skipTrace === true) {
+    return { childTrace: true, rootTrace: true };
+  }
+
+  if (!skipTrace) {
+    return { childTrace: false, rootTrace: false };
+  }
+
+  return {
+    childTrace: skipTrace.childTrace,
+    rootTrace: skipTrace.rootTrace,
+  };
 };
 
 const defineActionMetadata = <
@@ -56,12 +90,13 @@ const defineActionMetadata = <
   metadata: {
     name: string;
     args?: ActionArgsSchema;
-    trace: TraceOptions;
-    validateArgs?: boolean;
+    skipTrace?: ActionTraceSkip;
+    trace: TraceOptions | (() => TraceOptions);
+    validateArgs?: boolean | (() => boolean);
     handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
   },
 ): TFn => {
-  Object.defineProperties(fn, {
+  const descriptors: PropertyDescriptorMap = {
     kind: {
       value: "action",
       enumerable: true,
@@ -83,16 +118,32 @@ const defineActionMetadata = <
       configurable: false,
     },
     trace: {
-      value: metadata.trace,
+      get:
+        typeof metadata.trace === "function"
+          ? metadata.trace
+          : () => metadata.trace,
       enumerable: true,
       configurable: false,
     },
     validateArgs: {
-      value: metadata.validateArgs,
+      get:
+        typeof metadata.validateArgs === "function"
+          ? metadata.validateArgs
+          : () => metadata.validateArgs,
       enumerable: true,
       configurable: false,
     },
-  });
+  };
+
+  if (metadata.skipTrace !== undefined) {
+    descriptors.skipTrace = {
+      value: metadata.skipTrace,
+      enumerable: true,
+      configurable: false,
+    };
+  }
+
+  Object.defineProperties(fn, descriptors);
 
   return fn;
 };
@@ -109,6 +160,7 @@ export interface ActionBuilder {
   <TSchema extends ActionArgsSchema, TReturn>(
     definition: ActionDefinition<TSchema, TReturn>,
   ): ObjectAction<TReturn, TSchema>;
+  configure(options: ActionFactoryConfigureOptions): void;
 }
 
 const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
@@ -124,6 +176,22 @@ export function createAction(
   const factoryOptions = {
     ...defaultActionFactoryOptions,
     ...options,
+    trace: {
+      ...defaultActionFactoryOptions.trace,
+      ...options.trace,
+    },
+  };
+
+  const configure = (nextOptions: ActionFactoryConfigureOptions): void => {
+    if (nextOptions.trace !== undefined) {
+      factoryOptions.trace = {
+        ...factoryOptions.trace,
+        ...nextOptions.trace,
+      };
+    }
+    if (nextOptions.validateArgs !== undefined) {
+      factoryOptions.validateArgs = nextOptions.validateArgs;
+    }
   };
 
   const buildAction = <TSchema extends ActionArgsSchema, TReturn>(
@@ -131,8 +199,9 @@ export function createAction(
   ): ObjectAction<TReturn, TSchema> => {
     const displayName = assertActionName(input.name);
     const argsValidator = v.object(input.args);
-    const traceDisabled = isTraceDisabled(factoryOptions.trace);
+    const skipTrace = normalizeActionTraceSkip(input.skipTrace);
     const wrapped = ((args: InferObject<typeof input.args>) => {
+      const traceDisabled = isTraceDisabled(factoryOptions.trace);
       const normalizedArgs = factoryOptions.validateArgs
         ? assertValid(argsValidator, args)
         : args;
@@ -144,8 +213,8 @@ export function createAction(
         normalizedArgs,
         {
           trace: factoryOptions.trace,
-          skipChildTrace: traceDisabled,
-          skipRootTrace: traceDisabled,
+          skipChildTrace: skipTrace.childTrace || traceDisabled,
+          skipRootTrace: skipTrace.rootTrace || traceDisabled,
         },
       );
     }) as ObjectAction<TReturn, TSchema>;
@@ -153,13 +222,17 @@ export function createAction(
     return defineActionMetadata(wrapped, {
       name: displayName,
       args: input.args,
-      trace: factoryOptions.trace,
-      validateArgs: factoryOptions.validateArgs,
+      skipTrace: input.skipTrace,
+      trace: () => factoryOptions.trace,
+      validateArgs: () => factoryOptions.validateArgs,
       handler: input.handler,
     });
   };
 
-  return buildAction as ActionBuilder;
+  const builder = buildAction as ActionBuilder;
+  builder.configure = configure;
+
+  return builder;
 }
 
 export function* insert<TTable extends TableDefinition<any, any>>(

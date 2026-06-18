@@ -241,6 +241,36 @@ describe("selector", () => {
     expect(() => loose({ id: 123 } as never)).not.toThrow();
   });
 
+  test("selector builder configure updates existing selectors", () => {
+    const configurableSelector = createSelector({
+      trace: { enabled: true, startOn: "devtoolOpen" },
+      validateArgs: false,
+    });
+
+    const configured = configurableSelector({
+      name: "configuredSelector",
+      args: { id: v.string() },
+      handler: function* ({ id }) {
+        return id;
+      },
+    });
+
+    configurableSelector.configure({
+      trace: { startOn: "load" },
+      validateArgs: true,
+    });
+
+    const gen = configured({ id: "task-1" });
+    const traceMeta = getGeneratorTraceMeta(gen);
+
+    expect(configured.trace).toEqual({ enabled: true, startOn: "load" });
+    expect(configured.validateArgs).toBe(true);
+    expect(traceMeta?.trace).toEqual({ enabled: true, startOn: "load" });
+    expect(() => configured({ id: 123 } as never)).toThrow(
+      "expected string at id",
+    );
+  });
+
   test("cached object-form selectors share one DB subscription for same args", () => {
     const cachedTasksTable = defineTable("cachedSelectorTasks", {
       id: v.string(),
