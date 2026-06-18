@@ -1,15 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { describe, expect, it } from "vitest";
-import { execSync } from "../core/executor";
+import { execAsync } from "../core/executor";
 import type { DBDriver } from "../core/driver";
 import type { Row } from "../core/primitives";
 import { DB } from "./db";
-import { SyncDB } from "./sync-db";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
-import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
+import { AsyncDB } from "../test-utils/async-db";
+import { createDriverFactories } from "../test-utils/driver-factories";
 
 const compositeTable = defineTable("driverEdgeComposite", {
   id: v.string(),
@@ -96,11 +95,6 @@ const compositeRows = [
   { id: "2y", a: 2, b: "y" },
 ];
 
-const driverFactories: [string, () => Promise<DBDriver>][] = [
-  ["SqlDriver", () => initSqlJsWasm()],
-  ["BptreeInmemDriver", async () => new BptreeInmemDriver()],
-];
-
 async function scanOrderIds(
   table: TableDefinition<any, any>,
   rows: Row[],
@@ -108,14 +102,14 @@ async function scanOrderIds(
 ): Promise<Record<string, string[]>> {
   const result: Record<string, string[]> = {};
 
-  for (const [driverName, createDriver] of driverFactories) {
-    const db = new SyncDB(new DB(await createDriver()));
-    db.loadTables([table]);
-    db.insert(table, rows);
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    const db = new AsyncDB(new DB(await createDriver()));
+    await db.loadTables([table]);
+    await db.insert(table, rows);
 
-    result[driverName] = db
-      .intervalScan(table, "byValue", [{}], { order })
-      .map((row) => row.id);
+    result[driverName] = (
+      await db.intervalScan(table, "byValue", [{}], { order })
+    ).map((row) => row.id);
   }
 
   return result;
@@ -127,36 +121,36 @@ async function scanOrderIdsWithDriver(
   order: "asc" | "desc",
   createDriver: () => Promise<DBDriver>,
 ): Promise<string[]> {
-  const db = new SyncDB(new DB(await createDriver()));
-  db.loadTables([table]);
-  db.insert(table, rows);
+  const db = new AsyncDB(new DB(await createDriver()));
+  await db.loadTables([table]);
+  await db.insert(table, rows);
 
-  return db
-    .intervalScan(table, "byValue", [{}], { order })
-    .map((row) => row.id);
+  return (await db.intervalScan(table, "byValue", [{}], { order })).map(
+    (row) => row.id,
+  );
 }
 
 describe("runtime edge case regressions", () => {
-  for (const [driverName, createDriver] of driverFactories) {
+  for (const [driverName, createDriver] of createDriverFactories()) {
     describe(driverName, () => {
       it("accepts schemaless index path members that are not SQL identifiers", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([schemalessPathIndexTable]);
-        db.insert(schemalessPathIndexTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([schemalessPathIndexTable]);
+        await db.insert(schemalessPathIndexTable, [
           { id: "user-a", "profile.name": "Ada" },
         ]);
 
         expect(
-          db.intervalScan(schemalessPathIndexTable, "byProfileName", [
+          await db.intervalScan(schemalessPathIndexTable, "byProfileName", [
             { eq: [{ col: "profile.name", val: "Ada" }] },
           ]),
         ).toEqual([{ id: "user-a", "profile.name": "Ada" }]);
       });
 
       it("orders encoded schemaless values before applying limit", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([fullValueOrderTable]);
-        db.insert(fullValueOrderTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([fullValueOrderTable]);
+        await db.insert(fullValueOrderTable, [
           { id: "object", value: { a: 1 } },
           { id: "array", value: [1, "a"] },
           { id: "bytes", value: new Uint8Array([1, 2]).buffer },
@@ -169,48 +163,52 @@ describe("runtime edge case regressions", () => {
         ] as Row[]);
 
         expect(
-          db
-            .intervalScan(fullValueOrderTable, "byValue", [{}], { limit: 4 })
-            .map((row) => row.id),
+          (
+            await db.intervalScan(fullValueOrderTable, "byValue", [{}], {
+              limit: 4,
+            })
+          ).map((row) => row.id),
         ).toEqual(["missing", "null", "bigint", "number"]);
         expect(
-          db
-            .intervalScan(fullValueOrderTable, "byValue", [{}], {
+          (
+            await db.intervalScan(fullValueOrderTable, "byValue", [{}], {
               order: "desc",
               limit: 3,
             })
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["object", "array", "bytes"]);
       });
 
       it("uses id as the final stable tiebreaker for composite btree scans", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([compositeTieTable]);
-        db.insert(compositeTieTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([compositeTieTable]);
+        await db.insert(compositeTieTable, [
           { id: "row-c", a: 1, b: "same" },
           { id: "row-a", a: 1, b: "same" },
           { id: "row-b", a: 1, b: "same" },
         ]);
 
         expect(
-          db
-            .intervalScan(compositeTieTable, "byAThenB", [{}], { limit: 2 })
-            .map((row) => row.id),
+          (
+            await db.intervalScan(compositeTieTable, "byAThenB", [{}], {
+              limit: 2,
+            })
+          ).map((row) => row.id),
         ).toEqual(["row-a", "row-b"]);
         expect(
-          db
-            .intervalScan(compositeTieTable, "byAThenB", [{}], {
+          (
+            await db.intervalScan(compositeTieTable, "byAThenB", [{}], {
               order: "desc",
               limit: 2,
             })
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["row-c", "row-b"]);
       });
 
       it("keeps disjoint OR range scans globally ordered before limit", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([numberOrderTable]);
-        db.insert(numberOrderTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([numberOrderTable]);
+        await db.insert(numberOrderTable, [
           { id: "three", value: 3 },
           { id: "two", value: 2 },
           { id: "one", value: 1 },
@@ -219,8 +217,8 @@ describe("runtime edge case regressions", () => {
         ]);
 
         expect(
-          db
-            .intervalScan(
+          (
+            await db.intervalScan(
               numberOrderTable,
               "byValue",
               [
@@ -229,14 +227,14 @@ describe("runtime edge case regressions", () => {
               ],
               { limit: 3 },
             )
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["negative", "zero", "two"]);
       });
 
       it("dedupes overlapping OR ranges before final limit semantics", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([numberOrderTable]);
-        db.insert(numberOrderTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([numberOrderTable]);
+        await db.insert(numberOrderTable, [
           { id: "four", value: 4 },
           { id: "three", value: 3 },
           { id: "two", value: 2 },
@@ -245,8 +243,8 @@ describe("runtime edge case regressions", () => {
         ]);
 
         expect(
-          db
-            .intervalScan(
+          (
+            await db.intervalScan(
               numberOrderTable,
               "byValue",
               [
@@ -261,40 +259,40 @@ describe("runtime edge case regressions", () => {
               ],
               { limit: 5 },
             )
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["zero", "one", "two", "three", "four"]);
       });
 
       it("rolls back failed base-table writes without stale sort keys", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([duplicateTable]);
-        db.insert(duplicateTable, [{ id: "task-a", title: "A" }]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([duplicateTable]);
+        await db.insert(duplicateTable, [{ id: "task-a", title: "A" }]);
 
-        expect(() =>
+        await expect(
           db.insert(duplicateTable, [
             { id: "task-b", title: "B" },
             { id: "task-a", title: "Duplicate" },
           ]),
-        ).toThrow(/duplicate|constraint|unique/i);
+        ).rejects.toThrow(/duplicate|constraint|unique|already exists/i);
 
         expect(
-          db
-            .intervalScan(duplicateTable, "byTitle", [{}])
-            .map((row) => row.id),
+          (await db.intervalScan(duplicateTable, "byTitle", [{}])).map(
+            (row) => row.id,
+          ),
         ).toEqual(["task-a"]);
 
-        db.insert(duplicateTable, [{ id: "task-c", title: "C" }]);
+        await db.insert(duplicateTable, [{ id: "task-c", title: "C" }]);
         expect(
-          db
-            .intervalScan(duplicateTable, "byTitle", [{}])
-            .map((row) => row.id),
+          (await db.intervalScan(duplicateTable, "byTitle", [{}])).map(
+            (row) => row.id,
+          ),
         ).toEqual(["task-a", "task-c"]);
       });
     });
   }
 
   describe("ordering parity", () => {
-    for (const [driverName, createDriver] of driverFactories) {
+    for (const [driverName, createDriver] of createDriverFactories()) {
       it(`orders the full stored value type ladder for ${driverName}`, async () => {
         const rows = [
           { id: "missing" },
@@ -353,53 +351,28 @@ describe("runtime edge case regressions", () => {
         { id: "string-a", value: "a" },
       ];
 
+      const asc = [
+        "null",
+        "negative",
+        "false",
+        "zero",
+        "one",
+        "true",
+        "empty-string",
+        "string-zero",
+        "string-a",
+      ];
+      const desc = [...asc].reverse();
+
       expect(await scanOrderIds(mixedOrderTable, rows, "asc")).toEqual({
-        SqlDriver: [
-          "null",
-          "negative",
-          "false",
-          "zero",
-          "one",
-          "true",
-          "empty-string",
-          "string-zero",
-          "string-a",
-        ],
-        BptreeInmemDriver: [
-          "null",
-          "negative",
-          "false",
-          "zero",
-          "one",
-          "true",
-          "empty-string",
-          "string-zero",
-          "string-a",
-        ],
+        SqlDriver: asc,
+        BptreeInmemDriver: asc,
+        IdbDriver: asc,
       });
       expect(await scanOrderIds(mixedOrderTable, rows, "desc")).toEqual({
-        SqlDriver: [
-          "string-a",
-          "string-zero",
-          "empty-string",
-          "true",
-          "one",
-          "zero",
-          "false",
-          "negative",
-          "null",
-        ],
-        BptreeInmemDriver: [
-          "string-a",
-          "string-zero",
-          "empty-string",
-          "true",
-          "one",
-          "zero",
-          "false",
-          "negative",
-          "null",
-        ],
+        SqlDriver: desc,
+        BptreeInmemDriver: desc,
+        IdbDriver: desc,
       });
     });
 
@@ -442,10 +415,12 @@ describe("runtime edge case regressions", () => {
       expect(await scanOrderIds(fullValueOrderTable, rows, "asc")).toEqual({
         SqlDriver: asc,
         BptreeInmemDriver: asc,
+        IdbDriver: asc,
       });
       expect(await scanOrderIds(fullValueOrderTable, rows, "desc")).toEqual({
         SqlDriver: [...asc].reverse(),
         BptreeInmemDriver: [...asc].reverse(),
+        IdbDriver: [...asc].reverse(),
       });
     });
 
@@ -459,24 +434,24 @@ describe("runtime edge case regressions", () => {
         { id: "string", value: "a" },
       ] as Row[];
 
-      for (const [, createDriver] of driverFactories) {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([fullValueOrderTable]);
-        db.insert(fullValueOrderTable, rows);
+      for (const [, createDriver] of createDriverFactories()) {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([fullValueOrderTable]);
+        await db.insert(fullValueOrderTable, rows);
 
         expect(
-          db
-            .intervalScan(fullValueOrderTable, "byValue", [
+          (
+            await db.intervalScan(fullValueOrderTable, "byValue", [
               { lte: [{ col: "value", val: null }] },
             ])
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["missing-a", "missing-b", "null-a", "null-b"]);
         expect(
-          db
-            .intervalScan(fullValueOrderTable, "byValue", [
+          (
+            await db.intervalScan(fullValueOrderTable, "byValue", [
               { gt: [{ col: "value", val: null }] },
             ])
-            .map((row) => row.id),
+          ).map((row) => row.id),
         ).toEqual(["number", "string"]);
       }
     });
@@ -544,25 +519,27 @@ describe("runtime edge case regressions", () => {
         ).toEqual({
           SqlDriver: testCase.asc,
           BptreeInmemDriver: testCase.asc,
+          IdbDriver: testCase.asc,
         });
         expect(
           await scanOrderIds(testCase.table, testCase.rows, "desc"),
         ).toEqual({
           SqlDriver: testCase.desc,
           BptreeInmemDriver: testCase.desc,
+          IdbDriver: testCase.desc,
         });
       }
     });
   });
 
-  for (const [driverName, createDriver] of driverFactories) {
+  for (const [driverName, createDriver] of createDriverFactories()) {
     describe(driverName, () => {
       it("composite OR equality scans preserve tuple pairings", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([compositeTable]);
-        db.insert(compositeTable, compositeRows);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([compositeTable]);
+        await db.insert(compositeTable, compositeRows);
 
-        const results = db.intervalScan(compositeTable, "byAThenB", [
+        const results = await db.intervalScan(compositeTable, "byAThenB", [
           {
             eq: [
               { col: "a", val: 1 },
@@ -582,13 +559,13 @@ describe("runtime edge case regressions", () => {
 
       it("rejects non-prefix composite range clauses when called directly", async () => {
         const driver = await createDriver();
-        execSync(driver.loadTables([compositeTable]));
-        execSync(
+        await execAsync(driver.loadTables([compositeTable]));
+        await execAsync(
           driver.insert(compositeTable.tableName, compositeRows as Row[]),
         );
 
-        expect(() =>
-          execSync(
+        await expect(
+          execAsync(
             driver.intervalScan(
               compositeTable.tableName,
               "byAThenB",
@@ -603,76 +580,76 @@ describe("runtime edge case regressions", () => {
               {},
             ),
           ),
-        ).toThrow(/Cannot use column 'b'/);
+        ).rejects.toThrow(/Cannot use column 'b'/);
       });
 
       it("insert rejects duplicate ids before secondary indexes go stale", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([duplicateTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([duplicateTable]);
 
-        db.insert(duplicateTable, [{ id: "same-id", title: "Old title" }]);
+        await db.insert(duplicateTable, [{ id: "same-id", title: "Old title" }]);
 
-        expect(() =>
+        await expect(
           db.insert(duplicateTable, [{ id: "same-id", title: "New title" }]),
-        ).toThrow(/duplicate|exists/i);
+        ).rejects.toThrow(/duplicate|exists/i);
       });
 
       it("upsert rejects duplicate ids before deleting existing rows", async () => {
         if (driverName !== "BptreeInmemDriver") return;
 
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([duplicateTable]);
-        db.insert(duplicateTable, [{ id: "task-1", title: "Existing" }]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([duplicateTable]);
+        await db.insert(duplicateTable, [{ id: "task-1", title: "Existing" }]);
 
-        expect(() =>
+        await expect(
           db.upsert(duplicateTable, [
             { id: "task-1", title: "First" },
             { id: "task-1", title: "Second" },
           ]),
-        ).toThrow(/duplicate|exists/i);
+        ).rejects.toThrow(/duplicate|exists/i);
 
         expect(
-          db.intervalScan(duplicateTable, "byTitle", [
+          await db.intervalScan(duplicateTable, "byTitle", [
             { eq: [{ col: "title", val: "Existing" }] },
           ]),
         ).toEqual([{ id: "task-1", title: "Existing" }]);
       });
 
       it("upsert replaces rows and replaces indexed sort keys", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([duplicateTable]);
-        db.insert(duplicateTable, [{ id: "task-1", title: "A" }]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([duplicateTable]);
+        await db.insert(duplicateTable, [{ id: "task-1", title: "A" }]);
 
-        db.upsert(duplicateTable, [
+        await db.upsert(duplicateTable, [
           { id: "task-1", title: "C" },
           { id: "task-2", title: "B" },
         ]);
 
         expect(
-          db
-            .intervalScan(duplicateTable, "byTitle", [{}])
-            .map((row) => row.id),
+          (await db.intervalScan(duplicateTable, "byTitle", [{}])).map(
+            (row) => row.id,
+          ),
         ).toEqual(["task-2", "task-1"]);
         expect(
-          db.intervalScan(duplicateTable, "byTitle", [
+          await db.intervalScan(duplicateTable, "byTitle", [
             { eq: [{ col: "title", val: "C" }] },
           ]),
         ).toEqual([{ id: "task-1", title: "C" }]);
       });
 
       it("hash transaction scans apply limit after filtering deleted rows", async () => {
-        const db = new SyncDB(new DB(await createDriver()));
-        db.loadTables([hashLimitTable]);
-        db.insert(hashLimitTable, [
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([hashLimitTable]);
+        await db.insert(hashLimitTable, [
           { id: "task-1", title: "Same" },
           { id: "task-2", title: "Same" },
           { id: "task-3", title: "Same" },
         ]);
 
-        const tx = db.beginTx();
-        tx.delete(hashLimitTable, ["task-1"]);
+        const tx = await db.beginTx();
+        await tx.delete(hashLimitTable, ["task-1"]);
 
-        const results = tx.intervalScan(
+        const results = await tx.intervalScan(
           hashLimitTable,
           "byTitle",
           [{ eq: [{ col: "title", val: "Same" }] }],
@@ -683,24 +660,22 @@ describe("runtime edge case regressions", () => {
         expect(results.map((row) => row.id)).toEqual(
           expect.arrayContaining(["task-2", "task-3"]),
         );
-        tx.rollback();
+        await tx.rollback();
       });
 
       it("write failures rollback before later writes start a new transaction", async () => {
         const driver = await createDriver();
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([rollbackTable]);
+        const db = new AsyncDB(new DB(driver));
+        await db.loadTables([rollbackTable]);
 
-        expect(() =>
-          execSync(
-            driver.insert("missingRollbackTable", [{ id: "bad" } as Row]),
-          ),
-        ).toThrow();
+        await expect(
+          execAsync(driver.insert("missingRollbackTable", [{ id: "bad" } as Row])),
+        ).rejects.toThrow();
 
         const goodRecord = { id: "good", title: "Good" };
-        expect(() => db.insert(rollbackTable, [goodRecord])).not.toThrow();
+        await expect(db.insert(rollbackTable, [goodRecord])).resolves.toBeUndefined();
         expect(
-          db.intervalScan(rollbackTable, "byId", [
+          await db.intervalScan(rollbackTable, "byId", [
             { eq: [{ col: "id", val: "good" }] },
           ]),
         ).toEqual([goodRecord]);
@@ -719,9 +694,9 @@ describe("runtime edge case regressions", () => {
 
         const throws = [];
         for (const table of unsafeTables) {
-          const db = new SyncDB(new DB(await createDriver()));
+          const db = new AsyncDB(new DB(await createDriver()));
           try {
-            db.loadTables([table]);
+            await db.loadTables([table]);
             throws.push(false);
           } catch {
             throws.push(true);

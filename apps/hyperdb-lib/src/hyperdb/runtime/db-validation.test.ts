@@ -1,16 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from "vitest";
 import { DB } from "./db";
-import { SyncDB } from "./sync-db";
 import { execSync } from "../core/executor";
 import type { DBDriver, DBDriverTX } from "../core/driver";
 import type { Row, SelectOptions, WhereClause } from "../core/primitives";
 import type { DBCmd } from "../commands/async";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
-import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { insert as actionInsert, syncDispatch } from "../commands/action/builders";
+import { AsyncDB } from "../test-utils/async-db";
+import { createDriverFactories } from "../test-utils/driver-factories";
 
 class RecordingDriver implements DBDriver, DBDriverTX {
   inserted: Row[][] = [];
@@ -316,19 +315,16 @@ describe("DB runtime validation and codec boundary", () => {
     expect(driver.upserted).toEqual([]);
   });
 
-  for (const [name, driverFactory] of [
-    ["SqlDriver", () => initSqlJsWasm()],
-    ["BptreeInmemDriver", async () => new BptreeInmemDriver()],
-  ] as const) {
+  for (const [name, driverFactory] of createDriverFactories()) {
     it(`round-trips rich document values through ${name}`, async () => {
       const driver = await driverFactory();
-      const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
-      db.loadTables([docsTable]);
+      const db = new AsyncDB(new DB(driver, { runtimeValidation: true }));
+      await db.loadTables([docsTable]);
 
       const bytes = new Uint8Array([8, 9, 10]);
       const buffer = new Uint8Array([11, 12]).buffer;
 
-      db.insert(docsTable, [
+      await db.insert(docsTable, [
         {
           id: "doc-1",
           title: "hello",
@@ -340,7 +336,7 @@ describe("DB runtime validation and codec boundary", () => {
         },
       ]);
 
-      const [record] = db.intervalScan(docsTable, "byTitle", scanAll);
+      const [record] = await db.intervalScan(docsTable, "byTitle", scanAll);
 
       expect(record.payload.big).toBe(9007199254740993n);
       expect(record.payload.bytes).toEqual(bytes);

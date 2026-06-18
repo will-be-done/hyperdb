@@ -5,7 +5,6 @@ import { SyncDB } from "./sync-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
 import { AsyncDB } from "../test-utils/async-db";
 import { createDriverFactories } from "../test-utils/driver-factories";
 
@@ -577,22 +576,22 @@ describe("db", async () => {
 });
 
 describe("Database Operations Edge Cases", async () => {
-  for (const driver of [await initSqlJsWasm(), new BptreeInmemDriver()]) {
-    describe(`${driver.constructor.name}`, () => {
-      it("should handle empty database scans", () => {
+  for (const [driverName, createDriver] of createDriverFactories()) {
+    describe(driverName, () => {
+      it("should handle empty database scans", async () => {
         const testTable = defineTable("test", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        const results = db.intervalScan(testTable, "byValue", [{}]);
+        const results = await db.intervalScan(testTable, "byValue", [{}]);
         expect(results).toEqual([]);
       });
 
-      it("works correctly with union document schemas", () => {
+      it("works correctly with union document schemas", async () => {
         const docsTable = defineTable(
           "unionDocuments",
           v.union(
@@ -610,8 +609,10 @@ describe("Database Operations Edge Cases", async () => {
           ),
         );
 
-        const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
-        db.loadTables([docsTable]);
+        const db = new AsyncDB(
+          new DB(await createDriver(), { runtimeValidation: true }),
+        );
+        await db.loadTables([docsTable]);
 
         const stringDocument = {
           id: "doc-string",
@@ -625,9 +626,9 @@ describe("Database Operations Edge Cases", async () => {
           someOtherField: "hello",
         };
 
-        db.insert(docsTable, [stringDocument, numberDocument]);
+        await db.insert(docsTable, [stringDocument, numberDocument]);
 
-        const res = db.intervalScan(docsTable, "byId", [
+        const res = await db.intervalScan(docsTable, "byId", [
           {
             eq: [{ col: "id", val: "doc-string" }],
           },
@@ -640,7 +641,7 @@ describe("Database Operations Edge Cases", async () => {
         });
 
         expect(
-          db.intervalScan(docsTable, "byId", [
+          await db.intervalScan(docsTable, "byId", [
             {
               eq: [{ col: "id", val: "doc-string" }],
             },
@@ -648,17 +649,17 @@ describe("Database Operations Edge Cases", async () => {
         ).toEqual([stringDocument]);
 
         const updatedNumberDocument = { ...numberDocument, value: 43 };
-        db.upsert(docsTable, [updatedNumberDocument]);
+        await db.upsert(docsTable, [updatedNumberDocument]);
 
         expect(
-          db.intervalScan(docsTable, "byId", [
+          await db.intervalScan(docsTable, "byId", [
             {
               eq: [{ col: "id", val: "doc-number" }],
             },
           ]),
         ).toEqual([updatedNumberDocument]);
 
-        expect(() =>
+        await expect(
           db.insert(docsTable, [
             {
               id: "doc-invalid",
@@ -666,10 +667,10 @@ describe("Database Operations Edge Cases", async () => {
               value: 123,
             } as any,
           ]),
-        ).toThrow(/expected one of union variants/);
+        ).rejects.toThrow(/expected one of union variants/);
       });
 
-      it("skips union rows missing indexed fields while preserving explicit nulls", () => {
+      it("skips union rows missing indexed fields while preserving explicit nulls", async () => {
         const documentsTable = defineTable(
           "documents",
           v.union(
@@ -695,8 +696,10 @@ describe("Database Operations Edge Cases", async () => {
           .index("byPostTitleHash", ["title"], { type: "hash" })
           .index("byPostTitleSlug", ["title", "slug"]);
 
-        const db = new SyncDB(new DB(driver, { runtimeValidation: true }));
-        db.loadTables([documentsTable]);
+        const db = new AsyncDB(
+          new DB(await createDriver(), { runtimeValidation: true }),
+        );
+        await db.loadTables([documentsTable]);
 
         const messages = Array.from({ length: 50 }, (_, index) => ({
           id: `message-${index}`,
@@ -727,7 +730,7 @@ describe("Database Operations Edge Cases", async () => {
           title: "Preview",
         };
 
-        db.insert(documentsTable, [
+        await db.insert(documentsTable, [
           ...messages,
           firstPost,
           secondPost,
@@ -736,14 +739,14 @@ describe("Database Operations Edge Cases", async () => {
         ]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [
+          await db.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: "Hello" }],
             },
           ]),
         ).toEqual([firstPost]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleHash", [
+          await db.intervalScan(documentsTable, "byPostTitleHash", [
             {
               eq: [{ col: "title", val: "Hello" }],
             },
@@ -751,26 +754,26 @@ describe("Database Operations Edge Cases", async () => {
         ).toEqual([firstPost]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [
+          await db.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([nullTitlePost]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleHash", [
+          await db.intervalScan(documentsTable, "byPostTitleHash", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([nullTitlePost]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [{}], {
+          await db.intervalScan(documentsTable, "byPostTitle", [{}], {
             limit: 3,
           }),
         ).toEqual([nullTitlePost, firstPost, secondPost]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostTitleSlug", [
             {
               eq: [{ col: "title", val: null }],
             },
@@ -778,14 +781,14 @@ describe("Database Operations Edge Cases", async () => {
         ).toEqual([nullTitlePost]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostTitleSlug", [
             {
               eq: [{ col: "title", val: "Hello" }],
             },
           ]),
         ).toEqual([firstPost]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostTitleSlug", [
             {
               eq: [{ col: "title", val: "Preview" }],
             },
@@ -797,17 +800,17 @@ describe("Database Operations Edge Cases", async () => {
           title: "Updated",
           slug: "updated",
         };
-        db.upsert(documentsTable, [updatedFirstPost]);
+        await db.upsert(documentsTable, [updatedFirstPost]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [
+          await db.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: "Hello" }],
             },
           ]),
         ).toEqual([]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleHash", [
+          await db.intervalScan(documentsTable, "byPostTitleHash", [
             {
               eq: [{ col: "title", val: "Updated" }],
             },
@@ -820,41 +823,41 @@ describe("Database Operations Edge Cases", async () => {
           title: "Preview",
           slug: "preview",
         };
-        db.upsert(documentsTable, [promotedPreview]);
+        await db.upsert(documentsTable, [promotedPreview]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostTitleSlug", [
             {
               eq: [{ col: "title", val: "Preview" }],
             },
           ]),
         ).toEqual([promotedPreview]);
 
-        db.delete(documentsTable, [nullTitlePost.id]);
+        await db.delete(documentsTable, [nullTitlePost.id]);
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [
+          await db.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleHash", [
+          await db.intervalScan(documentsTable, "byPostTitleHash", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([]);
         expect(
-          db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostTitleSlug", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
         const txMessage = {
           id: "tx-message",
           type: "message" as const,
@@ -866,35 +869,35 @@ describe("Database Operations Edge Cases", async () => {
           title: null,
           slug: "tx-untitled",
         };
-        tx.insert(documentsTable, [txMessage, txNullTitlePost]);
+        await tx.insert(documentsTable, [txMessage, txNullTitlePost]);
 
         expect(
-          tx.intervalScan(documentsTable, "byPostTitle", [
+          await tx.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([txNullTitlePost]);
         expect(
-          tx.intervalScan(documentsTable, "byPostTitleHash", [
+          await tx.intervalScan(documentsTable, "byPostTitleHash", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([txNullTitlePost]);
 
-        tx.delete(documentsTable, [txNullTitlePost.id]);
+        await tx.delete(documentsTable, [txNullTitlePost.id]);
         expect(
-          tx.intervalScan(documentsTable, "byPostTitle", [
+          await tx.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: null }],
             },
           ]),
         ).toEqual([]);
-        tx.commit();
+        await tx.commit();
 
         expect(
-          db.intervalScan(documentsTable, "byPostTitle", [
+          await db.intervalScan(documentsTable, "byPostTitle", [
             {
               eq: [{ col: "title", val: null }],
             },
@@ -902,7 +905,7 @@ describe("Database Operations Edge Cases", async () => {
         ).toEqual([]);
       });
 
-      it("works correctly with string order", () => {
+      it("works correctly with string order", async () => {
         type TestRecord = { id: string; projectId: string; token: string };
         const testTable = defineTable("testStringOrder", {
           id: v.string(),
@@ -910,8 +913,8 @@ describe("Database Operations Edge Cases", async () => {
           token: v.string(),
         }).index("byToken", ["projectId", "token"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: TestRecord[] = [
           { id: "1", projectId: "123", token: "a064m" },
@@ -919,14 +922,14 @@ describe("Database Operations Edge Cases", async () => {
           { id: "3", projectId: "123", token: "Zs2SG" },
         ];
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
-        const results = db.intervalScan(testTable, "byToken", [{}]);
+        const results = await db.intervalScan(testTable, "byToken", [{}]);
 
         console.log(results);
       });
 
-      it("should handle various scan bound combinations", () => {
+      it("should handle various scan bound combinations", async () => {
         type TestRecord = { id: string; a: number; b: string };
         const testTable = defineTable("testScanBounds", {
           id: v.string(),
@@ -934,8 +937,8 @@ describe("Database Operations Edge Cases", async () => {
           b: v.string(),
         }).index("composite", ["a", "b"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: TestRecord[] = [
           { id: "1", a: 1, b: "a" },
@@ -945,10 +948,10 @@ describe("Database Operations Edge Cases", async () => {
           { id: "5", a: 3, b: "a" },
         ];
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
         // Test gt
-        const gtResults = db.intervalScan(testTable, "composite", [
+        const gtResults = await db.intervalScan(testTable, "composite", [
           {
             gt: [{ col: "a", val: 1 }],
           },
@@ -957,7 +960,7 @@ describe("Database Operations Edge Cases", async () => {
         expect(gtResults[0].id).toBe("3");
 
         // Test gte
-        const gteResults = db.intervalScan(testTable, "composite", [
+        const gteResults = await db.intervalScan(testTable, "composite", [
           {
             gte: [
               { col: "a", val: 1 },
@@ -971,14 +974,14 @@ describe("Database Operations Edge Cases", async () => {
         expect(gteResults[1].id).toBe("2");
 
         // Test lt
-        const ltResults = db.intervalScan(testTable, "composite", [
+        const ltResults = await db.intervalScan(testTable, "composite", [
           {
             lt: [{ col: "a", val: 2 }],
           },
         ]);
         expect(ltResults.length).toBe(2);
         // Test lte
-        const lteResults = db.intervalScan(testTable, "composite", [
+        const lteResults = await db.intervalScan(testTable, "composite", [
           {
             lte: [
               { col: "a", val: 2 },
@@ -990,7 +993,7 @@ describe("Database Operations Edge Cases", async () => {
         expect(lteResults.length).toBe(2);
 
         // Test combined bounds
-        const combinedResults = db.intervalScan(testTable, "composite", [
+        const combinedResults = await db.intervalScan(testTable, "composite", [
           {
             gte: [{ col: "a", val: 1 }],
             lte: [{ col: "a", val: 1 }],
@@ -1003,31 +1006,31 @@ describe("Database Operations Edge Cases", async () => {
         expect(combinedResults.map((r) => r.id)).toEqual(["1", "2", "3", "4"]);
       });
 
-      it("should handle limit correctly", () => {
+      it("should handle limit correctly", async () => {
         type TestRecord = { id: string; value: number };
         const testTable = defineTable("test3", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: TestRecord[] = Array.from({ length: 10 }, (_, i) => ({
           id: i.toString(),
           value: i,
         }));
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
         // Test limit without bounds
-        const limitResults = db.intervalScan(testTable, "byValue", [{}], {
+        const limitResults = await db.intervalScan(testTable, "byValue", [{}], {
           limit: 3,
         });
         expect(limitResults.length).toBe(3);
 
         // Test limit with bounds
-        const limitBoundResults = db.intervalScan(
+        const limitBoundResults = await db.intervalScan(
           testTable,
           "byValue",
           [
@@ -1042,51 +1045,51 @@ describe("Database Operations Edge Cases", async () => {
         expect(limitBoundResults[1].value).toBe(6);
 
         // Test limit of 0
-        const zeroLimitResults = db.intervalScan(testTable, "byValue", [{}], {
+        const zeroLimitResults = await db.intervalScan(testTable, "byValue", [{}], {
           limit: 0,
         });
         expect(zeroLimitResults.length).toBe(0);
       });
 
-      it("should handle explicit index order", () => {
+      it("should handle explicit index order", async () => {
         type TestRecord = { id: string; value: number };
         const testTable = defineTable("orderedRecords", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: TestRecord[] = Array.from({ length: 9 }, (_, i) => ({
           id: String(i + 1),
           value: i + 1,
         }));
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
         expect(
-          db
-            .intervalScan(testTable, "byValue", [{}])
-            .map((record) => record.value),
+          (await db.intervalScan(testTable, "byValue", [{}])).map(
+            (record) => record.value,
+          ),
         ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [{}], { order: "asc" })
-            .map((record) => record.value),
+          (
+            await db.intervalScan(testTable, "byValue", [{}], { order: "asc" })
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [{}], { order: "desc" })
-            .map((record) => record.value),
+          (
+            await db.intervalScan(testTable, "byValue", [{}], { order: "desc" })
+          ).map((record) => record.value),
         ).toEqual([9, 8, 7, 6, 5, 4, 3, 2, 1]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [{}], {
+          (
+            await db.intervalScan(testTable, "byValue", [{}], {
               order: "desc",
               limit: 2,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([9, 8]);
 
         const disjointBounds = [
@@ -1101,33 +1104,38 @@ describe("Database Operations Edge Cases", async () => {
         ];
 
         expect(
-          db
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", disjointBounds, {
               order: "desc",
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([9, 8, 7, 3, 2, 1]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", disjointBounds, {
               order: "desc",
               limit: 4,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([9, 8, 7, 3]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", disjointBounds, {
               limit: 4,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 7]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [...disjointBounds].reverse(), {
-              limit: 4,
-            })
-            .map((record) => record.value),
+          (
+            await db.intervalScan(
+              testTable,
+              "byValue",
+              [...disjointBounds].reverse(),
+              {
+                limit: 4,
+              },
+            )
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 7]);
 
         const overlappingBounds = [
@@ -1142,106 +1150,118 @@ describe("Database Operations Edge Cases", async () => {
         ];
 
         expect(
-          db
-            .intervalScan(testTable, "byValue", overlappingBounds)
-            .map((record) => record.value),
+          (await db.intervalScan(testTable, "byValue", overlappingBounds)).map(
+            (record) => record.value,
+          ),
         ).toEqual([2, 3, 4, 5, 6]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", overlappingBounds, {
+              limit: 4,
+            })
+          ).map((record) => record.value),
+        ).toEqual([2, 3, 4, 5]);
+        expect(
+          (
+            await db.intervalScan(testTable, "byValue", overlappingBounds, {
               limit: 3,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 3, 4]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", overlappingBounds, {
               order: "desc",
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([6, 5, 4, 3, 2]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", overlappingBounds, {
               order: "desc",
               limit: 3,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([6, 5, 4]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [
+          (
+            await db.intervalScan(testTable, "byValue", [
               overlappingBounds[0],
               overlappingBounds[0],
             ])
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 3, 4, 5]);
 
-        const tx = db.beginTx();
+        const tx = await db.beginTx();
         expect(
-          tx
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", disjointBounds, {
               order: "desc",
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([9, 8, 7, 3, 2, 1]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", disjointBounds, {
               limit: 4,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 7]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", disjointBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", disjointBounds, {
               order: "desc",
               limit: 4,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([9, 8, 7, 3]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", [...disjointBounds].reverse(), {
-              limit: 4,
-            })
-            .map((record) => record.value),
+          (
+            await tx.intervalScan(
+              testTable,
+              "byValue",
+              [...disjointBounds].reverse(),
+              {
+                limit: 4,
+              },
+            )
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 7]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", overlappingBounds, {
               order: "desc",
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([6, 5, 4, 3, 2]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", overlappingBounds, {
               limit: 3,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 3, 4]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", overlappingBounds, {
+          (
+            await tx.intervalScan(testTable, "byValue", overlappingBounds, {
               order: "desc",
               limit: 3,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([6, 5, 4]);
-        tx.rollback();
+        await tx.rollback();
       });
 
-      it("should apply OR limits after duplicate range dedupe", () => {
+      it("should apply OR limits after duplicate range dedupe", async () => {
         const testTable = defineTable("duplicateRangeRecords", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        db.insert(
+        await db.insert(
           testTable,
           Array.from({ length: 10 }, (_, i) => ({
             id: String(i + 1),
@@ -1265,30 +1285,32 @@ describe("Database Operations Edge Cases", async () => {
         ];
 
         expect(
-          db
-            .intervalScan(testTable, "byValue", duplicateBounds, { limit: 4 })
-            .map((record) => record.value),
+          (
+            await db.intervalScan(testTable, "byValue", duplicateBounds, {
+              limit: 4,
+            })
+          ).map((record) => record.value),
         ).toEqual([1, 2, 3, 4]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", duplicateBounds, {
+          (
+            await db.intervalScan(testTable, "byValue", duplicateBounds, {
               order: "desc",
               limit: 4,
             })
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([10, 9, 8, 7]);
       });
 
-      it("should handle open, empty, and unbounded OR ranges", () => {
+      it("should handle open, empty, and unbounded OR ranges", async () => {
         const testTable = defineTable("orBoundEdgeRecords", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        db.insert(
+        await db.insert(
           testTable,
           Array.from({ length: 9 }, (_, i) => ({
             id: String(i + 1),
@@ -1297,8 +1319,8 @@ describe("Database Operations Edge Cases", async () => {
         );
 
         expect(
-          db
-            .intervalScan(testTable, "byValue", [
+          (
+            await db.intervalScan(testTable, "byValue", [
               {
                 gt: [{ col: "value", val: 1 }],
                 lt: [{ col: "value", val: 4 }],
@@ -1308,11 +1330,11 @@ describe("Database Operations Edge Cases", async () => {
                 lte: [{ col: "value", val: 9 }],
               },
             ])
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 3, 7, 8, 9]);
         expect(
-          db
-            .intervalScan(testTable, "byValue", [
+          (
+            await db.intervalScan(testTable, "byValue", [
               {
                 gte: [{ col: "value", val: 20 }],
                 lte: [{ col: "value", val: 30 }],
@@ -1322,11 +1344,11 @@ describe("Database Operations Edge Cases", async () => {
                 lte: [{ col: "value", val: 4 }],
               },
             ])
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 3, 4]);
         expect(
-          db
-            .intervalScan(
+          (
+            await db.intervalScan(
               testTable,
               "byValue",
               [
@@ -1341,33 +1363,33 @@ describe("Database Operations Edge Cases", async () => {
               ],
               { order: "desc" },
             )
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([]);
-        if (driver instanceof BptreeInmemDriver) {
+        if (driverName === "BptreeInmemDriver") {
           expect(
-            db
-              .intervalScan(testTable, "byValue", [
+            (
+              await db.intervalScan(testTable, "byValue", [
                 {},
                 {
                   gte: [{ col: "value", val: 2 }],
                   lte: [{ col: "value", val: 4 }],
                 },
               ])
-              .map((record) => record.value),
+            ).map((record) => record.value),
           ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
         }
       });
 
-      it("should merge transaction deletes, updates, and inserts through OR scans", () => {
+      it("should merge transaction deletes, updates, and inserts through OR scans", async () => {
         const testTable = defineTable("txOrMergeRecords", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        db.insert(testTable, [
+        await db.insert(testTable, [
           { id: "1", value: 1 },
           { id: "2", value: 2 },
           { id: "3", value: 3 },
@@ -1378,14 +1400,14 @@ describe("Database Operations Edge Cases", async () => {
           { id: "9", value: 9 },
         ]);
 
-        const tx = db.beginTx();
-        tx.delete(testTable, ["4"]);
-        tx.upsert(testTable, [{ id: "3", value: 8 }]);
-        tx.insert(testTable, [{ id: "4.5", value: 4.5 }]);
+        const tx = await db.beginTx();
+        await tx.delete(testTable, ["4"]);
+        await tx.upsert(testTable, [{ id: "3", value: 8 }]);
+        await tx.insert(testTable, [{ id: "4.5", value: 4.5 }]);
 
         expect(
-          tx
-            .intervalScan(testTable, "byValue", [
+          (
+            await tx.intervalScan(testTable, "byValue", [
               {
                 gte: [{ col: "value", val: 2 }],
                 lte: [{ col: "value", val: 5 }],
@@ -1395,11 +1417,11 @@ describe("Database Operations Edge Cases", async () => {
                 lte: [{ col: "value", val: 6 }],
               },
             ])
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([2, 4.5, 5, 6]);
         expect(
-          tx
-            .intervalScan(testTable, "byValue", [
+          (
+            await tx.intervalScan(testTable, "byValue", [
               {
                 gte: [{ col: "value", val: 1 }],
                 lte: [{ col: "value", val: 4 }],
@@ -1409,23 +1431,23 @@ describe("Database Operations Edge Cases", async () => {
                 lte: [{ col: "value", val: 9 }],
               },
             ])
-            .map((record) => record.value),
+          ).map((record) => record.value),
         ).toEqual([1, 2, 7, 8, 9]);
 
-        tx.rollback();
+        await tx.rollback();
       });
 
-      it("should keep global OR order for multi-column indexes", () => {
+      it("should keep global OR order for multi-column indexes", async () => {
         const testTable = defineTable("multiColumnOrRecords", {
           id: v.string(),
           projectId: v.string(),
           state: v.number(),
         }).index("byProjectState", ["projectId", "state"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        db.insert(testTable, [
+        await db.insert(testTable, [
           { id: "a8", projectId: "a", state: 8 },
           { id: "a9", projectId: "a", state: 9 },
           { id: "a10", projectId: "a", state: 10 },
@@ -1452,20 +1474,20 @@ describe("Database Operations Edge Cases", async () => {
         ];
 
         expect(
-          db
-            .intervalScan(testTable, "byProjectState", bounds)
-            .map((record) => `${record.projectId}:${record.state}`),
+          (await db.intervalScan(testTable, "byProjectState", bounds)).map(
+            (record) => `${record.projectId}:${record.state}`,
+          ),
         ).toEqual(["a:8", "a:9", "a:10", "b:1", "b:2"]);
         expect(
-          db
-            .intervalScan(testTable, "byProjectState", bounds, {
+          (
+            await db.intervalScan(testTable, "byProjectState", bounds, {
               order: "desc",
             })
-            .map((record) => `${record.projectId}:${record.state}`),
+          ).map((record) => `${record.projectId}:${record.state}`),
         ).toEqual(["b:2", "b:1", "a:10", "a:9", "a:8"]);
       });
 
-      it("should handle all value types in indexes", () => {
+      it("should handle all value types in indexes", async () => {
         type MixedRecord = {
           id: string;
           nullVal: null;
@@ -1489,8 +1511,8 @@ describe("Database Operations Edge Cases", async () => {
           .index("byString", ["stringVal"])
           .index("byBool", ["boolVal"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: MixedRecord[] = [
           {
@@ -1511,62 +1533,72 @@ describe("Database Operations Edge Cases", async () => {
           },
         ];
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
-        expect(db.intervalScan(testTable, "byNull", [{}]).length).toBe(2);
+        expect((await db.intervalScan(testTable, "byNull", [{}])).length).toBe(
+          2,
+        );
         expect(
-          db.intervalScan(testTable, "byInt", [
+          (
+            await db.intervalScan(testTable, "byInt", [
             { gte: [{ col: "intVal", val: 42 }] },
-          ]).length,
+            ])
+          ).length,
         ).toBe(1);
         expect(
-          db.intervalScan(testTable, "byFloat", [
+          (
+            await db.intervalScan(testTable, "byFloat", [
             { lt: [{ col: "floatVal", val: 3.5 }] },
-          ]).length,
+            ])
+          ).length,
         ).toBe(2);
         expect(
-          db.intervalScan(testTable, "byString", [
+          (
+            await db.intervalScan(testTable, "byString", [
             { gte: [{ col: "stringVal", val: "hello" }] },
-          ]).length,
+            ])
+          ).length,
         ).toBe(2);
         expect(
-          db.intervalScan(testTable, "byBool", [
+          (
+            await db.intervalScan(testTable, "byBool", [
             { gte: [{ col: "boolVal", val: true }] },
-          ]).length,
+            ])
+          ).length,
         ).toBe(1);
       });
 
-      it("should throw errors for missing tables and indexes", () => {
+      it("should throw errors for missing tables and indexes", async () => {
         const testTable = defineTable("test4", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
-        expect(() => {
+        await expect(
           db.intervalScan(
             { name: "nonexistent", indexes: {} } as any,
             "byValue",
             [{}],
-          );
-        }).toThrow();
+          ),
+        ).rejects.toThrow();
 
-        expect(() => {
-          db.intervalScan(testTable, "nonexistent" as any, [{}]);
-        }).toThrow();
+        await expect(
+          db.intervalScan(testTable, "nonexistent" as any, [{}]),
+        ).rejects.toThrow();
       });
 
-      it("should handle duplicate values correctly", () => {
+      it("should handle duplicate values correctly", async () => {
         type TestRecord = { id: string; value: number };
         const testTable = defineTable("test6", {
           id: v.string(),
           value: v.number(),
         }).index("byValue", ["value"]);
 
-        const db = new SyncDB(new DB(driver));
-        db.loadTables([testTable]);
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([testTable]);
 
         const records: TestRecord[] = [
           { id: "1", value: 5 },
@@ -1574,9 +1606,9 @@ describe("Database Operations Edge Cases", async () => {
           { id: "3", value: 5 },
         ];
 
-        db.insert(testTable, records);
+        await db.insert(testTable, records);
 
-        const results = db.intervalScan(testTable, "byValue", [
+        const results = await db.intervalScan(testTable, "byValue", [
           { eq: [{ col: "value", val: 5 }] },
         ]);
         expect(results.length).toBe(3);

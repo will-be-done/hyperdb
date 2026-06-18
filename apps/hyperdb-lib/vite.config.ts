@@ -27,31 +27,13 @@ export default defineConfig({
     },
   },
   test: {
-    projects: [
-      {
-        test: {
-          name: "node",
-          environment: "node",
-          include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-          exclude: ["src/**/*.browser.test.ts"],
-        },
-      },
-      {
-        test: {
-          name: "browser",
-          include: [
-            "src/hyperdb/drivers/idb/**/*.browser.test.ts",
-            "src/hyperdb/runtime/db.test.ts",
-            "src/hyperdb/runtime/utf-sort.test.ts",
-          ],
-          browser: {
-            enabled: true,
-            headless: true,
-            provider: playwright(),
-            instances: [{ browser: "chromium" }],
-          },
-        },
-      },
-    ],
+    name: "browser",
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    browser: {
+      enabled: true,
+      headless: true,
+      provider: playwright(),
+      instances: [{ browser: "chromium" }],
+    },
   },
 });

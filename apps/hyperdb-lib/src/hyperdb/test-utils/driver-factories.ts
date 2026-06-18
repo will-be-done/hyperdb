@@ -1,11 +1,20 @@
+import { afterEach } from "vitest";
 import type { DBDriver } from "../core/driver";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import { openIndexedDBDriver } from "../drivers/idb/idb-driver";
+import { IdbDriver, openIndexedDBDriver } from "../drivers/idb/idb-driver";
 import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
 
 export type DriverFactory = [string, () => Promise<DBDriver>];
 
 let idbCounter = 0;
+const openIdbDrivers = new Set<IdbDriver>();
+
+afterEach(() => {
+  for (const driver of openIdbDrivers) {
+    driver.close();
+  }
+  openIdbDrivers.clear();
+});
 
 function hasIndexedDB(): boolean {
   return typeof globalThis.indexedDB !== "undefined";
@@ -26,7 +35,9 @@ async function openTestIdbDriver(): Promise<DBDriver> {
   idbCounter += 1;
   const dbName = `hyperdb-test-${Date.now().toString(36)}-${idbCounter}`;
   await deleteIndexedDBDatabase(dbName);
-  return openIndexedDBDriver(dbName);
+  const driver = await openIndexedDBDriver(dbName);
+  openIdbDrivers.add(driver);
+  return driver;
 }
 
 export function createDriverFactories(options?: {
@@ -34,15 +45,18 @@ export function createDriverFactories(options?: {
   includeSql?: boolean;
 }): DriverFactory[] {
   const factories: DriverFactory[] = [];
-  const isBrowser = hasIndexedDB();
 
-  if (options?.includeSql !== false && !isBrowser) {
+  if (options?.includeSql !== false) {
     factories.push(["SqlDriver", () => initSqlJsWasm()]);
   }
 
   factories.push(["BptreeInmemDriver", async () => new BptreeInmemDriver()]);
 
-  if (options?.includeIndexedDB !== false && hasIndexedDB()) {
+  if (options?.includeIndexedDB !== false) {
+    if (!hasIndexedDB()) {
+      throw new Error("IndexedDB is required for shared HyperDB driver tests");
+    }
+
     factories.push(["IdbDriver", openTestIdbDriver]);
   }
 
