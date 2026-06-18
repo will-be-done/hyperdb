@@ -17,10 +17,7 @@ import {
   type TraceFrame,
   type TraceStatus,
 } from "../hyperdb/tracing/store";
-import {
-  traceStoreTraceSelection,
-  traceStoreTraces,
-} from "./traces";
+import { traceStoreTraceSelection, traceStoreTraces } from "./traces";
 
 setup(React.createElement);
 
@@ -113,6 +110,10 @@ const writeStoredListWidth = (width: number): void => {
 const panelHeightKey = "hyperdb-devtools-panel-height";
 const defaultPanelHeight = 460;
 const minPanelHeight = 280;
+
+// Below this container width the panel collapses to a single column: the trace
+// list fills the panel and a selected trace opens as an overlay on top of it.
+const narrowBreakpoint = 800;
 
 const readStoredPanelHeight = (): number => {
   try {
@@ -374,15 +375,17 @@ type ShellStyleProps = {
   theme: HyperDBDevtoolsTheme;
 };
 
-const ShellElement = (
-  props: React.HTMLAttributes<HTMLElement> & ShellStyleProps,
-) => {
+const ShellElement = React.forwardRef<
+  HTMLElement,
+  React.HTMLAttributes<HTMLElement> & ShellStyleProps
+>((props, ref) => {
   const { position, embedded, theme, ...domProps } = props;
   void position;
   void embedded;
   void theme;
-  return <section {...domProps} />;
-};
+  return <section ref={ref} {...domProps} />;
+});
+ShellElement.displayName = "ShellElement";
 
 const ButtonElement = (
   props: React.ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -590,8 +593,10 @@ const Toolbar = styled("div")`
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 0 10px 0 14px;
+  row-gap: 6px;
+  padding: 6px 10px 6px 14px;
   border-bottom: 1px solid var(--hdb-border);
   background: var(--hdb-surface);
   flex-shrink: 0;
@@ -678,6 +683,7 @@ const Button = styled("button")`
 const FilterBar = styled("div")`
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 6px 10px 6px 14px;
   border-bottom: 1px solid var(--hdb-border);
@@ -1240,6 +1246,22 @@ const Detail = styled("main")`
   background: var(--hdb-bg);
 `;
 
+// On narrow layouts the detail view is rendered as an overlay covering the
+// shell, so the trace list underneath keeps its scroll position while open.
+const MobileDetailOverlay = styled("div")`
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  background: var(--hdb-bg);
+
+  & > main {
+    flex: 1;
+    min-height: 0;
+  }
+`;
+
 const DetailHeader = styled("header")`
   min-height: 40px;
   display: flex;
@@ -1250,6 +1272,44 @@ const DetailHeader = styled("header")`
   border-bottom: 1px solid var(--hdb-border);
   background: var(--hdb-surface);
   flex-shrink: 0;
+`;
+
+const DetailHeaderLeft = styled("div")`
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+`;
+
+const BackButton = styled(ButtonElement)`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--hdb-border);
+  border-radius: 6px;
+  background: var(--hdb-surface);
+  color: var(--hdb-text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+
+  &:hover {
+    background: var(--hdb-soft);
+    border-color: var(--hdb-muted);
+    color: var(--hdb-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--hdb-border-strong);
+    outline-offset: 2px;
+  }
 `;
 
 const DetailTitle = styled("div")`
@@ -2218,7 +2278,13 @@ const CallTree = ({ trace }: { trace: RootTrace }) => (
   </EventBlock>
 );
 
-const TraceDetails = ({ trace }: { trace: RootTrace }) => {
+const TraceDetails = ({
+  trace,
+  onBack,
+}: {
+  trace: RootTrace;
+  onBack?: () => void;
+}) => {
   const [tab, setTab] = useState<"overview" | "data" | "mutations" | "tree">(
     "overview",
   );
@@ -2229,12 +2295,19 @@ const TraceDetails = ({ trace }: { trace: RootTrace }) => {
   return (
     <Detail>
       <DetailHeader>
-        <DetailTitle>
-          <strong>{trace.name}</strong>
-          <span>
-            {trace.kind} · {formatTime(trace.startedAt)}
-          </span>
-        </DetailTitle>
+        <DetailHeaderLeft>
+          {onBack ? (
+            <BackButton aria-label="Back to traces" onClick={onBack}>
+              ←
+            </BackButton>
+          ) : null}
+          <DetailTitle>
+            <strong>{trace.name}</strong>
+            <span>
+              {trace.kind} · {formatTime(trace.startedAt)}
+            </span>
+          </DetailTitle>
+        </DetailHeaderLeft>
         <HeaderBadges>
           <StatusPill tone={tone}>
             <StatusDot tone={tone} />
@@ -2289,7 +2362,9 @@ const DevtoolsPanelInner = ({
     useState<TraceSortField>(readStoredSortField);
   const [sortDir, setSortDir] = useState<TraceSortDir>(readStoredSortDir);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(false);
   const isDraggingRef = useRef(false);
+  const shellRef = useRef<HTMLElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
   const panelDividerRef = useRef<HTMLDivElement>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
@@ -2380,6 +2455,26 @@ const DevtoolsPanelInner = ({
   useEffect(() => {
     hyperDBTraceStore.setMaxTraces(maxTraces);
   }, [maxTraces]);
+
+  useEffect(() => {
+    const el = shellRef.current;
+    const ResizeObserverCtor = globalThis.ResizeObserver;
+    if (!el || !ResizeObserverCtor) return;
+
+    const updateNarrow = (width: number) => {
+      setIsNarrow(width > 0 && width < narrowBreakpoint);
+    };
+
+    updateNarrow(el.getBoundingClientRect().width);
+
+    const observer = new ResizeObserverCtor((entries) => {
+      const entry = entries[0];
+      if (entry) updateNarrow(entry.contentRect.width);
+    });
+    observer.observe(el);
+
+    return () => observer.disconnect();
+  }, []);
 
   const observedDBOptions = useMemo(
     () => addCurrentDBOption(getTraceDBOptions(traces), currentDBInfo),
@@ -2493,17 +2588,29 @@ const DevtoolsPanelInner = ({
     hyperDBTraceStore.clear();
   };
 
+  // The selector auto-falls back to the first trace so the desktop detail pane
+  // is never empty. On narrow layouts we want a list-first view instead, so the
+  // overlay only opens for an explicit selection (and "Back" can close it).
+  const explicitSelectedTrace =
+    selectedTraceId !== undefined
+      ? visibleTraces.find((trace) => trace.id === selectedTraceId)
+      : undefined;
+  const detailTrace = isNarrow ? explicitSelectedTrace : selectedTrace;
+
   return (
     <Shell
+      ref={shellRef}
       position={position}
       embedded={embedded}
       theme={theme}
       style={{
-        gridTemplateColumns: `${listWidth}px minmax(0, 1fr)`,
+        gridTemplateColumns: isNarrow
+          ? "minmax(0, 1fr)"
+          : `${listWidth}px minmax(0, 1fr)`,
         ...(isVerticallyResizable ? { height: `${panelHeight}px` } : {}),
       }}
     >
-      {isVerticallyResizable ? (
+      {isVerticallyResizable && !isNarrow ? (
         <PanelResizeDivider
           ref={panelDividerRef}
           position={position}
@@ -2511,7 +2618,12 @@ const DevtoolsPanelInner = ({
         />
       ) : null}
       <TraceList>
-        <ResizeDivider ref={dividerRef} onMouseDown={handleDividerMouseDown} />
+        {!isNarrow ? (
+          <ResizeDivider
+            ref={dividerRef}
+            onMouseDown={handleDividerMouseDown}
+          />
+        ) : null}
         <Toolbar>
           <Title>
             <LogoDot />
@@ -2608,7 +2720,7 @@ const DevtoolsPanelInner = ({
             visibleTraces.map((trace) => (
               <TraceRow
                 key={trace.id}
-                selected={trace.id === selectedTrace?.id}
+                selected={trace.id === detailTrace?.id}
                 style={
                   {
                     "--hdb-kind-color": traceKindColor(trace.kind),
@@ -2650,9 +2762,19 @@ const DevtoolsPanelInner = ({
           )}
         </Rows>
       </TraceList>
-      {selectedTrace ? (
-        <TraceDetails trace={selectedTrace} />
-      ) : (
+      {detailTrace ? (
+        isNarrow ? (
+          <MobileDetailOverlay>
+            <TraceDetails
+              key={detailTrace.id}
+              trace={detailTrace}
+              onBack={() => setSelectedTraceId(undefined)}
+            />
+          </MobileDetailOverlay>
+        ) : (
+          <TraceDetails key={detailTrace.id} trace={detailTrace} />
+        )
+      ) : isNarrow ? null : (
         <Empty>No traces</Empty>
       )}
     </Shell>
