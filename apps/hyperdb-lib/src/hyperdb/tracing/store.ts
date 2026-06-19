@@ -82,6 +82,11 @@ const traceRootsTable = defineTable("hyperdbTraceRoots", {
     v.literal("error"),
   ),
   cached: v.boolean(),
+  selectCount: v.number(),
+  queriedRowCount: v.number(),
+  hasPendingSelect: v.boolean(),
+  actionCount: v.number(),
+  mutatedRowCount: v.number(),
   createdSeq: v.number(),
 })
   .index("byCreatedSeq", ["createdSeq"])
@@ -411,6 +416,38 @@ const omitUndefined = <T extends Record<string, unknown>>(value: T): T => {
   return next as T;
 };
 
+const countActionFrames = (frame: TraceFrame): number =>
+  (frame.kind === "action" ? 1 : 0) +
+  frame.children.reduce((total, child) => total + countActionFrames(child), 0);
+
+const mutationRecordCount = (event: MutationEvent): number | undefined => {
+  if (event.rows !== undefined) return event.rows.length;
+  if (event.newValue !== undefined) return event.newValue.length;
+  if (event.ids !== undefined) return event.ids.length;
+  if (event.oldValue !== undefined) return event.oldValue.length;
+  return undefined;
+};
+
+const getTraceQueriedRowCount = (trace: RootTrace): number =>
+  trace.commandEvents.reduce(
+    (total, event) => total + (event.resultCount ?? 0),
+    0,
+  );
+
+const hasPendingSelect = (trace: RootTrace): boolean =>
+  trace.commandEvents.some(
+    (event) => event.status === "running" && event.resultCount === undefined,
+  );
+
+const getTraceActionCount = (trace: RootTrace): number =>
+  trace.frames.reduce((total, frame) => total + countActionFrames(frame), 0);
+
+const getTraceMutatedRowCount = (trace: RootTrace): number =>
+  trace.mutationEvents.reduce(
+    (total, event) => total + (mutationRecordCount(event) ?? 0),
+    0,
+  );
+
 export class HyperDBTraceStore implements HyperDBTracer {
   private subDb = new SubscribableDB(
     new DB(new BptreeInmemDriver(), {
@@ -718,6 +755,11 @@ export class HyperDBTraceStore implements HyperDBTracer {
       durationMs: trace.durationMs ?? 0,
       status: trace.status,
       cached: trace.frames[0]?.cached === true,
+      selectCount: trace.commandEvents.length,
+      queriedRowCount: getTraceQueriedRowCount(trace),
+      hasPendingSelect: hasPendingSelect(trace),
+      actionCount: getTraceActionCount(trace),
+      mutatedRowCount: getTraceMutatedRowCount(trace),
       createdSeq: this.createdSeqByTraceId.get(trace.id) ?? 0,
     });
   }

@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { css, setup, styled } from "goober";
 import { DBProvider, useSyncSelector } from "../react";
 import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
@@ -17,7 +23,11 @@ import {
   type TraceFrame,
   type TraceStatus,
 } from "../hyperdb/tracing/store";
-import { traceStoreTraceSelection, traceStoreTraces } from "./traces";
+import {
+  traceStoreTraceSelection,
+  traceStoreTraces,
+  type TraceSummary,
+} from "./traces";
 
 setup(React.createElement);
 
@@ -51,8 +61,10 @@ const storageKey = "hyperdb-devtools-open";
 const unassignedDBId = unassignedTraceDBKey;
 const mutationEventBatchSize = 30;
 const mutationValuePreviewSize = 30;
+const traceRowHeight = 46;
+const traceRowOverscan = 6;
 const emptyTraceSelection: {
-  visibleTraces: RootTrace[];
+  visibleTraces: TraceSummary[];
   selectedTrace: RootTrace | undefined;
 } = {
   visibleTraces: [],
@@ -244,9 +256,10 @@ type TraceDBOption = {
   traceCount: number;
 };
 
-const traceDBId = (trace: RootTrace): string => trace.dbId ?? unassignedDBId;
+const traceDBId = (trace: TraceSummary): string =>
+  trace.dbId ?? unassignedDBId;
 
-const getTraceDBOptions = (traces: RootTrace[]): TraceDBOption[] => {
+const getTraceDBOptions = (traces: TraceSummary[]): TraceDBOption[] => {
   const optionMap = new Map<string, TraceDBOption>();
 
   for (const trace of traces) {
@@ -1018,7 +1031,7 @@ const TraceRow = styled(ButtonElement)<{ selected: boolean }>`
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
-  min-height: 46px;
+  height: ${traceRowHeight}px;
   padding: 7px 10px 7px 14px;
   border: 0;
   border-bottom: 1px solid var(--hdb-border);
@@ -1753,11 +1766,6 @@ const countActionFrames = (frame: TraceFrame): number =>
 export const getTraceActionCount = (trace: RootTrace): number =>
   trace.frames.reduce((total, frame) => total + countActionFrames(frame), 0);
 
-const formatTraceActions = (trace: RootTrace): string => {
-  const actionCount = getTraceActionCount(trace);
-  return `${actionCount} act`;
-};
-
 const formatActionCount = (count: number): string =>
   `${count} ${count === 1 ? "action" : "actions"}`;
 
@@ -1787,34 +1795,54 @@ type CallTreeOperation =
       event: MutationEvent;
     };
 
+type CallTreeOperationLookup = {
+  selectsByFrameId: Map<string, SelectCommandEvent[]>;
+  mutationsByFrameId: Map<string, MutationEvent[]>;
+};
+
 const idOrder = (id: string): number => {
   const match = /-(\d+)$/.exec(id);
   return match ? Number(match[1]) : 0;
 };
 
-export const getCallTreeOperations = (
+const groupCallTreeEvents = (trace: RootTrace): CallTreeOperationLookup => {
+  const selectsByFrameId = new Map<string, SelectCommandEvent[]>();
+  const mutationsByFrameId = new Map<string, MutationEvent[]>();
+
+  for (const event of trace.commandEvents) {
+    const events = selectsByFrameId.get(event.frameId);
+    if (events) events.push(event);
+    else selectsByFrameId.set(event.frameId, [event]);
+  }
+
+  for (const event of trace.mutationEvents) {
+    const events = mutationsByFrameId.get(event.frameId);
+    if (events) events.push(event);
+    else mutationsByFrameId.set(event.frameId, [event]);
+  }
+
+  return { selectsByFrameId, mutationsByFrameId };
+};
+
+const getCallTreeOperationsFromLookup = (
   frame: TraceFrame,
-  trace: RootTrace,
+  lookup: CallTreeOperationLookup,
 ): CallTreeOperation[] =>
   [
-    ...trace.commandEvents
-      .filter((event) => event.frameId === frame.id)
-      .map((event) => ({
-        kind: "select" as const,
-        id: event.id,
-        startedAt: event.startedAt,
-        order: idOrder(event.id),
-        event,
-      })),
-    ...trace.mutationEvents
-      .filter((event) => event.frameId === frame.id)
-      .map((event) => ({
-        kind: "mutation" as const,
-        id: event.id,
-        startedAt: event.startedAt,
-        order: idOrder(event.id),
-        event,
-      })),
+    ...(lookup.selectsByFrameId.get(frame.id) ?? []).map((event) => ({
+      kind: "select" as const,
+      id: event.id,
+      startedAt: event.startedAt,
+      order: idOrder(event.id),
+      event,
+    })),
+    ...(lookup.mutationsByFrameId.get(frame.id) ?? []).map((event) => ({
+      kind: "mutation" as const,
+      id: event.id,
+      startedAt: event.startedAt,
+      order: idOrder(event.id),
+      event,
+    })),
     ...frame.children.map((child) => ({
       kind: "frame" as const,
       id: child.id,
@@ -1826,6 +1854,12 @@ export const getCallTreeOperations = (
     (left, right) =>
       left.startedAt - right.startedAt || left.order - right.order,
   );
+
+export const getCallTreeOperations = (
+  frame: TraceFrame,
+  trace: RootTrace,
+): CallTreeOperation[] =>
+  getCallTreeOperationsFromLookup(frame, groupCallTreeEvents(trace));
 
 export const formatCallTreeOperation = (
   operation: CallTreeOperation,
@@ -2022,7 +2056,238 @@ export const getCallTreeOperationBadges = (
 
 // ─── Components ────────────────────────────────────────────────────────────
 
-const MutationEventData = ({ event }: { event: MutationEvent }) => {
+type TraceRowViewProps = {
+  id: string;
+  kind: RootTrace["kind"];
+  name: string;
+  startedAt: number;
+  durationMs?: number;
+  status: TraceStatus;
+  cached: boolean;
+  selectCount: number;
+  queriedRowCount: number;
+  hasPendingSelect: boolean;
+  actionCount: number;
+  selected: boolean;
+  onSelectTrace: (id: string) => void;
+};
+
+const TraceRowView = React.memo(
+  ({
+    id,
+    kind,
+    name,
+    startedAt,
+    durationMs,
+    status,
+    cached,
+    selectCount,
+    queriedRowCount,
+    hasPendingSelect,
+    actionCount,
+    selected,
+    onSelectTrace,
+  }: TraceRowViewProps) => {
+    const handleClick = useCallback(() => {
+      onSelectTrace(id);
+    }, [id, onSelectTrace]);
+    const queriedRowsUnit =
+      queriedRowCount === 1 && !hasPendingSelect ? "row" : "rows";
+
+    return (
+      <TraceRow
+        selected={selected}
+        style={
+          {
+            "--hdb-kind-color": traceKindColor(kind),
+          } as React.CSSProperties
+        }
+        onClick={handleClick}
+      >
+        <KindPill
+          kind={kind === "action" || kind === "selector" ? kind : "unknown"}
+        >
+          {traceKindLabel(kind)}
+        </KindPill>
+        <RowBody>
+          <RowTitle>
+            <RowName>{name}</RowName>
+            {cached ? <TraceListCachedBadge>cached</TraceListCachedBadge> : null}
+          </RowTitle>
+          <RowMeta>
+            <span>
+              {queriedRowCount}
+              {hasPendingSelect ? "+" : ""} {queriedRowsUnit}
+            </span>
+            <RowMetaSep>·</RowMetaSep>
+            <span>{selectCount} sel</span>
+            <RowMetaSep>·</RowMetaSep>
+            <span>{actionCount} act</span>
+            <RowMetaSep>·</RowMetaSep>
+            <span>{formatTime(startedAt)}</span>
+          </RowMeta>
+        </RowBody>
+        <DurationText tone={statusTone(status)}>
+          {formatDuration(durationMs)}
+        </DurationText>
+      </TraceRow>
+    );
+  },
+);
+TraceRowView.displayName = "TraceRowView";
+
+const TraceRowsView = React.memo(
+  ({
+    traces,
+    selectedTraceId,
+    onSelectTrace,
+  }: {
+    traces: TraceSummary[];
+    selectedTraceId: string | undefined;
+    onSelectTrace: (id: string) => void;
+  }) => {
+    const rowsRef = useRef<HTMLDivElement>(null);
+    const [viewport, setViewport] = useState({ height: 0, scrollTop: 0 });
+
+    useEffect(() => {
+      const el = rowsRef.current;
+      if (!el) return;
+
+      const updateHeight = () => {
+        setViewport((current) =>
+          current.height === el.clientHeight
+            ? current
+            : { ...current, height: el.clientHeight },
+        );
+      };
+
+      updateHeight();
+
+      const ResizeObserverCtor = globalThis.ResizeObserver;
+      if (!ResizeObserverCtor) return;
+
+      const observer = new ResizeObserverCtor(updateHeight);
+      observer.observe(el);
+
+      return () => observer.disconnect();
+    }, []);
+
+    const handleScroll = useCallback(
+      (event: React.UIEvent<HTMLDivElement>) => {
+        const nextScrollTop = event.currentTarget.scrollTop;
+        setViewport((current) =>
+          current.scrollTop === nextScrollTop
+            ? current
+            : { ...current, scrollTop: nextScrollTop },
+        );
+      },
+      [],
+    );
+
+    const virtualWindow = useMemo(() => {
+      if (viewport.height <= 0) {
+        return {
+          startIndex: 0,
+          endIndex: traces.length,
+          offsetTop: 0,
+          totalHeight: traces.length * traceRowHeight,
+          virtualized: false,
+        };
+      }
+
+      const startIndex = Math.max(
+        0,
+        Math.floor(viewport.scrollTop / traceRowHeight) - traceRowOverscan,
+      );
+      const endIndex = Math.min(
+        traces.length,
+        Math.ceil((viewport.scrollTop + viewport.height) / traceRowHeight) +
+          traceRowOverscan,
+      );
+
+      return {
+        startIndex,
+        endIndex,
+        offsetTop: startIndex * traceRowHeight,
+        totalHeight: traces.length * traceRowHeight,
+        virtualized: true,
+      };
+    }, [traces.length, viewport.height, viewport.scrollTop]);
+
+    const visibleTraces = traces.slice(
+      virtualWindow.startIndex,
+      virtualWindow.endIndex,
+    );
+
+    if (traces.length === 0) {
+      return (
+        <Rows ref={rowsRef}>
+          <Empty>No traces</Empty>
+        </Rows>
+      );
+    }
+
+    return (
+      <Rows ref={rowsRef} onScroll={handleScroll}>
+        {virtualWindow.virtualized ? (
+          <div
+            style={{
+              height: virtualWindow.totalHeight,
+              position: "relative",
+            }}
+          >
+            <div
+              style={{
+                transform: `translateY(${virtualWindow.offsetTop}px)`,
+              }}
+            >
+              {visibleTraces.map((trace) => (
+                <TraceRowView
+                  key={trace.id}
+                  id={trace.id}
+                  kind={trace.kind}
+                  name={trace.name}
+                  startedAt={trace.startedAt}
+                  durationMs={trace.durationMs}
+                  status={trace.status}
+                  cached={trace.cached}
+                  selectCount={trace.selectCount}
+                  queriedRowCount={trace.queriedRowCount}
+                  hasPendingSelect={trace.hasPendingSelect}
+                  actionCount={trace.actionCount}
+                  selected={trace.id === selectedTraceId}
+                  onSelectTrace={onSelectTrace}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          visibleTraces.map((trace) => (
+            <TraceRowView
+              key={trace.id}
+              id={trace.id}
+              kind={trace.kind}
+              name={trace.name}
+              startedAt={trace.startedAt}
+              durationMs={trace.durationMs}
+              status={trace.status}
+              cached={trace.cached}
+              selectCount={trace.selectCount}
+              queriedRowCount={trace.queriedRowCount}
+              hasPendingSelect={trace.hasPendingSelect}
+              actionCount={trace.actionCount}
+              selected={trace.id === selectedTraceId}
+              onSelectTrace={onSelectTrace}
+            />
+          ))
+        )}
+      </Rows>
+    );
+  },
+);
+TraceRowsView.displayName = "TraceRowsView";
+
+const MutationEventData = React.memo(({ event }: { event: MutationEvent }) => {
   const sections = getMutationDisplay(event);
   // A single section is already described by the header summary ("1 row
   // upserted"); only label when we split into multiple sections.
@@ -2058,15 +2323,17 @@ const MutationEventData = ({ event }: { event: MutationEvent }) => {
       )}
     </>
   );
-};
+});
+MutationEventData.displayName = "MutationEventData";
 
-const SelectEventData = ({ event }: { event: SelectCommandEvent }) => (
+const SelectEventData = React.memo(({ event }: { event: SelectCommandEvent }) => (
   <>
     <DataBlock>{formatSelectQuery(event)}</DataBlock>
   </>
-);
+));
+SelectEventData.displayName = "SelectEventData";
 
-const TraceOverview = ({ trace }: { trace: RootTrace }) => (
+const TraceOverview = React.memo(({ trace }: { trace: RootTrace }) => (
   <>
     <Grid>
       <Stat>
@@ -2099,9 +2366,10 @@ const TraceOverview = ({ trace }: { trace: RootTrace }) => (
       </>
     )}
   </>
-);
+));
+TraceOverview.displayName = "TraceOverview";
 
-const SelectEvents = ({ events }: { events: SelectCommandEvent[] }) => {
+const SelectEvents = React.memo(({ events }: { events: SelectCommandEvent[] }) => {
   if (events.length === 0) return <Empty>No selects</Empty>;
 
   return (
@@ -2127,9 +2395,10 @@ const SelectEvents = ({ events }: { events: SelectCommandEvent[] }) => {
       ))}
     </>
   );
-};
+});
+SelectEvents.displayName = "SelectEvents";
 
-const MutationEvents = ({
+const MutationEvents = React.memo(({
   events,
   scrollParentRef,
 }: {
@@ -2221,18 +2490,19 @@ const MutationEvents = ({
       ) : null}
     </>
   );
-};
+});
+MutationEvents.displayName = "MutationEvents";
 
-const CallTreeOperationView = ({
+const CallTreeOperationView = React.memo(({
   operation,
-  trace,
+  lookup,
 }: {
   operation: CallTreeOperation;
-  trace: RootTrace;
+  lookup: CallTreeOperationLookup;
 }) => {
   const childOperations =
     operation.kind === "frame"
-      ? getCallTreeOperations(operation.frame, trace)
+      ? getCallTreeOperationsFromLookup(operation.frame, lookup)
       : [];
   const badges = getCallTreeOperationBadges(operation);
 
@@ -2252,33 +2522,39 @@ const CallTreeOperationView = ({
             <CallTreeOperationView
               key={child.id}
               operation={child}
-              trace={trace}
+              lookup={lookup}
             />
           ))}
         </div>
       )}
     </div>
   );
-};
+});
+CallTreeOperationView.displayName = "CallTreeOperationView";
 
-const CallTree = ({ trace }: { trace: RootTrace }) => (
-  <EventBlock>
-    <EventBlockContent>
-      <CallTreeOperationView
-        operation={{
-          kind: "frame",
-          id: trace.frames[0]!.id,
-          startedAt: trace.frames[0]!.startedAt,
-          order: idOrder(trace.frames[0]!.id),
-          frame: trace.frames[0]!,
-        }}
-        trace={trace}
-      />
-    </EventBlockContent>
-  </EventBlock>
-);
+const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
+  const lookup = useMemo(() => groupCallTreeEvents(trace), [trace]);
 
-const TraceDetails = ({
+  return (
+    <EventBlock>
+      <EventBlockContent>
+        <CallTreeOperationView
+          operation={{
+            kind: "frame",
+            id: trace.frames[0]!.id,
+            startedAt: trace.frames[0]!.startedAt,
+            order: idOrder(trace.frames[0]!.id),
+            frame: trace.frames[0]!,
+          }}
+          lookup={lookup}
+        />
+      </EventBlockContent>
+    </EventBlock>
+  );
+});
+CallTree.displayName = "CallTree";
+
+const TraceDetails = React.memo(({
   trace,
   onBack,
 }: {
@@ -2343,7 +2619,8 @@ const TraceDetails = ({
       </Content>
     </Detail>
   );
-};
+});
+TraceDetails.displayName = "TraceDetails";
 
 const DevtoolsPanelInner = ({
   db,
@@ -2510,6 +2787,7 @@ const DevtoolsPanelInner = ({
       skipCached,
       sortField,
       sortDir,
+      autoSelectFirst: !isNarrow,
       ...(activeDBId !== undefined ? { dbKey: activeDBId } : {}),
       ...(selectedTraceId !== undefined ? { selectedTraceId } : {}),
     },
@@ -2553,31 +2831,31 @@ const DevtoolsPanelInner = ({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [optionsOpen]);
 
-  const toggleSkipCached = (next: boolean) => {
+  const toggleSkipCached = useCallback((next: boolean) => {
     setSkipCached(next);
     writeStoredSkipCached(next);
-  };
+  }, []);
 
-  const selectKindFilter = (next: TraceKindFilter) => {
+  const selectKindFilter = useCallback((next: TraceKindFilter) => {
     setKindFilter(next);
     writeStoredKindFilter(next);
     setSelectedTraceId(undefined);
-  };
+  }, []);
 
-  const toggleSortField = () => {
+  const toggleSortField = useCallback(() => {
     const next: TraceSortField =
       sortField === "created" ? "duration" : "created";
     setSortField(next);
     writeStoredSortField(next);
-  };
+  }, [sortField]);
 
-  const toggleSortDir = () => {
+  const toggleSortDir = useCallback(() => {
     const next: TraceSortDir = sortDir === "desc" ? "asc" : "desc";
     setSortDir(next);
     writeStoredSortDir(next);
-  };
+  }, [sortDir]);
 
-  const clearVisibleTraces = () => {
+  const clearVisibleTraces = useCallback(() => {
     if (hasMultipleDBs && activeDBId) {
       hyperDBTraceStore.clearDB(
         activeDBId === unassignedDBId ? undefined : activeDBId,
@@ -2586,16 +2864,20 @@ const DevtoolsPanelInner = ({
     }
 
     hyperDBTraceStore.clear();
-  };
+  }, [activeDBId, hasMultipleDBs]);
+
+  const handleSelectTrace = useCallback((id: string) => {
+    setSelectedTraceId(id);
+  }, []);
 
   // The selector auto-falls back to the first trace so the desktop detail pane
   // is never empty. On narrow layouts we want a list-first view instead, so the
   // overlay only opens for an explicit selection (and "Back" can close it).
-  const explicitSelectedTrace =
-    selectedTraceId !== undefined
-      ? visibleTraces.find((trace) => trace.id === selectedTraceId)
-      : undefined;
-  const detailTrace = isNarrow ? explicitSelectedTrace : selectedTrace;
+  const detailTrace = isNarrow
+    ? selectedTraceId !== undefined
+      ? selectedTrace
+      : undefined
+    : selectedTrace;
 
   return (
     <Shell
@@ -2713,54 +2995,11 @@ const DevtoolsPanelInner = ({
             </SortDirButton>
           </SortControls>
         </FilterBar>
-        <Rows>
-          {visibleTraces.length === 0 ? (
-            <Empty>No traces</Empty>
-          ) : (
-            visibleTraces.map((trace) => (
-              <TraceRow
-                key={trace.id}
-                selected={trace.id === detailTrace?.id}
-                style={
-                  {
-                    "--hdb-kind-color": traceKindColor(trace.kind),
-                  } as React.CSSProperties
-                }
-                onClick={() => setSelectedTraceId(trace.id)}
-              >
-                <KindPill
-                  kind={
-                    trace.kind === "action" || trace.kind === "selector"
-                      ? trace.kind
-                      : "unknown"
-                  }
-                >
-                  {traceKindLabel(trace.kind)}
-                </KindPill>
-                <RowBody>
-                  <RowTitle>
-                    <RowName>{trace.name}</RowName>
-                    {isFullyCachedTrace(trace) ? (
-                      <TraceListCachedBadge>cached</TraceListCachedBadge>
-                    ) : null}
-                  </RowTitle>
-                  <RowMeta>
-                    <span>{formatTraceQueriedRows(trace)}</span>
-                    <RowMetaSep>·</RowMetaSep>
-                    <span>{trace.commandEvents.length} sel</span>
-                    <RowMetaSep>·</RowMetaSep>
-                    <span>{formatTraceActions(trace)}</span>
-                    <RowMetaSep>·</RowMetaSep>
-                    <span>{formatTime(trace.startedAt)}</span>
-                  </RowMeta>
-                </RowBody>
-                <DurationText tone={statusTone(trace.status)}>
-                  {formatDuration(trace.durationMs)}
-                </DurationText>
-              </TraceRow>
-            ))
-          )}
-        </Rows>
+        <TraceRowsView
+          traces={visibleTraces}
+          selectedTraceId={detailTrace?.id}
+          onSelectTrace={handleSelectTrace}
+        />
       </TraceList>
       {detailTrace ? (
         isNarrow ? (
