@@ -26,9 +26,7 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "./store";
-
-const action = createAction();
-const selector = createSelector();
+import { flushTraceCommits } from "./test-utils";
 
 type Task = {
   id: string;
@@ -193,11 +191,8 @@ afterEach(() => {
   deactivateTraceStore = undefined;
 });
 
-const flushTraceCommits = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 120);
-  });
-};
+const action = createAction();
+const selector = createSelector();
 
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
   select(

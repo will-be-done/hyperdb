@@ -2534,6 +2534,11 @@ CallTreeOperationView.displayName = "CallTreeOperationView";
 
 const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
   const lookup = useMemo(() => groupCallTreeEvents(trace), [trace]);
+  const rootFrame = trace.frames[0];
+
+  if (rootFrame === undefined) {
+    return <Empty>No call tree</Empty>;
+  }
 
   return (
     <EventBlock>
@@ -2541,10 +2546,10 @@ const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
         <CallTreeOperationView
           operation={{
             kind: "frame",
-            id: trace.frames[0]!.id,
-            startedAt: trace.frames[0]!.startedAt,
-            order: idOrder(trace.frames[0]!.id),
-            frame: trace.frames[0]!,
+            id: rootFrame.id,
+            startedAt: rootFrame.startedAt,
+            order: idOrder(rootFrame.id),
+            frame: rootFrame,
           }}
           lookup={lookup}
         />

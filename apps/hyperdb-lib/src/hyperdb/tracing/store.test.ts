@@ -14,12 +14,7 @@ import {
 } from "./store";
 import { select } from "../commands/selector/selector";
 import { selectFrom } from "../commands/selector/builder";
-
-const flushTraceCommits = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 120);
-  });
-};
+import { flushTraceCommits } from "./test-utils";
 
 const selectCommittedTraceNames = (store: HyperDBTraceStore): string[] =>
   select(
@@ -108,7 +103,7 @@ describe("devtool tracing store", () => {
       endTraceSuccess(context!);
     }
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     expect(selectCommittedTraceNames(store)).toEqual(["three", "two"]);
 
@@ -128,7 +123,8 @@ describe("devtool tracing store", () => {
       store,
     )!;
 
-    await flushTraceCommits();
+    expect(context).toBeDefined();
+    await flushTraceCommits(store);
     expect(notifyCount).toBe(0);
 
     unsubscribeDB();
@@ -161,14 +157,14 @@ describe("devtool tracing store", () => {
     });
     endMutationEventSuccess(context, mutationEvent);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
     expect(notifyCount).toBe(0);
 
     endTraceSuccess(context);
 
     expect(notifyCount).toBe(0);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
     expect(notifyCount).toBe(1);
 
     unsubscribeDB();
@@ -188,7 +184,7 @@ describe("devtool tracing store", () => {
     expect(context.trace.name).toBe("batched");
     expect(selectCommittedTraceNames(store)).toEqual([]);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
     expect(selectCommittedTraceNames(store)).toEqual(["batched"]);
 
     deactivate();
@@ -212,7 +208,7 @@ describe("devtool tracing store", () => {
 
     expect(notifyCount).toBe(0);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
     expect(notifyCount).toBe(1);
     expect(selectCommittedTraceNames(store)).toEqual(["two", "one"]);
 
@@ -230,7 +226,7 @@ describe("devtool tracing store", () => {
     endTraceSuccess(context);
 
     store.clear();
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     expect(selectCommittedTraceNames(store)).toEqual([]);
 
@@ -252,7 +248,7 @@ describe("devtool tracing store", () => {
     endTraceSuccess(context);
 
     store.clearDB("db-a");
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     expect(selectCommittedTraceNames(store)).toEqual([]);
 
@@ -275,7 +271,7 @@ describe("devtool tracing store", () => {
     store.setMaxTraces(Number.NaN);
     store.setMaxTraces(Number.POSITIVE_INFINITY);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     expect(selectCommittedTraceNames(store)).toEqual(["three", "two"]);
 
@@ -298,7 +294,7 @@ describe("devtool tracing store", () => {
     )!;
     endTraceError(failure, new Error("boom"));
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     const [failedTrace, successTrace] = selectCommittedTraces(store);
     expect(successTrace?.status).toBe("success");
@@ -321,7 +317,7 @@ describe("devtool tracing store", () => {
     enterFramePath(context, [rootMeta, childMeta]);
     endTraceSuccess(context);
 
-    await flushTraceCommits();
+    await flushTraceCommits(store);
 
     const trace = selectCommittedTraces(store)[0]!;
     expect(trace.frames[0]?.children).toHaveLength(1);

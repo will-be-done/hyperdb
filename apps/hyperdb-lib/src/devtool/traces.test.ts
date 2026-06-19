@@ -8,6 +8,7 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
+import { flushTraceCommits } from "../hyperdb/tracing/test-utils";
 import {
   traceStoreTraceSelection,
   traceStoreTraces,
@@ -40,13 +41,19 @@ const trace = (overrides: Partial<RootTrace>): RootTrace => ({
   ...overrides,
 });
 
-const flushTraceCommits = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 120);
-  });
-};
-
 describe("devtool trace selectors", () => {
+  let deactivateTraceStore: (() => void) | undefined;
+
+  const activateTraceStore = (): void => {
+    deactivateTraceStore?.();
+    deactivateTraceStore = hyperDBTraceStore.activate();
+  };
+
+  const deactivateActivatedTraceStore = (): void => {
+    deactivateTraceStore?.();
+    deactivateTraceStore = undefined;
+  };
+
   beforeEach(() => {
     hyperDBTraceStore.setMaxTraces(200);
     hyperDBTraceStore.clear();
@@ -54,6 +61,7 @@ describe("devtool trace selectors", () => {
 
   afterEach(() => {
     hyperDBTraceStore.clear();
+    deactivateActivatedTraceStore();
   });
 
   it("returns up to the requested limit after applying the kind filter", () => {
@@ -154,7 +162,7 @@ describe("devtool trace selectors", () => {
   });
 
   it("returns traces committed through the batched trace store", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const context = startRootTrace(
       createTraceFrameMeta("action", "committed-action", undefined),
       hyperDBTraceStore,
@@ -186,7 +194,7 @@ describe("devtool trace selectors", () => {
     );
 
     expect(traces.map((item) => item.name)).toEqual(["committed-action"]);
-    deactivate();
+    deactivateActivatedTraceStore();
   });
 
   it("clears the trace store directly", () => {

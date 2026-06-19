@@ -55,7 +55,7 @@ export type TraceQueryKind = "selector" | "action";
 
 export const unassignedTraceDBKey = "__hyperdb_unassigned__";
 
-const traceCommitBatchMs = 50;
+export const traceCommitBatchMs = 50;
 
 const normalizeMaxTraces = (maxTraces: number): number => {
   const n = Number(maxTraces);
@@ -554,6 +554,11 @@ export class HyperDBTraceStore implements HyperDBTracer {
     this.enqueueTrace(trace);
   };
 
+  flushTraceCommits = (): void => {
+    this.cancelScheduledFlush();
+    this.flushQueuedTraces();
+  };
+
   startRootTrace = (
     meta: TraceFrameMeta,
     db?: object,
@@ -687,13 +692,14 @@ export class HyperDBTraceStore implements HyperDBTracer {
         traces.map((trace) => this.payloadRowFromTrace(trace)),
       );
       tx.commit();
-    } catch (error) {
+    } catch (e) {
+      console.error("trace error happened", e);
       tx.rollback();
       for (const trace of traces) {
         this.queuedTraces.set(trace.id, trace);
       }
       this.scheduleFlush();
-      throw error;
+      return;
     }
 
     for (const trace of traces) {

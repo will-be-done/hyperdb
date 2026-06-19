@@ -32,6 +32,7 @@ import type {
   RootTrace,
   TraceFrame,
 } from "../hyperdb/tracing/store";
+import { flushTraceCommits } from "../hyperdb/tracing/test-utils";
 
 const createDB = (dbName?: string): SubscribableDB => {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver(), { dbName }));
@@ -60,10 +61,16 @@ const stubGlobal = (name: string, value: unknown) => {
   });
 };
 
-const flushTraceCommits = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 120);
-  });
+let deactivateTraceStore: (() => void) | undefined;
+
+const activateTraceStore = (): void => {
+  deactivateTraceStore?.();
+  deactivateTraceStore = hyperDBTraceStore.activate();
+};
+
+const deactivateActivatedTraceStore = (): void => {
+  deactivateTraceStore?.();
+  deactivateTraceStore = undefined;
 };
 
 afterEach(() => {
@@ -71,6 +78,7 @@ afterEach(() => {
     restore();
   }
   hyperDBTraceStore.clear();
+  deactivateActivatedTraceStore();
 });
 
 describe("HyperDBDevtools", () => {
@@ -85,13 +93,13 @@ describe("HyperDBDevtools", () => {
   });
 
   it("renders selected trace details in the panel", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const context = startRootTrace(
       createTraceFrameMeta("action", "sampleAction", { id: "task-1" }),
     )!;
     endTraceSuccess(context);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
 
@@ -100,7 +108,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("renders queried and mutated row totals in the trace list and overview", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const context = startRootTrace(
       createTraceFrameMeta("selector", "largeSelector", undefined),
     )!;
@@ -117,7 +125,7 @@ describe("HyperDBDevtools", () => {
     ]);
     endTraceSuccess(context);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
 
@@ -130,7 +138,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("renders a cached label in the traces list for fully cached traces", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const db = createDB();
     const context = startRootTrace(
       createTraceFrameMeta("selector", "cachedListSelector", {
@@ -142,7 +150,7 @@ describe("HyperDBDevtools", () => {
     markTraceFrameCached(context, context.rootFrame);
     endTraceSuccess(context);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const trace = context.trace;
     const html = renderToString(<HyperDBDevtoolsPanel db={db} />);
@@ -153,7 +161,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("renders a database selector when traces come from multiple dbs", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const firstDB = createDB();
     const secondDB = createDB();
     const firstContext = startRootTrace(
@@ -169,7 +177,7 @@ describe("HyperDBDevtools", () => {
     )!;
     endTraceSuccess(secondContext);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
 
@@ -180,7 +188,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("keeps the current database option when it has no traces", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const firstDB = createDB();
     const secondDB = createDB();
     const secondContext = startRootTrace(
@@ -190,7 +198,7 @@ describe("HyperDBDevtools", () => {
     )!;
     endTraceSuccess(secondContext);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
 
@@ -201,7 +209,7 @@ describe("HyperDBDevtools", () => {
   });
 
   it("uses dbName as the database selector label when provided", async () => {
-    const deactivate = hyperDBTraceStore.activate();
+    activateTraceStore();
     const namedDB = createDB("Local todos");
     const fallbackDB = createDB();
     const namedContext = startRootTrace(
@@ -217,7 +225,7 @@ describe("HyperDBDevtools", () => {
     )!;
     endTraceSuccess(fallbackContext);
     await flushTraceCommits();
-    deactivate();
+    deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={namedDB} />);
 
