@@ -186,6 +186,8 @@ export interface HyperDBTracer {
   ): void;
 }
 
+export type HyperDBTracerOption = HyperDBTracer | "default" | "disabled";
+
 let metaIdCounter = 0;
 let defaultHyperDBTracer: HyperDBTracer | undefined;
 
@@ -223,15 +225,18 @@ export const getDefaultHyperDBTracer = (): HyperDBTracer | undefined =>
   defaultHyperDBTracer;
 
 export type HyperDBTracerConfigured = {
-  getTracer?: () => HyperDBTracer | undefined | null;
+  getTracer?: () => HyperDBTracerOption | undefined;
 };
 
 export const getTracerForDB = (
   db: HyperDBTracerConfigured,
 ): HyperDBTracer | undefined => {
   const dbTracer = db.getTracer?.();
-  if (dbTracer === null) return undefined;
-  return dbTracer ?? defaultHyperDBTracer;
+  if (dbTracer === "disabled") return undefined;
+  if (dbTracer === undefined || dbTracer === "default") {
+    return defaultHyperDBTracer;
+  }
+  return dbTracer;
 };
 
 export const traceContextTraitType = "hyperdb.traceContext";

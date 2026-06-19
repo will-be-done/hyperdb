@@ -12,7 +12,7 @@ import {
 } from "../storage/codec";
 // import { collectAll } from "../commands/async";
 import type { ExtractIndexes, ExtractSchema, TableDefinition } from "../schema/table";
-import { getTraceContextForDB, type HyperDBTracer } from "../core/tracer";
+import { getTraceContextForDB, type HyperDBTracerOption } from "../core/tracer";
 import { refVar, type RefVar } from "../utils";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
@@ -132,7 +132,7 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getDBName?.();
   }
 
-  getTracer(): HyperDBTracer | null | undefined {
+  getTracer(): HyperDBTracerOption | undefined {
     return this.subDb.getTracer?.();
   }
 
@@ -526,7 +526,7 @@ export class SubscribableDB implements HyperDB {
     return this.db.getDBName?.();
   }
 
-  getTracer(): HyperDBTracer | null | undefined {
+  getTracer(): HyperDBTracerOption | undefined {
     return this.db.getTracer?.();
   }
 

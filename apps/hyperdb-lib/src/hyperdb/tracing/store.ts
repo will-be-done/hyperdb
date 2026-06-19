@@ -8,6 +8,7 @@ import { defineTable, type ExtractSchema } from "../schema/table";
 import { v, type Validator } from "../schema/values";
 import {
   defaultTraceOptions,
+  getTracerForDB,
   setDefaultHyperDBTracer,
   type HyperDBTracer,
   type MutationEvent,
@@ -30,6 +31,8 @@ export {
 } from "../core/tracer";
 export type {
   CommandEventKind,
+  HyperDBTracer,
+  HyperDBTracerOption,
   MutationEvent,
   MutationEventKind,
   RootTrace,
@@ -451,7 +454,7 @@ const getTraceMutatedRowCount = (trace: RootTrace): number =>
 export class HyperDBTraceStore implements HyperDBTracer {
   private subDb = new SubscribableDB(
     new DB(new BptreeInmemDriver(), {
-      tracer: null,
+      tracer: "disabled",
     }),
   );
   private db = new SyncDB(this.subDb);
@@ -924,11 +927,14 @@ export const recordCachedRootTrace = (
   meta: TraceFrameMeta,
   db?: object,
 ): void => {
-  const context = startRootTrace(meta, hyperDBTraceStore, db);
+  const tracer = db ? getTracerForDB(db) : hyperDBTraceStore;
+  if (!tracer) return;
+
+  const context = tracer.startRootTrace(meta, db);
   if (!context) return;
 
-  markTraceFrameCached(context, context.rootFrame);
-  endTraceSuccess(context);
+  tracer.markTraceFrameCached(context, context.rootFrame);
+  tracer.endTraceSuccess(context);
 };
 
 export const endTraceSuccess = (context: TraceContext): void => {

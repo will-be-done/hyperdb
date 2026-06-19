@@ -9,7 +9,7 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
-import type { HyperDBTracer } from "../core/tracer";
+import type { HyperDBTracerOption } from "../core/tracer";
 import { deepFreeze } from "../deep-freeze";
 import {
   DEFAULT_CODEC_OPTIONS,
@@ -27,7 +27,7 @@ import { DBTx } from "./db-tx";
 export type DBOptions = Partial<CodecOptions> & {
   dbName?: string;
   traits?: Trait[];
-  tracer?: HyperDBTracer | null;
+  tracer?: HyperDBTracerOption;
 };
 
 type DBState = {
@@ -35,7 +35,7 @@ type DBState = {
   options: CodecOptions;
   id: string;
   name?: string;
-  tracer?: HyperDBTracer | null;
+  tracer?: HyperDBTracerOption;
 };
 
 let dbIdCounter = 0;
@@ -172,7 +172,7 @@ export class DB implements HyperDB {
     return this.state.name;
   }
 
-  getTracer(): HyperDBTracer | null | undefined {
+  getTracer(): HyperDBTracerOption | undefined {
     return this.state.tracer;
   }
 

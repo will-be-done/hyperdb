@@ -6,7 +6,7 @@ import type {
   TableDefinition,
 } from "../schema/table";
 import type { SelectOptions, Trait, WhereClause } from "./primitives";
-import type { HyperDBTracer } from "./tracer";
+import type { HyperDBTracerOption } from "./tracer";
 
 export interface HyperDB {
   intervalScan<
@@ -34,7 +34,7 @@ export interface HyperDB {
   getTraits(): Trait[];
   getId(): string;
   getDBName?(): string | undefined;
-  getTracer?(): HyperDBTracer | undefined | null;
+  getTracer?(): HyperDBTracerOption | undefined;
   getOptions?(): CodecOptions;
 
   beginTx(): Generator<DBCmd, HyperDBTx>;

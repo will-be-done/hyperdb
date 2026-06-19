@@ -647,6 +647,43 @@ describe("selector", () => {
     }
   });
 
+  test("cached object-form selector reuse respects DB tracer opt-out", async () => {
+    const deactivateTrace = hyperDBTraceStore.activate();
+    hyperDBTraceStore.clear();
+
+    try {
+      const cachedTraceTasksTable = defineTable("cachedTraceOptOutTasks", {
+        id: v.string(),
+        projectId: v.string(),
+      }).index("project", ["projectId"]);
+      const testDb = new SubscribableDB(
+        new DB(new BptreeInmemDriver(), { tracer: "disabled" }),
+      );
+      execSync(testDb.loadTables([cachedTraceTasksTable]));
+
+      const cachedTasks = selector({
+        name: "cachedTraceOptOutSelector",
+        args: { projectId: v.string() },
+        handler: function* cachedTraceOptOutSelector({ projectId }) {
+          return yield* selectFrom(cachedTraceTasksTable, "project").where(
+            (q) => q.eq("projectId", projectId),
+          );
+        },
+      });
+
+      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      hyperDBTraceStore.clear();
+
+      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+
+      hyperDBTraceStore.flushTraceCommits();
+      expect(selectCommittedTraces()).toEqual([]);
+    } finally {
+      deactivateTrace();
+      hyperDBTraceStore.clear();
+    }
+  });
+
   test("cached object-form selector range misses are recorded as cached in the trace", async () => {
     const deactivateTrace = hyperDBTraceStore.activate();
     let unsubscribeSelector: (() => void) | undefined;
