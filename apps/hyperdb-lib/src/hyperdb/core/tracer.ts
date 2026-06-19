@@ -108,17 +108,13 @@ export type RootTrace = {
   mutationEvents: MutationEvent[];
 };
 
-export type TraceStoreNotifier = {
-  notify(): void;
-};
-
 export type TraceContext = {
   trace: RootTrace;
   rootFrame: TraceFrame;
   frameStack: TraceFrame[];
   frameMetas: TraceFrameMeta[];
   rootMetaId?: string;
-  store: TraceStoreNotifier;
+  store: HyperDBTracer;
   tracer: HyperDBTracer;
 };
 

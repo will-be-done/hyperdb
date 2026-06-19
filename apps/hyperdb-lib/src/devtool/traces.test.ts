@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { select } from "../hyperdb";
 import {
+  createTraceFrameMeta,
+  endTraceSuccess,
   hyperDBTraceStore,
+  startRootTrace,
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
@@ -38,6 +41,18 @@ const trace = (overrides: Partial<RootTrace>): RootTrace => ({
 });
 
 describe("devtool trace selectors", () => {
+  let deactivateTraceStore: (() => void) | undefined;
+
+  const activateTraceStore = (): void => {
+    deactivateTraceStore?.();
+    deactivateTraceStore = hyperDBTraceStore.activate();
+  };
+
+  const deactivateActivatedTraceStore = (): void => {
+    deactivateTraceStore?.();
+    deactivateTraceStore = undefined;
+  };
+
   beforeEach(() => {
     hyperDBTraceStore.setMaxTraces(200);
     hyperDBTraceStore.clear();
@@ -45,6 +60,7 @@ describe("devtool trace selectors", () => {
 
   afterEach(() => {
     hyperDBTraceStore.clear();
+    deactivateActivatedTraceStore();
   });
 
   it("returns up to the requested limit after applying the kind filter", () => {
@@ -129,7 +145,6 @@ describe("devtool trace selectors", () => {
   });
 
   it("does not record trace-list selector reads as devtool traces", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
     hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
 
     const traces = select(
@@ -143,19 +158,59 @@ describe("devtool trace selectors", () => {
     );
 
     expect(traces.map((item) => item.name)).toEqual(["visible-1"]);
-    expect(hyperDBTraceStore.getSnapshot().map((item) => item.name)).toEqual([
-      "visible-1",
-    ]);
-    unsubscribe();
   });
 
-  it("clears the trace store directly while the devtool listener is active", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("returns traces committed through the batched trace store", async () => {
+    activateTraceStore();
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "committed-action", undefined),
+      hyperDBTraceStore,
+    )!;
+    endTraceSuccess(context);
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        traceStoreTraces({
+          maxTraces: 10,
+          kind: "all",
+          sortField: "created",
+          sortDir: "desc",
+        }),
+      ),
+    ).toEqual([]);
+
+    hyperDBTraceStore.flushTraceCommits();
+
+    const traces = select(
+      hyperDBTraceStore.getDB(),
+      traceStoreTraces({
+        maxTraces: 10,
+        kind: "all",
+        sortField: "created",
+        sortDir: "desc",
+      }),
+    );
+
+    expect(traces.map((item) => item.name)).toEqual(["committed-action"]);
+    deactivateActivatedTraceStore();
+  });
+
+  it("clears the trace store directly", () => {
     hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
 
     hyperDBTraceStore.clear();
 
-    expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
-    unsubscribe();
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        traceStoreTraces({
+          maxTraces: 10,
+          kind: "all",
+          sortField: "created",
+          sortDir: "desc",
+        }),
+      ),
+    ).toEqual([]);
   });
 });

@@ -1,31 +1,52 @@
 import { describe, expect, it } from "vitest";
 import {
+  beginMutationEvent,
+  beginSelectEvent,
   HyperDBTraceStore,
   createTraceFrameMeta,
+  endMutationEventSuccess,
+  endSelectEventSuccess,
   endTraceError,
   endTraceSuccess,
   enterFramePath,
   startRootTrace,
+  traceRootsRuntimeTable,
 } from "./store";
+import { select } from "../commands/selector/selector";
+import { selectFrom } from "../commands/selector/builder";
 
-const flushTraceNotifications = async (): Promise<void> => {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-};
+const selectCommittedTraceNames = (store: HyperDBTraceStore): string[] =>
+  select(
+    store.getDB(),
+    (function* () {
+      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+        .order("desc")
+        .limit(10);
+      return rows.map((row) => row.name);
+    })(),
+  );
+
+const selectCommittedTraces = (store: HyperDBTraceStore) =>
+  select(
+    store.getDB(),
+    (function* () {
+      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+        .order("desc")
+        .limit(10);
+      return store.resolveTraceRows(rows);
+    })(),
+  );
 
 describe("devtool tracing store", () => {
-  it("activates and deactivates with listeners", () => {
+  it("can be activated and deactivated", () => {
     const store = new HyperDBTraceStore();
-    expect(store.isActive()).toBe(false);
+    const deactivate = store.activate();
 
-    const unsubscribe = store.subscribe(() => {});
     expect(store.isActive()).toBe(true);
-    expect(store.getListenerCount()).toBe(1);
 
-    unsubscribe();
+    deactivate();
+
     expect(store.isActive()).toBe(false);
-    expect(store.getListenerCount()).toBe(0);
   });
 
   it("does not store traces while inactive", () => {
@@ -36,10 +57,10 @@ describe("devtool tracing store", () => {
     );
 
     expect(context).toBeUndefined();
-    expect(store.getSnapshot()).toEqual([]);
+    expect(selectCommittedTraceNames(store)).toEqual([]);
   });
 
-  it("stores load-start traces without listeners", () => {
+  it("starts load-start traces without listeners", () => {
     const store = new HyperDBTraceStore();
     const context = startRootTrace(
       createTraceFrameMeta("action", "traced", undefined, {
@@ -49,12 +70,12 @@ describe("devtool tracing store", () => {
     );
 
     expect(context).toBeDefined();
-    expect(store.getSnapshot()[0]?.name).toBe("traced");
+    expect(selectCommittedTraceNames(store)).toEqual([]);
   });
 
   it("does not store traces when tracing is disabled", () => {
     const store = new HyperDBTraceStore();
-    const unsubscribe = store.subscribe(() => {});
+    const deactivate = store.activate();
     const context = startRootTrace(
       createTraceFrameMeta("action", "disabled", undefined, {
         trace: { enabled: false, startOn: "devtoolOpen" },
@@ -63,14 +84,14 @@ describe("devtool tracing store", () => {
     );
 
     expect(context).toBeUndefined();
-    expect(store.getSnapshot()).toEqual([]);
+    expect(selectCommittedTraceNames(store)).toEqual([]);
 
-    unsubscribe();
+    deactivate();
   });
 
-  it("keeps the newest traces within the retention cap", () => {
+  it("keeps the newest traces within the retention cap", async () => {
     const store = new HyperDBTraceStore(2);
-    const unsubscribe = store.subscribe(() => {});
+    const deactivate = store.activate();
 
     for (const name of ["one", "two", "three"]) {
       const context = startRootTrace(
@@ -81,59 +102,161 @@ describe("devtool tracing store", () => {
       endTraceSuccess(context!);
     }
 
-    expect(store.getSnapshot().map((trace) => trace.name)).toEqual([
-      "three",
-      "two",
-    ]);
+    store.flushTraceCommits();
 
-    unsubscribe();
+    expect(selectCommittedTraceNames(store)).toEqual(["three", "two"]);
+
+    deactivate();
   });
 
-  it("does not notify when max trace count is unchanged", async () => {
-    const store = new HyperDBTraceStore(2);
-    let notifyCount = 0;
-    const unsubscribe = store.subscribe(() => {
-      notifyCount += 1;
-    });
-
-    store.setMaxTraces(2);
-    expect(notifyCount).toBe(0);
-
-    store.setMaxTraces(3);
-    await flushTraceNotifications();
-    expect(notifyCount).toBe(1);
-
-    unsubscribe();
-  });
-
-  it("coalesces listener notifications into an async task", async () => {
+  it("does not notify trace db subscribers when starting a root trace", async () => {
     const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
     let notifyCount = 0;
-    const unsubscribe = store.subscribe(() => {
+    const unsubscribeDB = store.getDB().subscribe(() => {
       notifyCount += 1;
     });
 
     const context = startRootTrace(
-      createTraceFrameMeta("action", "coalesced", undefined),
+      createTraceFrameMeta("action", "async-db-subscriber", undefined),
+      store,
+    )!;
+
+    expect(context).toBeDefined();
+    store.flushTraceCommits();
+    expect(notifyCount).toBe(0);
+
+    unsubscribeDB();
+    deactivate();
+  });
+
+  it("does not notify trace db subscribers for trace events before completion", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    let notifyCount = 0;
+    const unsubscribeDB = store.getDB().subscribe(() => {
+      notifyCount += 1;
+    });
+
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "events-before-completion", undefined),
+      store,
+    )!;
+    const selectEvent = beginSelectEvent(context, context.rootFrame, {
+      tableName: "tasks",
+      index: "byId",
+      where: [],
+      bounds: [],
+    });
+    endSelectEventSuccess(context, selectEvent, []);
+    const mutationEvent = beginMutationEvent(context, context.rootFrame, {
+      kind: "upsert",
+      tableName: "tasks",
+      rows: [],
+    });
+    endMutationEventSuccess(context, mutationEvent);
+
+    store.flushTraceCommits();
+    expect(notifyCount).toBe(0);
+
+    endTraceSuccess(context);
+
+    expect(notifyCount).toBe(0);
+
+    store.flushTraceCommits();
+    expect(notifyCount).toBe(1);
+
+    unsubscribeDB();
+    deactivate();
+  });
+
+  it("commits finished traces after the batch delay", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "batched", undefined),
+      store,
+    )!;
+
+    endTraceSuccess(context);
+
+    expect(context.trace.name).toBe("batched");
+    expect(selectCommittedTraceNames(store)).toEqual([]);
+
+    store.flushTraceCommits();
+    expect(selectCommittedTraceNames(store)).toEqual(["batched"]);
+
+    deactivate();
+  });
+
+  it("flushes multiple completed traces in one scheduled batch", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    let notifyCount = 0;
+    const unsubscribeDB = store.getDB().subscribe(() => {
+      notifyCount += 1;
+    });
+
+    for (const name of ["one", "two"]) {
+      const context = startRootTrace(
+        createTraceFrameMeta("action", name, undefined),
+        store,
+      )!;
+      endTraceSuccess(context);
+    }
+
+    expect(notifyCount).toBe(0);
+
+    store.flushTraceCommits();
+    expect(notifyCount).toBe(1);
+    expect(selectCommittedTraceNames(store)).toEqual(["two", "one"]);
+
+    unsubscribeDB();
+    deactivate();
+  });
+
+  it("discards queued traces when cleared before the batch flush", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "discarded", undefined),
       store,
     )!;
     endTraceSuccess(context);
 
-    expect(store.getSnapshot()[0]?.status).toBe("success");
-    expect(notifyCount).toBe(0);
+    store.clear();
+    store.flushTraceCommits();
 
-    await Promise.resolve();
-    expect(notifyCount).toBe(0);
+    expect(selectCommittedTraceNames(store)).toEqual([]);
 
-    await flushTraceNotifications();
-    expect(notifyCount).toBe(1);
-
-    unsubscribe();
+    deactivate();
   });
 
-  it("ignores non-finite max trace counts", () => {
+  it("discards queued DB traces when clearing that DB before the batch flush", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    const db = {
+      getId: () => "db-a",
+      getDBName: () => "DB A",
+    };
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "discarded-db", undefined),
+      store,
+      db,
+    )!;
+    endTraceSuccess(context);
+
+    store.clearDB("db-a");
+    store.flushTraceCommits();
+
+    expect(selectCommittedTraceNames(store)).toEqual([]);
+
+    deactivate();
+  });
+
+  it("ignores non-finite max trace counts", async () => {
     const store = new HyperDBTraceStore(2);
-    const unsubscribe = store.subscribe(() => {});
+    const deactivate = store.activate();
 
     for (const name of ["one", "two", "three"]) {
       const context = startRootTrace(
@@ -147,17 +270,16 @@ describe("devtool tracing store", () => {
     store.setMaxTraces(Number.NaN);
     store.setMaxTraces(Number.POSITIVE_INFINITY);
 
-    expect(store.getSnapshot().map((trace) => trace.name)).toEqual([
-      "three",
-      "two",
-    ]);
+    store.flushTraceCommits();
 
-    unsubscribe();
+    expect(selectCommittedTraceNames(store)).toEqual(["three", "two"]);
+
+    deactivate();
   });
 
-  it("records successful and failed root trace lifecycles", () => {
+  it("records successful and failed root trace lifecycles", async () => {
     const store = new HyperDBTraceStore();
-    const unsubscribe = store.subscribe(() => {});
+    const deactivate = store.activate();
 
     const success = startRootTrace(
       createTraceFrameMeta("selector", "success", { id: "task-1" }),
@@ -171,18 +293,20 @@ describe("devtool tracing store", () => {
     )!;
     endTraceError(failure, new Error("boom"));
 
-    const [failedTrace, successTrace] = store.getSnapshot();
+    store.flushTraceCommits();
+
+    const [failedTrace, successTrace] = selectCommittedTraces(store);
     expect(successTrace?.status).toBe("success");
     expect(successTrace?.durationMs).toBeDefined();
     expect(failedTrace?.status).toBe("error");
     expect(failedTrace?.error?.message).toBe("boom");
 
-    unsubscribe();
+    deactivate();
   });
 
-  it("attaches nested frames under the active root", () => {
+  it("attaches nested frames under the active root", async () => {
     const store = new HyperDBTraceStore();
-    const unsubscribe = store.subscribe(() => {});
+    const deactivate = store.activate();
     const rootMeta = createTraceFrameMeta("action", "root", undefined);
     const childMeta = createTraceFrameMeta("selector", "child", {
       id: "task-1",
@@ -192,11 +316,13 @@ describe("devtool tracing store", () => {
     enterFramePath(context, [rootMeta, childMeta]);
     endTraceSuccess(context);
 
-    const trace = store.getSnapshot()[0]!;
+    store.flushTraceCommits();
+
+    const trace = selectCommittedTraces(store)[0]!;
     expect(trace.frames[0]?.children).toHaveLength(1);
     expect(trace.frames[0]?.children[0]?.name).toBe("child");
     expect(trace.frames[0]?.children[0]?.arg).toEqual({ id: "task-1" });
 
-    unsubscribe();
+    deactivate();
   });
 });

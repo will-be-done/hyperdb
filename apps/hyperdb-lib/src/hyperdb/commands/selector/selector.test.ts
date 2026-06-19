@@ -12,7 +12,12 @@ import { defineTable } from "../../schema/table";
 import { selectFrom } from "./builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
-import { hyperDBTraceStore, type TraceFrame } from "../../tracing/store";
+import {
+  hyperDBTraceStore,
+  traceRootsRuntimeTable,
+  type RootTrace,
+  type TraceFrame,
+} from "../../tracing/store";
 
 type Task = {
   type: "task";
@@ -23,6 +28,17 @@ type Task = {
   orderToken: string;
 };
 const selector = createSelector();
+
+const selectCommittedTraces = (limit = 20): RootTrace[] =>
+  select(
+    hyperDBTraceStore.getDB(),
+    (function* () {
+      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+        .order("desc")
+        .limit(limit);
+      return hyperDBTraceStore.resolveTraceRows(rows);
+    })(),
+  );
 
 const tasksTable = defineTable("tasks", {
   type: v.literal("task"),
@@ -591,8 +607,8 @@ describe("selector", () => {
     unsubscribe();
   });
 
-  test("cached object-form selector reuse is recorded as cached in the trace", () => {
-    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+  test("cached object-form selector reuse is recorded as cached in the trace", async () => {
+    const deactivateTrace = hyperDBTraceStore.activate();
     hyperDBTraceStore.clear();
 
     try {
@@ -620,18 +636,19 @@ describe("selector", () => {
       initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
 
       expect(runCount).toBe(1);
-      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      hyperDBTraceStore.flushTraceCommits();
+      const trace = selectCommittedTraces()[0]!;
       expect(trace.name).toBe("cachedTraceSelector");
       expect(trace.commandEvents).toHaveLength(0);
       expect(trace.frames[0]?.cached).toBe(true);
     } finally {
-      unsubscribeTrace();
+      deactivateTrace();
       hyperDBTraceStore.clear();
     }
   });
 
-  test("cached object-form selector range misses are recorded as cached in the trace", () => {
-    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+  test("cached object-form selector range misses are recorded as cached in the trace", async () => {
+    const deactivateTrace = hyperDBTraceStore.activate();
     let unsubscribeSelector: (() => void) | undefined;
     hyperDBTraceStore.clear();
 
@@ -669,13 +686,14 @@ describe("selector", () => {
       );
 
       expect(runCount).toBe(1);
-      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      hyperDBTraceStore.flushTraceCommits();
+      const trace = selectCommittedTraces()[0]!;
       expect(trace.name).toBe("rangeMissTraceSelector");
       expect(trace.commandEvents).toHaveLength(0);
       expect(trace.frames[0]?.cached).toBe(true);
     } finally {
       unsubscribeSelector?.();
-      unsubscribeTrace();
+      deactivateTrace();
       hyperDBTraceStore.clear();
     }
   });
@@ -1217,8 +1235,8 @@ describe("selector", () => {
     unsubscribe();
   });
 
-  test("memo-skipped nested selector is marked cached in the trace", () => {
-    const unsubscribeTrace = hyperDBTraceStore.subscribe(() => {});
+  test("memo-skipped nested selector is marked cached in the trace", async () => {
+    const deactivateTrace = hyperDBTraceStore.activate();
     hyperDBTraceStore.clear();
 
     try {
@@ -1261,7 +1279,8 @@ describe("selector", () => {
         testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
       );
 
-      const trace = hyperDBTraceStore.getSnapshot()[0]!;
+      hyperDBTraceStore.flushTraceCommits();
+      const trace = selectCommittedTraces()[0]!;
       const findFrame = (
         frame: TraceFrame,
         name: string,
@@ -1289,7 +1308,7 @@ describe("selector", () => {
 
       unsubscribe();
     } finally {
-      unsubscribeTrace();
+      deactivateTrace();
       hyperDBTraceStore.clear();
     }
   });
