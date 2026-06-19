@@ -159,6 +159,20 @@ describe("DB runtime validation and codec boundary", () => {
     ]);
   });
 
+  it("passes v.pass fields through when runtime validation is disabled", () => {
+    const passTable = defineTable("passDocs", {
+      id: v.string(),
+      payload: v.pass<{ fn: () => string }>(),
+    });
+    const driver = new RecordingDriver();
+    const db = new DB(driver, { runtimeValidation: false });
+    const payload = { fn: () => "ok" };
+
+    execSync(db.insert(passTable, [{ id: "doc-1", payload }]));
+
+    expect(driver.inserted[0]?.[0]?.payload).toBe(payload);
+  });
+
   it("strips unknown table fields when runtime validation is disabled", () => {
     const driver = new RecordingDriver();
     const db = new DB(driver, { runtimeValidation: false });

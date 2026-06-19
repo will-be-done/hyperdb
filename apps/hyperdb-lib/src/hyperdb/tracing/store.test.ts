@@ -325,4 +325,26 @@ describe("devtool tracing store", () => {
 
     deactivate();
   });
+
+  it("stores trace payload values without sanitizing them", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+    const arg = {
+      run: () => "ok",
+      $unsafe: "kept",
+    };
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "unsanitized", arg),
+      store,
+    )!;
+
+    endTraceSuccess(context);
+    store.flushTraceCommits();
+
+    const trace = selectCommittedTraces(store)[0]!;
+    expect(trace.arg).toBe(arg);
+    expect(trace.frames[0]?.arg).toBe(arg);
+
+    deactivate();
+  });
 });

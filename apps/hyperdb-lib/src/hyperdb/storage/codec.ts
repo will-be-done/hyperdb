@@ -95,6 +95,10 @@ function sanitizeWithValidatorShape(
   value: unknown,
   path: ValidationPath = [],
 ): NormalizeResult<unknown> {
+  if (validator.kind === "pass") {
+    return success(value);
+  }
+
   if (validator.kind === "optional") {
     if (value === undefined) {
       return { ok: true, omitted: true };

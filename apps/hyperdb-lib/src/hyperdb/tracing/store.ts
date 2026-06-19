@@ -5,7 +5,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { SyncDB } from "../runtime/sync-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable, type ExtractSchema } from "../schema/table";
-import { v, type Validator } from "../schema/values";
+import { v } from "../schema/values";
 import {
   defaultTraceOptions,
   getTracerForDB,
@@ -104,199 +104,16 @@ const traceRootsTable = defineTable("hyperdbTraceRoots", {
 export type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
 export const traceRootsRuntimeTable = traceRootsTable;
 
-const traceKindValue = v.union(
-  v.literal("action"),
-  v.literal("selector"),
-  v.literal("unknown"),
-);
-
-const traceStatusValue = v.union(
-  v.literal("running"),
-  v.literal("success"),
-  v.literal("error"),
-);
-
-const traceErrorValue = v.object({
-  name: v.optional(v.string()),
-  message: v.string(),
-  stack: v.optional(v.string()),
-});
-
-const selectCommandEventValue = v.object({
-  id: v.string(),
-  frameId: v.string(),
-  kind: v.literal("select"),
-  tableName: v.string(),
-  index: v.string(),
-  where: v.array(v.pass<QueryWhereClause>()),
-  bounds: v.array(v.pass<TupleScanOptions>()),
-  limit: v.optional(v.number()),
-  order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
-  resultCount: v.optional(v.number()),
-  result: v.optional(v.array(v.pass<unknown>())),
-  startedAt: v.number(),
-  endedAt: v.optional(v.number()),
-  durationMs: v.optional(v.number()),
-  status: traceStatusValue,
-  error: v.optional(traceErrorValue),
-}) satisfies Validator<SelectCommandEvent>;
-
-const mutationEventValue = v.object({
-  id: v.string(),
-  frameId: v.string(),
-  kind: v.union(v.literal("insert"), v.literal("upsert"), v.literal("delete")),
-  tableName: v.string(),
-  rows: v.optional(v.array(v.pass<unknown>())),
-  ids: v.optional(v.array(v.string())),
-  oldValue: v.optional(v.array(v.pass<unknown>())),
-  newValue: v.optional(v.array(v.pass<unknown>())),
-  startedAt: v.number(),
-  endedAt: v.optional(v.number()),
-  durationMs: v.optional(v.number()),
-  status: traceStatusValue,
-  error: v.optional(traceErrorValue),
-}) satisfies Validator<MutationEvent>;
-
-type StoredTraceFrame = Omit<TraceFrame, "arg" | "children"> & {
-  arg?: unknown;
-  children: StoredTraceFrame[];
-};
-
-type StoredRootTrace = Omit<RootTrace, "arg" | "frames"> & {
-  arg?: unknown;
-  frames: StoredTraceFrame[];
-};
-
-const traceFrameValue: Validator<StoredTraceFrame> = v.object({
-  id: v.string(),
-  parentId: v.optional(v.string()),
-  kind: traceKindValue,
-  name: v.string(),
-  arg: v.optional(v.pass<unknown>()),
-  startedAt: v.number(),
-  endedAt: v.optional(v.number()),
-  durationMs: v.optional(v.number()),
-  status: traceStatusValue,
-  error: v.optional(traceErrorValue),
-  cached: v.optional(v.boolean()),
-  children: v.array(v.lazy(() => traceFrameValue)),
-  commandIds: v.array(v.string()),
-  mutationIds: v.array(v.string()),
-});
-
-const rootTraceValue = v.object({
-  id: v.string(),
-  dbId: v.optional(v.string()),
-  dbLabel: v.optional(v.string()),
-  kind: traceKindValue,
-  name: v.string(),
-  arg: v.optional(v.pass<unknown>()),
-  startedAt: v.number(),
-  endedAt: v.optional(v.number()),
-  durationMs: v.optional(v.number()),
-  status: traceStatusValue,
-  error: v.optional(traceErrorValue),
-  frames: v.array(traceFrameValue),
-  commandEvents: v.array(selectCommandEventValue),
-  mutationEvents: v.array(mutationEventValue),
-}) satisfies Validator<StoredRootTrace>;
-
 const tracePayloadsTable = defineTable("hyperdbTracePayloads", {
   id: v.string(),
-  trace: rootTraceValue,
+  // Trace payloads are in-memory debug snapshots; avoid walking user data on commit.
+  trace: v.pass<RootTrace>(),
 });
 
 export type TracePayloadRow = ExtractSchema<typeof tracePayloadsTable>;
 export const tracePayloadsRuntimeTable = tracePayloadsTable;
 
-const isPlainStorageObject = (
-  value: object,
-): value is Record<string, unknown> => {
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-};
-
-const safeStorageKey = (key: string): string =>
-  key.length === 0 || key.startsWith("$") ? `_${key}` : key;
-
-const sanitizeTraceData = (
-  value: unknown,
-  seen = new WeakSet<object>(),
-): unknown => {
-  if (value === undefined) return undefined;
-  if (typeof value === "symbol") return String(value);
-  if (typeof value === "function") {
-    return `[Function ${(value as { name?: string }).name || "anonymous"}]`;
-  }
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint"
-  ) {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : String(value);
-  }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeTraceData(item, seen) ?? "[Undefined]");
-  }
-  if (typeof value !== "object") {
-    return String(value);
-  }
-  if (seen.has(value)) {
-    return "[Circular]";
-  }
-  if (!isPlainStorageObject(value)) {
-    return safeSerialize(value).text;
-  }
-
-  seen.add(value);
-  try {
-    const next: Record<string, unknown> = {};
-    for (const [key, fieldValue] of Object.entries(value)) {
-      const sanitized = sanitizeTraceData(fieldValue, seen);
-      if (sanitized !== undefined) {
-        next[safeStorageKey(key)] = sanitized;
-      }
-    }
-    return next;
-  } finally {
-    seen.delete(value);
-  }
-};
-
-const storeTraceFrame = (frame: TraceFrame): StoredTraceFrame => {
-  const sanitized = sanitizeTraceData(frame) as TraceFrame;
-  return omitUndefined({
-    ...sanitized,
-    children: sanitized.children.map(storeTraceFrame),
-  });
-};
-
-const storeTracePayload = (trace: RootTrace): StoredRootTrace => {
-  const sanitized = sanitizeTraceData(trace) as RootTrace;
-  return omitUndefined({
-    ...sanitized,
-    frames: sanitized.frames.map(storeTraceFrame),
-  });
-};
-
-const hydrateTraceFrame = (frame: StoredTraceFrame): TraceFrame => ({
-  ...frame,
-  arg: frame.arg,
-  children: frame.children.map(hydrateTraceFrame),
-});
-
-export const hydrateTracePayload = (trace: StoredRootTrace): RootTrace => ({
-  ...trace,
-  arg: trace.arg,
-  frames: trace.frames.map(hydrateTraceFrame),
-});
+export const hydrateTracePayload = (trace: RootTrace): RootTrace => trace;
 
 let idCounter = 0;
 let dbCounter = 0;
@@ -776,7 +593,7 @@ export class HyperDBTraceStore implements HyperDBTracer {
   private payloadRowFromTrace(trace: RootTrace): TracePayloadRow {
     return {
       id: trace.id,
-      trace: storeTracePayload(trace),
+      trace,
     };
   }
 }
