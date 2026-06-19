@@ -72,6 +72,7 @@ type ValidatorKind =
   | "union"
   | "literal"
   | "optional"
+  | "lazy"
   | "pass"
   | "any";
 
@@ -130,6 +131,10 @@ export interface OptionalValidator<T>
   readonly inner: Validator<T>;
 }
 
+export interface LazyValidator<T> extends BaseValidator<T, "lazy"> {
+  readonly getValidator: () => Validator<T>;
+}
+
 export type PassValidator<T> = BaseValidator<T, "pass">;
 export type AnyValidator = BaseValidator<any, "any">;
 
@@ -146,6 +151,7 @@ export type Validator<T> = (
   | UnionValidator<readonly Validator<any>[]>
   | LiteralValidator<string | number | bigint | boolean | null>
   | OptionalValidator<any>
+  | LazyValidator<any>
   | PassValidator<any>
   | AnyValidator
 ) &
@@ -586,6 +592,16 @@ export const v = {
     ) as RequiredFields<TFields, TKeys>;
 
     return v.object(newFields);
+  },
+
+  lazy<T>(getValidator: () => Validator<T>): LazyValidator<T> {
+    return {
+      kind: "lazy",
+      getValidator,
+      normalize(value, path = []) {
+        return getValidator().normalize(value, path);
+      },
+    };
   },
 
   pass<T>(): Validator<T> {

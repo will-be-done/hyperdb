@@ -5,7 +5,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { SyncDB } from "../runtime/sync-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable, type ExtractSchema } from "../schema/table";
-import { v } from "../schema/values";
+import { v, type Validator } from "../schema/values";
 import {
   defaultTraceOptions,
   setDefaultHyperDBTracer,
@@ -55,20 +55,11 @@ export type TraceQueryKind = "selector" | "action";
 
 export const unassignedTraceDBKey = "__hyperdb_unassigned__";
 
-type TraceListener = () => void;
+const traceCommitBatchMs = 50;
 
-const scheduleTraceNotification = (callback: () => void): void => {
-  if (typeof globalThis.setTimeout === "function") {
-    globalThis.setTimeout(callback, 0);
-    return;
-  }
-
-  if (typeof globalThis.queueMicrotask === "function") {
-    globalThis.queueMicrotask(callback);
-    return;
-  }
-
-  void Promise.resolve().then(callback);
+const normalizeMaxTraces = (maxTraces: number): number => {
+  const n = Number(maxTraces);
+  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1000;
 };
 
 const traceRootsTable = defineTable("hyperdbTraceRoots", {
@@ -105,14 +96,199 @@ const traceRootsTable = defineTable("hyperdbTraceRoots", {
 export type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
 export const traceRootsRuntimeTable = traceRootsTable;
 
-const traceMetaTable = defineTable("hyperdbTraceMeta", {
-  id: v.string(),
-  revision: v.number(),
+const traceKindValue = v.union(
+  v.literal("action"),
+  v.literal("selector"),
+  v.literal("unknown"),
+);
+
+const traceStatusValue = v.union(
+  v.literal("running"),
+  v.literal("success"),
+  v.literal("error"),
+);
+
+const traceErrorValue = v.object({
+  name: v.optional(v.string()),
+  message: v.string(),
+  stack: v.optional(v.string()),
 });
 
-export const traceMetaRuntimeTable = traceMetaTable;
+const selectCommandEventValue = v.object({
+  id: v.string(),
+  frameId: v.string(),
+  kind: v.literal("select"),
+  tableName: v.string(),
+  index: v.string(),
+  where: v.array(v.pass<QueryWhereClause>()),
+  bounds: v.array(v.pass<TupleScanOptions>()),
+  limit: v.optional(v.number()),
+  order: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
+  resultCount: v.optional(v.number()),
+  result: v.optional(v.array(v.pass<unknown>())),
+  startedAt: v.number(),
+  endedAt: v.optional(v.number()),
+  durationMs: v.optional(v.number()),
+  status: traceStatusValue,
+  error: v.optional(traceErrorValue),
+}) satisfies Validator<SelectCommandEvent>;
 
-export const traceMetaId = "trace-meta";
+const mutationEventValue = v.object({
+  id: v.string(),
+  frameId: v.string(),
+  kind: v.union(v.literal("insert"), v.literal("upsert"), v.literal("delete")),
+  tableName: v.string(),
+  rows: v.optional(v.array(v.pass<unknown>())),
+  ids: v.optional(v.array(v.string())),
+  oldValue: v.optional(v.array(v.pass<unknown>())),
+  newValue: v.optional(v.array(v.pass<unknown>())),
+  startedAt: v.number(),
+  endedAt: v.optional(v.number()),
+  durationMs: v.optional(v.number()),
+  status: traceStatusValue,
+  error: v.optional(traceErrorValue),
+}) satisfies Validator<MutationEvent>;
+
+type StoredTraceFrame = Omit<TraceFrame, "arg" | "children"> & {
+  arg?: unknown;
+  children: StoredTraceFrame[];
+};
+
+type StoredRootTrace = Omit<RootTrace, "arg" | "frames"> & {
+  arg?: unknown;
+  frames: StoredTraceFrame[];
+};
+
+const traceFrameValue: Validator<StoredTraceFrame> = v.object({
+  id: v.string(),
+  parentId: v.optional(v.string()),
+  kind: traceKindValue,
+  name: v.string(),
+  arg: v.optional(v.pass<unknown>()),
+  startedAt: v.number(),
+  endedAt: v.optional(v.number()),
+  durationMs: v.optional(v.number()),
+  status: traceStatusValue,
+  error: v.optional(traceErrorValue),
+  cached: v.optional(v.boolean()),
+  children: v.array(v.lazy(() => traceFrameValue)),
+  commandIds: v.array(v.string()),
+  mutationIds: v.array(v.string()),
+});
+
+const rootTraceValue = v.object({
+  id: v.string(),
+  dbId: v.optional(v.string()),
+  dbLabel: v.optional(v.string()),
+  kind: traceKindValue,
+  name: v.string(),
+  arg: v.optional(v.pass<unknown>()),
+  startedAt: v.number(),
+  endedAt: v.optional(v.number()),
+  durationMs: v.optional(v.number()),
+  status: traceStatusValue,
+  error: v.optional(traceErrorValue),
+  frames: v.array(traceFrameValue),
+  commandEvents: v.array(selectCommandEventValue),
+  mutationEvents: v.array(mutationEventValue),
+}) satisfies Validator<StoredRootTrace>;
+
+const tracePayloadsTable = defineTable("hyperdbTracePayloads", {
+  id: v.string(),
+  trace: rootTraceValue,
+});
+
+export type TracePayloadRow = ExtractSchema<typeof tracePayloadsTable>;
+export const tracePayloadsRuntimeTable = tracePayloadsTable;
+
+const isPlainStorageObject = (
+  value: object,
+): value is Record<string, unknown> => {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+};
+
+const safeStorageKey = (key: string): string =>
+  key.length === 0 || key.startsWith("$") ? `_${key}` : key;
+
+const sanitizeTraceData = (
+  value: unknown,
+  seen = new WeakSet<object>(),
+): unknown => {
+  if (value === undefined) return undefined;
+  if (typeof value === "symbol") return String(value);
+  if (typeof value === "function") {
+    return `[Function ${(value as { name?: string }).name || "anonymous"}]`;
+  }
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
+  }
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeTraceData(item, seen) ?? "[Undefined]");
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  if (!isPlainStorageObject(value)) {
+    return safeSerialize(value).text;
+  }
+
+  seen.add(value);
+  try {
+    const next: Record<string, unknown> = {};
+    for (const [key, fieldValue] of Object.entries(value)) {
+      const sanitized = sanitizeTraceData(fieldValue, seen);
+      if (sanitized !== undefined) {
+        next[safeStorageKey(key)] = sanitized;
+      }
+    }
+    return next;
+  } finally {
+    seen.delete(value);
+  }
+};
+
+const storeTraceFrame = (frame: TraceFrame): StoredTraceFrame => {
+  const sanitized = sanitizeTraceData(frame) as TraceFrame;
+  return omitUndefined({
+    ...sanitized,
+    children: sanitized.children.map(storeTraceFrame),
+  });
+};
+
+const storeTracePayload = (trace: RootTrace): StoredRootTrace => {
+  const sanitized = sanitizeTraceData(trace) as RootTrace;
+  return omitUndefined({
+    ...sanitized,
+    frames: sanitized.frames.map(storeTraceFrame),
+  });
+};
+
+const hydrateTraceFrame = (frame: StoredTraceFrame): TraceFrame => ({
+  ...frame,
+  arg: frame.arg,
+  children: frame.children.map(hydrateTraceFrame),
+});
+
+export const hydrateTracePayload = (trace: StoredRootTrace): RootTrace => ({
+  ...trace,
+  arg: trace.arg,
+  frames: trace.frames.map(hydrateTraceFrame),
+});
 
 let idCounter = 0;
 let dbCounter = 0;
@@ -242,46 +418,39 @@ export class HyperDBTraceStore implements HyperDBTracer {
     }),
   );
   private db = new SyncDB(this.subDb);
-  private snapshot: RootTrace[] = [];
-  private payloads = new Map<string, RootTrace>();
+  private queuedTraces = new Map<string, RootTrace>();
   private createdSeqByTraceId = new Map<string, number>();
-  private listeners = new Set<TraceListener>();
-  private activeListenerCount = 0;
-  private notifyQueued = false;
+  private persistedTraceIds = new Set<string>();
+  private activeActivationCount = 0;
+  private commitTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private maxTraces: number;
   private createdSeq = 0;
-  private revision = 0;
 
-  constructor(maxTraces = 2000) {
-    this.maxTraces = maxTraces;
-    this.db.loadTables([traceRootsRuntimeTable, traceMetaRuntimeTable]);
-    this.bumpRevision();
+  constructor(maxTraces = 1000) {
+    this.maxTraces = normalizeMaxTraces(maxTraces);
+    this.db.loadTables([traceRootsRuntimeTable, tracePayloadsRuntimeTable]);
   }
 
   getDB = (): SubscribableDB => this.subDb;
 
-  subscribe = (listener: TraceListener): (() => void) => {
-    this.listeners.add(listener);
-    this.activeListenerCount += 1;
-
-    return () => {
-      if (this.listeners.delete(listener)) {
-        this.activeListenerCount -= 1;
-      }
-    };
-  };
-
-  getSnapshot = (): RootTrace[] => this.snapshot;
-
   resolveTraceRows = (rows: TraceRootRow[]): RootTrace[] => {
     return rows
-      .map((row) => this.payloads.get(row.id))
+      .map((row) => this.getTracePayload(row.id))
       .filter((trace): trace is RootTrace => trace !== undefined);
   };
 
-  getListenerCount = (): number => this.activeListenerCount;
+  isActive = (): boolean => this.activeActivationCount > 0;
 
-  isActive = (): boolean => this.activeListenerCount > 0;
+  activate = (): (() => void) => {
+    this.activeActivationCount += 1;
+    let active = true;
+
+    return () => {
+      if (!active) return;
+      active = false;
+      this.activeActivationCount -= 1;
+    };
+  };
 
   setMaxTraces = (maxTraces: number): void => {
     const n = Number(maxTraces);
@@ -291,56 +460,61 @@ export class HyperDBTraceStore implements HyperDBTracer {
     if (nextMaxTraces === this.maxTraces) return;
 
     this.maxTraces = nextMaxTraces;
-    this.trim();
-    this.refreshSnapshot();
-    this.notify();
+    this.trimQueued();
   };
 
   clear = (): void => {
-    const ids = [...this.payloads.keys()];
+    this.cancelScheduledFlush();
+    this.queuedTraces.clear();
+    const ids = this.allRows().map((row) => row.id);
     if (ids.length > 0) {
-      this.db.delete(traceRootsRuntimeTable, ids);
+      this.deleteTraceRows(ids);
     }
-    this.payloads.clear();
     this.createdSeqByTraceId.clear();
-    this.refreshSnapshot();
-    this.notify();
+    this.persistedTraceIds.clear();
   };
 
   clearDB = (dbId: string | undefined): void => {
+    for (const [id, trace] of this.queuedTraces) {
+      if (trace.dbId === dbId) {
+        this.queuedTraces.delete(id);
+        this.createdSeqByTraceId.delete(id);
+      }
+    }
+    if (this.queuedTraces.size === 0) {
+      this.cancelScheduledFlush();
+    }
+
     const rows =
       dbId === undefined
         ? this.allRows().filter((row) => row.dbId === undefined)
         : this.db.intervalScan(traceRootsRuntimeTable, "byDbCreatedSeq", [
             { eq: [{ col: "dbId", val: dbId }] },
           ]);
-    if (rows.length === 0) return;
+    if (rows.length === 0) {
+      return;
+    }
 
     const ids = rows.map((row) => row.id);
-    this.db.delete(traceRootsRuntimeTable, ids);
+    this.deleteTraceRows(ids);
     for (const id of ids) {
-      this.payloads.delete(id);
       this.createdSeqByTraceId.delete(id);
+      this.persistedTraceIds.delete(id);
     }
-    this.refreshSnapshot();
-    this.notify();
   };
 
   addTrace = (trace: RootTrace): void => {
     this.createdSeq += 1;
     this.createdSeqByTraceId.set(trace.id, this.createdSeq);
-    this.payloads.set(trace.id, trace);
-    this.db.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
-    this.trim();
-    this.refreshSnapshot();
-    this.notify();
+    if (trace.status !== "running") {
+      this.upsertTraceRows(trace);
+      this.persistedTraceIds.add(trace.id);
+    }
+    this.trimPersisted();
   };
 
   updateTrace = (trace: RootTrace): void => {
-    if (!this.payloads.has(trace.id)) return;
-    this.db.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
-    this.payloads.set(trace.id, trace);
-    this.refreshSnapshot();
+    this.enqueueTrace(trace);
   };
 
   startRootTrace = (
@@ -403,39 +577,117 @@ export class HyperDBTraceStore implements HyperDBTracer {
     error: unknown,
   ): void => endMutationEventError(context, event, error);
 
-  notify = (): void => {
-    if (this.notifyQueued) return;
+  private trimPersisted(): void {
+    const overflow = this.persistedTraceIds.size - this.maxTraces;
+    if (overflow <= 0) return;
 
-    this.notifyQueued = true;
-    scheduleTraceNotification(() => {
-      this.notifyQueued = false;
-      this.bumpRevision();
+    const removedIds = this.db
+      .intervalScan(traceRootsRuntimeTable, "byCreatedSeq", [{}], {
+        limit: overflow,
+        order: "asc",
+      })
+      .map((row) => row.id);
 
-      for (const listener of [...this.listeners]) {
-        listener();
-      }
-    });
-  };
+    if (removedIds.length === 0) return;
 
-  private bumpRevision(): void {
-    this.revision += 1;
-    this.db.upsert(traceMetaTable, [
-      {
-        id: traceMetaId,
-        revision: this.revision,
-      },
-    ]);
+    this.deleteTraceRows(removedIds);
+    for (const id of removedIds) {
+      this.persistedTraceIds.delete(id);
+      this.createdSeqByTraceId.delete(id);
+    }
   }
 
-  private trim(): void {
-    const rows = this.allRows();
-    if (rows.length <= this.maxTraces) return;
+  private enqueueTrace(trace: RootTrace): void {
+    if (!this.createdSeqByTraceId.has(trace.id)) {
+      this.createdSeq += 1;
+      this.createdSeqByTraceId.set(trace.id, this.createdSeq);
+    }
 
-    const ids = rows.slice(this.maxTraces).map((row) => row.id);
-    this.db.delete(traceRootsRuntimeTable, ids);
-    for (const id of ids) {
-      this.payloads.delete(id);
-      this.createdSeqByTraceId.delete(id);
+    this.queuedTraces.set(trace.id, trace);
+    this.trimQueued();
+    this.scheduleFlush();
+  }
+
+  private trimQueued(): void {
+    while (this.queuedTraces.size > this.maxTraces) {
+      const oldestQueuedId = this.queuedTraces.keys().next().value as
+        | string
+        | undefined;
+      if (oldestQueuedId === undefined) return;
+      this.queuedTraces.delete(oldestQueuedId);
+      this.createdSeqByTraceId.delete(oldestQueuedId);
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this.commitTimer !== undefined) return;
+    this.commitTimer = globalThis.setTimeout(() => {
+      this.commitTimer = undefined;
+      this.flushQueuedTraces();
+    }, traceCommitBatchMs);
+  }
+
+  private cancelScheduledFlush(): void {
+    if (this.commitTimer === undefined) return;
+    globalThis.clearTimeout(this.commitTimer);
+    this.commitTimer = undefined;
+  }
+
+  private flushQueuedTraces(): void {
+    const traces = [...this.queuedTraces.values()];
+    if (traces.length === 0) return;
+
+    this.queuedTraces.clear();
+
+    const tx = this.db.beginTx();
+    try {
+      tx.upsert(
+        traceRootsRuntimeTable,
+        traces.map((trace) => this.rowFromTrace(trace)),
+      );
+      tx.upsert(
+        tracePayloadsRuntimeTable,
+        traces.map((trace) => this.payloadRowFromTrace(trace)),
+      );
+      tx.commit();
+    } catch (error) {
+      tx.rollback();
+      for (const trace of traces) {
+        this.queuedTraces.set(trace.id, trace);
+      }
+      this.scheduleFlush();
+      throw error;
+    }
+
+    for (const trace of traces) {
+      this.persistedTraceIds.add(trace.id);
+    }
+    this.trimPersisted();
+  }
+
+  private upsertTraceRows(trace: RootTrace): void {
+    const tx = this.db.beginTx();
+
+    try {
+      tx.upsert(traceRootsRuntimeTable, [this.rowFromTrace(trace)]);
+      tx.upsert(tracePayloadsRuntimeTable, [this.payloadRowFromTrace(trace)]);
+      tx.commit();
+    } catch (error) {
+      tx.rollback();
+      throw error;
+    }
+  }
+
+  private deleteTraceRows(ids: string[]): void {
+    const tx = this.db.beginTx();
+
+    try {
+      tx.delete(traceRootsRuntimeTable, ids);
+      tx.delete(tracePayloadsRuntimeTable, ids);
+      tx.commit();
+    } catch (error) {
+      tx.rollback();
+      throw error;
     }
   }
 
@@ -445,14 +697,12 @@ export class HyperDBTraceStore implements HyperDBTracer {
     });
   }
 
-  private refreshSnapshot(): void {
-    this.snapshot = this.db
-      .intervalScan(traceRootsRuntimeTable, "byCreatedSeq", [{}], {
-        order: "desc",
-        limit: this.maxTraces,
-      })
-      .map((row) => this.payloads.get(row.id))
-      .filter((trace): trace is RootTrace => trace !== undefined);
+  private getTracePayload(id: string): RootTrace | undefined {
+    const trace = this.db.intervalScan(tracePayloadsRuntimeTable, "byId", [
+      { eq: [{ col: "id", val: id }] },
+    ])[0]?.trace;
+
+    return trace ? hydrateTracePayload(trace) : undefined;
   }
 
   private rowFromTrace(trace: RootTrace): TraceRootRow {
@@ -470,6 +720,13 @@ export class HyperDBTraceStore implements HyperDBTracer {
       cached: trace.frames[0]?.cached === true,
       createdSeq: this.createdSeqByTraceId.get(trace.id) ?? 0,
     });
+  }
+
+  private payloadRowFromTrace(trace: RootTrace): TracePayloadRow {
+    return {
+      id: trace.id,
+      trace: storeTracePayload(trace),
+    };
   }
 }
 
@@ -554,7 +811,6 @@ export const startRootTrace = (
     tracer: store,
   };
 
-  store.addTrace(trace);
   return context;
 };
 
@@ -610,11 +866,10 @@ export const getCurrentTraceFrameMeta = (
 ): TraceFrameMeta => context.frameMetas[context.frameMetas.length - 1]!;
 
 export const markTraceFrameCached = (
-  context: TraceContext,
+  _context: TraceContext,
   frame: TraceFrame,
 ): void => {
   frame.cached = true;
-  context.store.notify();
 };
 
 export const recordCachedRootTrace = (
@@ -637,7 +892,6 @@ export const endTraceSuccess = (context: TraceContext): void => {
   if (context.store instanceof HyperDBTraceStore) {
     context.store.updateTrace(context.trace);
   }
-  context.store.notify();
 };
 
 export const endTraceError = (context: TraceContext, error: unknown): void => {
@@ -654,7 +908,6 @@ export const endTraceError = (context: TraceContext, error: unknown): void => {
   if (context.store instanceof HyperDBTraceStore) {
     context.store.updateTrace(context.trace);
   }
-  context.store.notify();
 };
 
 export const beginSelectEvent = (
@@ -684,12 +937,11 @@ export const beginSelectEvent = (
   };
   frame.commandIds.push(event.id);
   context.trace.commandEvents.push(event);
-  context.store.notify();
   return event;
 };
 
 export const endSelectEventSuccess = (
-  context: TraceContext,
+  _context: TraceContext,
   event: SelectCommandEvent,
   result: unknown[],
 ): void => {
@@ -698,11 +950,10 @@ export const endSelectEventSuccess = (
   event.resultCount = result.length;
   event.result = result;
   event.status = "success";
-  context.store.notify();
 };
 
 export const endSelectEventError = (
-  context: TraceContext,
+  _context: TraceContext,
   event: SelectCommandEvent,
   error: unknown,
 ): void => {
@@ -710,7 +961,6 @@ export const endSelectEventError = (
   event.durationMs = finishDuration(event.startedAt);
   event.status = "error";
   event.error = summarizeError(error);
-  context.store.notify();
 };
 
 export const beginMutationEvent = (
@@ -739,12 +989,11 @@ export const beginMutationEvent = (
   };
   frame.mutationIds.push(event.id);
   context.trace.mutationEvents.push(event);
-  context.store.notify();
   return event;
 };
 
 export const endMutationEventSuccess = (
-  context: TraceContext,
+  _context: TraceContext,
   event: MutationEvent,
   patch: Partial<
     Pick<MutationEvent, "rows" | "ids" | "oldValue" | "newValue">
@@ -754,11 +1003,10 @@ export const endMutationEventSuccess = (
   event.endedAt = wallClockNow();
   event.durationMs = finishDuration(event.startedAt);
   event.status = "success";
-  context.store.notify();
 };
 
 export const endMutationEventError = (
-  context: TraceContext,
+  _context: TraceContext,
   event: MutationEvent,
   error: unknown,
 ): void => {
@@ -766,5 +1014,4 @@ export const endMutationEventError = (
   event.durationMs = finishDuration(event.startedAt);
   event.status = "error";
   event.error = summarizeError(error);
-  context.store.notify();
 };

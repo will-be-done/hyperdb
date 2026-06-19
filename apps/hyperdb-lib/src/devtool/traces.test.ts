@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { select } from "../hyperdb";
 import {
+  createTraceFrameMeta,
+  endTraceSuccess,
   hyperDBTraceStore,
+  startRootTrace,
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
@@ -36,6 +39,12 @@ const trace = (overrides: Partial<RootTrace>): RootTrace => ({
   mutationEvents: [],
   ...overrides,
 });
+
+const flushTraceCommits = async (): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 120);
+  });
+};
 
 describe("devtool trace selectors", () => {
   beforeEach(() => {
@@ -129,7 +138,6 @@ describe("devtool trace selectors", () => {
   });
 
   it("does not record trace-list selector reads as devtool traces", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
     hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
 
     const traces = select(
@@ -143,19 +151,59 @@ describe("devtool trace selectors", () => {
     );
 
     expect(traces.map((item) => item.name)).toEqual(["visible-1"]);
-    expect(hyperDBTraceStore.getSnapshot().map((item) => item.name)).toEqual([
-      "visible-1",
-    ]);
-    unsubscribe();
   });
 
-  it("clears the trace store directly while the devtool listener is active", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("returns traces committed through the batched trace store", async () => {
+    const deactivate = hyperDBTraceStore.activate();
+    const context = startRootTrace(
+      createTraceFrameMeta("action", "committed-action", undefined),
+      hyperDBTraceStore,
+    )!;
+    endTraceSuccess(context);
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        traceStoreTraces({
+          maxTraces: 10,
+          kind: "all",
+          sortField: "created",
+          sortDir: "desc",
+        }),
+      ),
+    ).toEqual([]);
+
+    await flushTraceCommits();
+
+    const traces = select(
+      hyperDBTraceStore.getDB(),
+      traceStoreTraces({
+        maxTraces: 10,
+        kind: "all",
+        sortField: "created",
+        sortDir: "desc",
+      }),
+    );
+
+    expect(traces.map((item) => item.name)).toEqual(["committed-action"]);
+    deactivate();
+  });
+
+  it("clears the trace store directly", () => {
     hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
 
     hyperDBTraceStore.clear();
 
-    expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
-    unsubscribe();
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        traceStoreTraces({
+          maxTraces: 10,
+          kind: "all",
+          sortField: "created",
+          sortDir: "desc",
+        }),
+      ),
+    ).toEqual([]);
   });
 });

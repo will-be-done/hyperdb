@@ -2,10 +2,9 @@ import { createSelector } from "../hyperdb";
 import { selectFrom } from "../hyperdb/commands/selector/builder";
 import { v } from "../hyperdb/schema/values";
 import {
-  hyperDBTraceStore,
+  hydrateTracePayload,
+  tracePayloadsRuntimeTable,
   traceRootsRuntimeTable,
-  traceMetaId,
-  traceMetaRuntimeTable,
   type RootTrace,
   type TraceQueryKind,
   type TraceRootRow,
@@ -101,6 +100,26 @@ function* selectTraceRowCandidates({
   return yield* query;
 }
 
+function* selectTracePayloads(
+  rows: TraceRootRow[],
+): Generator<unknown, RootTrace[], unknown> {
+  const traces: RootTrace[] = [];
+
+  for (const row of rows) {
+    const payloadRows = yield* selectFrom(
+      tracePayloadsRuntimeTable,
+      "byId",
+    ).where((q) => q.eq("id", row.id));
+    const payload = payloadRows[0];
+
+    if (payload) {
+      traces.push(hydrateTracePayload(payload.trace));
+    }
+  }
+
+  return traces;
+}
+
 const traceRowMatchesFilters = (
   row: TraceRootRow,
   {
@@ -139,18 +158,15 @@ export const traceStoreTraces = selector({
     sortDir: v.union(v.literal("asc"), v.literal("desc")),
   },
   handler: function* ({ maxTraces, kind, sortField, sortDir }) {
-    yield* selectFrom(traceMetaRuntimeTable, "byId").where((q) =>
-      q.eq("id", traceMetaId),
-    );
-
     const rows = yield* selectTraceRows({
       maxTraces,
       sortField,
       sortDir,
       kind: kind === "all" ? undefined : kind,
     });
+    const traces = yield* selectTracePayloads(rows);
 
-    return filterTraces(hyperDBTraceStore.resolveTraceRows(rows), {
+    return filterTraces(traces, {
       kind: kind === "all" ? undefined : kind,
     });
   },
@@ -176,10 +192,6 @@ export const traceStoreTraceSelection = selector({
     sortDir,
     selectedTraceId,
   }): Generator<unknown, TraceStoreTraceSelection, unknown> {
-    yield* selectFrom(traceMetaRuntimeTable, "byId").where((q) =>
-      q.eq("id", traceMetaId),
-    );
-
     const rows = yield* selectTraceRows({
       maxTraces,
       dbKey,
@@ -188,7 +200,8 @@ export const traceStoreTraceSelection = selector({
       kind: kind === "all" ? undefined : kind,
       skipCached,
     });
-    const visibleTraces = filterTraces(hyperDBTraceStore.resolveTraceRows(rows), {
+    const traces = yield* selectTracePayloads(rows);
+    const visibleTraces = filterTraces(traces, {
       kind: kind === "all" ? undefined : kind,
       skipCached,
     });

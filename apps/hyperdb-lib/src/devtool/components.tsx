@@ -81,7 +81,7 @@ const writeStoredOpenState = (isOpen: boolean): void => {
 
 const listWidthKey = "hyperdb-devtools-list-width";
 const defaultListWidth = 290;
-const minListWidth = 180;
+const minListWidth = 400;
 const maxListWidth = 700;
 
 const readStoredListWidth = (): number => {
@@ -2785,7 +2785,11 @@ const DevtoolsTraceDBProvider = ({
   children,
 }: {
   children: React.ReactNode;
-}) => <DBProvider value={hyperDBTraceStore.getDB()}>{children}</DBProvider>;
+}) => {
+  useEffect(() => hyperDBTraceStore.activate(), []);
+
+  return <DBProvider value={hyperDBTraceStore.getDB()}>{children}</DBProvider>;
+};
 
 const ContextPanel = (props: Omit<HyperDBDevtoolsPanelProps, "db">) => {
   return <DevtoolsPanelInner {...props} />;

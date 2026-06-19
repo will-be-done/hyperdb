@@ -179,22 +179,39 @@ const traceFrame = (cached = false): TraceFrame => ({
   mutationIds: [],
 });
 
-let unsubscribeTraceListener: (() => void) | undefined;
+let deactivateTraceStore: (() => void) | undefined;
 
 beforeEach(() => {
-  unsubscribeTraceListener = hyperDBTraceStore.subscribe(() => {});
+  deactivateTraceStore = hyperDBTraceStore.activate();
   hyperDBTraceStore.setMaxTraces(200);
   hyperDBTraceStore.clear();
 });
 
 afterEach(() => {
   hyperDBTraceStore.clear();
-  unsubscribeTraceListener?.();
-  unsubscribeTraceListener = undefined;
+  deactivateTraceStore?.();
+  deactivateTraceStore = undefined;
 });
 
+const flushTraceCommits = async (): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 120);
+  });
+};
+
+const selectCommittedTraces = (limit = 20): RootTrace[] =>
+  select(
+    hyperDBTraceStore.getDB(),
+    (function* () {
+      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+        .order("desc")
+        .limit(limit);
+      return hyperDBTraceStore.resolveTraceRows(rows);
+    })(),
+  );
+
 describe("devtool runtime tracing", () => {
-  it("records one root action trace and a select event", () => {
+  it("records one root action trace and a select event", async () => {
     const db = createDB();
     execSync(db.insert(tasksTable, [task()]));
 
@@ -210,7 +227,8 @@ describe("devtool runtime tracing", () => {
     });
 
     const result = syncDispatch(db, readTaskAction({}));
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
 
     expect(result).toEqual([task()]);
     expect(trace.kind).toBe("action");
@@ -234,9 +252,9 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.bounds.length).toBeGreaterThan(0);
   });
 
-  it("records traces before the devtool opens when selector trace is enabled", () => {
-    unsubscribeTraceListener?.();
-    unsubscribeTraceListener = undefined;
+  it("records traces before the devtool opens when selector trace is enabled", async () => {
+    deactivateTraceStore?.();
+    deactivateTraceStore = undefined;
     const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
     execSync(db.loadTables([tasksTable]));
     execSync(db.insert(tasksTable, [task()]));
@@ -256,7 +274,8 @@ describe("devtool runtime tracing", () => {
 
     expect(select(db, readTaskSelector({}))).toEqual([task()]);
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.name).toBe("readTaskBeforeDevtoolOpen");
     expect(trace.commandEvents).toHaveLength(1);
   });
@@ -281,7 +300,7 @@ describe("devtool runtime tracing", () => {
     });
 
     expect(select(db, readTaskSelector({}))).toEqual([task()]);
-    expect(hyperDBTraceStore.getSnapshot()).toEqual([]);
+    expect(selectCommittedTraces()).toEqual([]);
   });
 
   it("returns traces ordered by duration through HyperDB indexes", () => {
@@ -389,7 +408,7 @@ describe("devtool runtime tracing", () => {
     ).toEqual(["unassigned"]);
   });
 
-  it("keeps the same db identity across traited wrappers", () => {
+  it("keeps the same db identity across traited wrappers", async () => {
     const db = createDB();
     expect(db.withTraits({ type: "test.identity" }).getId()).toBe(db.getId());
     const readTaskAction = action({
@@ -410,14 +429,14 @@ describe("devtool runtime tracing", () => {
       readTaskAction({}),
     );
 
-    const dbIds = new Set(
-      hyperDBTraceStore.getSnapshot().map((trace) => trace.dbId),
-    );
+    await flushTraceCommits();
+
+    const dbIds = new Set(selectCommittedTraces().map((trace) => trace.dbId));
 
     expect(dbIds.size).toBe(1);
   });
 
-  it("records an action calling an action as one root with a child frame", () => {
+  it("records an action calling an action as one root with a child frame", async () => {
     const db = createDB();
 
     const childTaskAction = action({
@@ -438,7 +457,8 @@ describe("devtool runtime tracing", () => {
 
     syncDispatch(db, parentTaskAction({}));
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.name).toBe("parentAction");
     expect(trace.frames[0]?.children).toHaveLength(1);
     expect(trace.frames[0]?.children[0]?.name).toBe("childAction");
@@ -448,7 +468,7 @@ describe("devtool runtime tracing", () => {
     );
   });
 
-  it("records a selector calling a selector as one root with a child frame", () => {
+  it("records a selector calling a selector as one root with a child frame", async () => {
     const db = createDB();
     execSync(db.insert(tasksTable, [task({ state: "done" })]));
 
@@ -475,7 +495,8 @@ describe("devtool runtime tracing", () => {
       task({ state: "done" }),
     ]);
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.kind).toBe("selector");
     expect(trace.name).toBe("doneTasks");
     expect(trace.frames[0]?.children[0]?.name).toBe("allTasks");
@@ -485,7 +506,7 @@ describe("devtool runtime tracing", () => {
     );
   });
 
-  it("skips root and child traces for object selectors with skipTrace true", () => {
+  it("skips root and child traces for object selectors with skipTrace true", async () => {
     const db = createDB();
     execSync(db.insert(tasksTable, [task({ state: "done" })]));
 
@@ -509,7 +530,7 @@ describe("devtool runtime tracing", () => {
     });
 
     expect(select(db, skippedSelector({}))).toEqual([task({ state: "done" })]);
-    expect(hyperDBTraceStore.getSnapshot()).toHaveLength(0);
+    expect(selectCommittedTraces()).toHaveLength(0);
 
     const parentSelector = selector({
       name: "skippedTraceParentSelector",
@@ -521,14 +542,15 @@ describe("devtool runtime tracing", () => {
 
     expect(select(db, parentSelector({}))).toEqual([task({ state: "done" })]);
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.name).toBe("skippedTraceParentSelector");
     expect(trace.frames[0]?.children).toHaveLength(0);
     expect(trace.commandEvents).toHaveLength(1);
     expect(trace.commandEvents[0]?.frameId).toBe(trace.frames[0]?.id);
   });
 
-  it("marks select errors on the command and root trace, then rethrows", () => {
+  it("marks select errors on the command and root trace, then rethrows", async () => {
     const db = new DB(new BptreeInmemDriver());
     const failingSelector = selector({
       name: "failingSelector",
@@ -542,7 +564,8 @@ describe("devtool runtime tracing", () => {
 
     expect(() => select(db, failingSelector({}))).toThrow();
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.status).toBe("error");
     expect(trace.error?.message).toBeTruthy();
     expect(trace.commandEvents).toHaveLength(1);
@@ -550,7 +573,7 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.error?.message).toBeTruthy();
   });
 
-  it("records insert, upsert, and delete payloads through SubscribableDBTx", () => {
+  it("records insert, upsert, and delete payloads through SubscribableDBTx", async () => {
     const db = createDB();
     const updatedTask = task({ title: "Updated", state: "done" });
 
@@ -566,7 +589,8 @@ describe("devtool runtime tracing", () => {
 
     syncDispatch(db, mutateTasks({}));
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.mutationEvents.map((event) => event.kind)).toEqual([
       "insert",
       "upsert",
@@ -604,7 +628,8 @@ describe("devtool runtime tracing", () => {
 
     await asyncDispatch(db, mutateAfterSelect({}));
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    await flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
     expect(trace.name).toBe("mutateAfterSelect");
     expect(trace.frames[0]?.children[0]?.name).toBe(
       "readTaskBeforeAsyncMutation",
@@ -647,7 +672,7 @@ describe("devtool runtime tracing", () => {
     expect(observedSubscriberTraces).toEqual(["traceTraitsAction"]);
   });
 
-  it("does not create extra roots for synchronous afterChange subscribers", () => {
+  it("does not create extra roots for synchronous afterChange subscribers", async () => {
     const db = createDB();
     db.afterChange(function* afterChange() {
       yield* selectFrom(tasksTable, "projectState").where((q) =>
@@ -665,7 +690,8 @@ describe("devtool runtime tracing", () => {
 
     syncDispatch(db, mutateTasks({}));
 
-    const traces = hyperDBTraceStore.getSnapshot();
+    await flushTraceCommits();
+    const traces = selectCommittedTraces();
     expect(traces).toHaveLength(1);
     expect(traces[0]?.commandEvents).toHaveLength(1);
     expect(traces[0]?.mutationEvents).toHaveLength(1);

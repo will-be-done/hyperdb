@@ -23,7 +23,7 @@ import {
   endSelectEventSuccess,
   endTraceSuccess,
   hyperDBTraceStore,
-  recordCachedRootTrace,
+  markTraceFrameCached,
   startRootTrace,
 } from "../hyperdb/tracing/store";
 import type { SelectCommandEvent } from "../hyperdb/tracing/store";
@@ -60,6 +60,12 @@ const stubGlobal = (name: string, value: unknown) => {
   });
 };
 
+const flushTraceCommits = async (): Promise<void> => {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 120);
+  });
+};
+
 afterEach(() => {
   for (const restore of restoreGlobalFns.splice(0).reverse()) {
     restore();
@@ -78,13 +84,14 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("Clear");
   });
 
-  it("renders selected trace details in the panel", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("renders selected trace details in the panel", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const context = startRootTrace(
       createTraceFrameMeta("action", "sampleAction", { id: "task-1" }),
     )!;
     endTraceSuccess(context);
-    unsubscribe();
+    await flushTraceCommits();
+    deactivate();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
 
@@ -92,8 +99,8 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("Overview");
   });
 
-  it("renders queried and mutated row totals in the trace list and overview", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("renders queried and mutated row totals in the trace list and overview", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const context = startRootTrace(
       createTraceFrameMeta("selector", "largeSelector", undefined),
     )!;
@@ -109,7 +116,8 @@ describe("HyperDBDevtools", () => {
       { id: "task-3" },
     ]);
     endTraceSuccess(context);
-    unsubscribe();
+    await flushTraceCommits();
+    deactivate();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
 
@@ -121,18 +129,22 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("0 actions");
   });
 
-  it("renders a cached label in the traces list for fully cached traces", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("renders a cached label in the traces list for fully cached traces", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const db = createDB();
-    recordCachedRootTrace(
+    const context = startRootTrace(
       createTraceFrameMeta("selector", "cachedListSelector", {
         projectId: "project-1",
       }),
+      hyperDBTraceStore,
       db,
-    );
-    unsubscribe();
+    )!;
+    markTraceFrameCached(context, context.rootFrame);
+    endTraceSuccess(context);
+    await flushTraceCommits();
+    deactivate();
 
-    const trace = hyperDBTraceStore.getSnapshot()[0]!;
+    const trace = context.trace;
     const html = renderToString(<HyperDBDevtoolsPanel db={db} />);
 
     expect(isFullyCachedTrace(trace)).toBe(true);
@@ -140,8 +152,8 @@ describe("HyperDBDevtools", () => {
     expect(html).toContain("cached");
   });
 
-  it("renders a database selector when traces come from multiple dbs", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("renders a database selector when traces come from multiple dbs", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const firstDB = createDB();
     const secondDB = createDB();
     const firstContext = startRootTrace(
@@ -156,7 +168,8 @@ describe("HyperDBDevtools", () => {
       secondDB,
     )!;
     endTraceSuccess(secondContext);
-    unsubscribe();
+    await flushTraceCommits();
+    deactivate();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
 
@@ -166,8 +179,8 @@ describe("HyperDBDevtools", () => {
     expect(html).not.toContain("secondDBSelector");
   });
 
-  it("keeps the current database option when it has no traces", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("keeps the current database option when it has no traces", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const firstDB = createDB();
     const secondDB = createDB();
     const secondContext = startRootTrace(
@@ -176,7 +189,8 @@ describe("HyperDBDevtools", () => {
       secondDB,
     )!;
     endTraceSuccess(secondContext);
-    unsubscribe();
+    await flushTraceCommits();
+    deactivate();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
 
@@ -186,8 +200,8 @@ describe("HyperDBDevtools", () => {
     expect(html).not.toContain("secondDBSelector");
   });
 
-  it("uses dbName as the database selector label when provided", () => {
-    const unsubscribe = hyperDBTraceStore.subscribe(() => {});
+  it("uses dbName as the database selector label when provided", async () => {
+    const deactivate = hyperDBTraceStore.activate();
     const namedDB = createDB("Local todos");
     const fallbackDB = createDB();
     const namedContext = startRootTrace(
@@ -202,7 +216,8 @@ describe("HyperDBDevtools", () => {
       fallbackDB,
     )!;
     endTraceSuccess(fallbackContext);
-    unsubscribe();
+    await flushTraceCommits();
+    deactivate();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={namedDB} />);
 
