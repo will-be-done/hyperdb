@@ -8,7 +8,6 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
-import { flushTraceCommits } from "../hyperdb/tracing/test-utils";
 import {
   traceStoreTraceSelection,
   traceStoreTraces,
@@ -181,7 +180,7 @@ describe("devtool trace selectors", () => {
       ),
     ).toEqual([]);
 
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
 
     const traces = select(
       hyperDBTraceStore.getDB(),

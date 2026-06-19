@@ -18,7 +18,6 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "../../tracing/store";
-import { flushTraceCommits } from "../../tracing/test-utils";
 
 type Task = {
   type: "task";
@@ -637,7 +636,7 @@ describe("selector", () => {
       initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
 
       expect(runCount).toBe(1);
-      await flushTraceCommits();
+      hyperDBTraceStore.flushTraceCommits();
       const trace = selectCommittedTraces()[0]!;
       expect(trace.name).toBe("cachedTraceSelector");
       expect(trace.commandEvents).toHaveLength(0);
@@ -687,7 +686,7 @@ describe("selector", () => {
       );
 
       expect(runCount).toBe(1);
-      await flushTraceCommits();
+      hyperDBTraceStore.flushTraceCommits();
       const trace = selectCommittedTraces()[0]!;
       expect(trace.name).toBe("rangeMissTraceSelector");
       expect(trace.commandEvents).toHaveLength(0);
@@ -1280,7 +1279,7 @@ describe("selector", () => {
         testDb.insert(itemsTable, [{ id: "a1", group: "a", orderToken: "a" }]),
       );
 
-      await flushTraceCommits();
+      hyperDBTraceStore.flushTraceCommits();
       const trace = selectCommittedTraces()[0]!;
       const findFrame = (
         frame: TraceFrame,

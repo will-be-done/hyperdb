@@ -32,7 +32,6 @@ import type {
   RootTrace,
   TraceFrame,
 } from "../hyperdb/tracing/store";
-import { flushTraceCommits } from "../hyperdb/tracing/test-utils";
 
 const createDB = (dbName?: string): SubscribableDB => {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver(), { dbName }));
@@ -98,7 +97,7 @@ describe("HyperDBDevtools", () => {
       createTraceFrameMeta("action", "sampleAction", { id: "task-1" }),
     )!;
     endTraceSuccess(context);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
@@ -124,7 +123,7 @@ describe("HyperDBDevtools", () => {
       { id: "task-3" },
     ]);
     endTraceSuccess(context);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
@@ -149,7 +148,7 @@ describe("HyperDBDevtools", () => {
     )!;
     markTraceFrameCached(context, context.rootFrame);
     endTraceSuccess(context);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const trace = context.trace;
@@ -176,7 +175,7 @@ describe("HyperDBDevtools", () => {
       secondDB,
     )!;
     endTraceSuccess(secondContext);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
@@ -197,7 +196,7 @@ describe("HyperDBDevtools", () => {
       secondDB,
     )!;
     endTraceSuccess(secondContext);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={firstDB} />);
@@ -224,7 +223,7 @@ describe("HyperDBDevtools", () => {
       fallbackDB,
     )!;
     endTraceSuccess(fallbackContext);
-    await flushTraceCommits();
+    hyperDBTraceStore.flushTraceCommits();
     deactivateActivatedTraceStore();
 
     const html = renderToString(<HyperDBDevtoolsPanel db={namedDB} />);
