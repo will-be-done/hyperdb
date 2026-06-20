@@ -62,10 +62,10 @@ So you get MobX-style granularity (with one honest caveat: tracking is at the
 range/row level, not per individual field), **without MobX's downside**. MobX
 relies on mutable, observable objects and asks you to wrap components in
 `observer()` — which I have always felt is a hack against React's grain. HyperDB
-never hands out mutable data: every row that goes into the store is
-[deeply frozen](/runtime/db/), so what your components receive is plain immutable
-data. That means it composes with React's rendering model directly — no
-`observer()`, no proxies leaking into your view layer.
+never hands out proxies: every row it gives back is plain, immutable data —
+frozen by the in-memory driver, and [deep-frozen end to end](/runtime/db/) when
+you opt in with `freezeRows`. That means it composes with React's rendering
+model directly — no `observer()`, no proxies leaking into your view layer.
 
 
 ## The backend problem
@@ -114,6 +114,59 @@ the event loop.
 You keep the async path for what genuinely needs it (persistence, IndexedDB,
 server SQLite), but the interactive hot path — the in-memory tier that the UI
 reads and writes — stays fully synchronous and responsive.
+
+That same generator flexibility opens up a middle ground. A **hybrid** mode is in
+development: instead of loading everything into memory up front, a read checks the
+in-memory tier first and, on a miss, runs the *same* query against IndexedDB and
+caches the rows back into memory. Because a selector is just a description, it
+runs unchanged either way — you trade synchronous reads for async ones, but
+startup is near-instant and memory stays low, since data is pulled in lazily, on
+demand. Writes still commit instantly for anything already cached. It's the same
+selectors and actions, executed against two tiers instead of one.
+
+## Why not just run SQLite in the browser?
+
+If the same selectors and actions already run on server SQLite, the natural
+question is why not run SQLite in the browser too — ship one SQL dialect to both
+ends, the way [PowerSync](https://www.powersync.com/) and similar tools do. I
+went the other way: on the frontend HyperDB persists to **IndexedDB** instead.
+Here's the reasoning.
+
+**SQLite in the browser is heavy.** A browser has no native SQLite, so you ship a
+WebAssembly build — a binary the user downloads and instantiates before the app
+can read a single row. Then every read and write crosses the JS↔WASM boundary,
+encoding and decoding strings each way. And because HyperDB is schemaless at the
+storage layer — rows are documents, not columns under a fixed SQL schema — values
+are stored as JSON, so each row also pays `JSON.stringify` on the way in and
+`JSON.parse` on the way out. Individually tiny; in aggregate, on a hot path,
+brutal.
+
+**IndexedDB is already the right shape.** It's a native, document-oriented store
+with indexes — exactly what HyperDB wants — with no WASM to ship and no OPFS or
+IndexedDB-VFS layer to route SQLite through. It also starts fast, which is what a
+local-first app needs to feel instant on load. Its raw API is famously awkward,
+but you never see it: the [IndexedDB driver](/runtime/drivers/#indexeddb) hides
+it entirely behind the same schema, selectors, and actions you use everywhere
+else. You genuinely won't know you're on IndexedDB.
+
+**The setup I'd reach for.** Run two HyperDB stores in the browser — an
+[in-memory](/runtime/drivers/#in-memory) one the UI reads and writes
+synchronously, and an IndexedDB one for durability. Load everything from
+IndexedDB into memory on startup, then let every action run instantly against the
+in-memory store while a [`SubscribableDB`](/runtime/db/) hook replicates each
+insert, upsert, and delete into the IndexedDB store in the background. Selectors
+and actions stay synchronous and instant, and the data is still persistent. The
+[In-Memory + Persistence guide](/guides/in-memory-persistence/) builds exactly
+this, step by step.
+
+**And SQLite couldn't match the reactivity anyway.** Even setting the bundle and
+serialization costs aside, a SQL query carries no record of *which ranges it
+read*. When any row in a table changes, you have no cheap way to know which
+subscribed queries it could have touched — so you re-run all of them. That's the
+[notification problem](#the-notification-problem) all over again. HyperDB tracks
+the exact index ranges each selector scanned, so a write wakes only the selectors
+that overlap it. The in-memory HyperDB tier gives you fine-grained reactivity
+that a SQLite-in-the-browser layer fundamentally can't.
 
 ## Every query is observable
 

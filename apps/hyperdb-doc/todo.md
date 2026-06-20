@@ -7,5 +7,12 @@ TODO:
 1. Create @hyperdb/sync
 1. Remove SyncDB from doc
 1. Mention tanstack-query, ...
-1. Generate icon
+1. Generate icon, favicon
 1. Check all links
+1. Update "start here" links
+1. Ask make beaturfil deign using frontend design skill
+1. Maybe rmeove "$" restriction?
+1. Add quick guide to past to llm
+1. Create new repo and setup release flow
+1. Beatiful design
+1. Release and record codesandbox video

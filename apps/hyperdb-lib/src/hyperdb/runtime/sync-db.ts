@@ -9,6 +9,7 @@ import type {
   TableDefinition,
 } from "../schema/table";
 
+// NOTE: used only for testing
 export class SyncDBTx {
   private dbTx: HyperDBTx;
   constructor(dbTx: HyperDBTx) {
@@ -59,6 +60,7 @@ export class SyncDBTx {
   }
 }
 
+// NOTE: used only for testing
 export class SyncDB {
   private db: HyperDB;
 

@@ -9,6 +9,13 @@ The React integration lives at `@will-be-done/hyperdb-lib/react`. It provides a
 context provider plus hooks for reactive reads, dispatching actions, and one-off
 reads. React 19 is a peer dependency.
 
+Unlike MobX, HyperDB hands your components **plain, immutable rows** — frozen
+data, never proxies — so there is **no `observer()` wrapper** to remember and
+nothing leaking into your view layer. The hooks subscribe through HyperDB's
+[range-tracked selector cache](/database/selectors-reactivity/), so a component
+re-renders only when a mutation touches a range its selector actually scanned —
+fine-grained updates that compose with React's rendering model directly.
+
 ## Providing the database
 
 Wrap your tree in `DBProvider` and pass a [`SubscribableDB`](/runtime/db/) as its

@@ -26,10 +26,18 @@ anywhere TypeScript runs — client or server.
   are all checked by TypeScript.
 - **Indexed queries** — a fluent, type-safe query builder (`selectFrom`) reads
   through B-tree and hash indexes with equality, range bounds, ordering, and
-  limits.
+  limits. Every table is backed by a real B+tree, so inserting into a sorted
+  collection stays `O(log n)` instead of the `O(n)` you pay rebuilding or
+  shifting an array.
 - **Selectors & actions** — reads and writes are expressed as generator
   functions that *describe* what to do. The runtime executes them, which makes
-  the same code work synchronously or asynchronously.
+  the same code work synchronously or asynchronously. Against the in-memory
+  driver it runs **fully synchronously** — a dispatch updates the store and the
+  UI in the same tick, with no `await` in the hot path.
+- **Just JavaScript** — selectors and actions are ordinary JS: loops,
+  conditionals, function calls. HyperDB gives you fast indexed lookups and
+  inserts underneath, not a query language to learn — the same mental model on
+  the client and the server.
 - **Reactivity** — selectors are cached and subscribed. A selector only re-runs
   when a mutation touches a range it actually read.
 - **Pluggable storage** — the same selectors and actions run unchanged against
@@ -50,11 +58,15 @@ one data layer shared across your whole stack:
   and a **server** that runs the very same schema and sync logic.
 - Apps with rich data models (tasks, documents, boards) that need indexed lookups
   and ordering on both client and server.
+- **Large sorted collections** — lists you reorder or insert into with
+  fractional indexing, where a plain Redux/MobX array degrades to `O(n)` and a
+  B-tree stays `O(log n)`.
 - Anywhere you'd otherwise duplicate models and queries between frontend and
   backend, or hand-roll in-memory indexes and manual invalidation.
 
-HyperDB gives you the storage, query, and reactivity primitives, not a network
-layer. Synchronization between peers (clients *and* servers) is something you
+On the server, the persistent store is SQLite today (MongoDB and PostgreSQL are
+not supported yet). HyperDB gives you the storage, query, and reactivity
+primitives, not a network layer. Synchronization between peers (clients *and* servers) is something you
 build on top with the built-in primitives — the
 [Building a Sync Engine](/guides/sync-engine/) guide shows exactly how, with the
 same change-tracking code running on the browser and a Bun/SQLite server.

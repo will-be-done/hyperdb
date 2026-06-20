@@ -2,7 +2,7 @@
 title: Building a Sync Engine
 description: A worked example — change tracking, CRDT-style merge, and a two-tier persistent setup built on HyperDB primitives.
 sidebar:
-  order: 1
+  order: 2
 ---
 
 HyperDB has no built-in network layer, but it gives you exactly the primitives a
@@ -164,7 +164,10 @@ ids per `where` array) — a good habit for any bulk read/write.
 For responsiveness, the UI reads and writes an **in-memory** database, while a
 **persistent** database (IndexedDB or async SQLite) provides durability. On
 startup the in-memory tier is hydrated from the persistent one; afterwards writes
-flow back out asynchronously.
+flow back out asynchronously. The
+[In-Memory + Persistence guide](/guides/in-memory-persistence/) builds this
+two-tier setup on its own, without the sync machinery — start there if you only
+need durable local storage; the change tracking below layers on top of it.
 
 This is what wiring it all together looks like (condensed from a real app):
 

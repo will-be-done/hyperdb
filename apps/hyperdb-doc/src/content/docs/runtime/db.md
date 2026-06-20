@@ -1,6 +1,6 @@
 ---
 title: The DB Runtime
-description: DB, SubscribableDB, and SyncDB — runtime options, transactions, lifecycle hooks, and traits.
+description: DB, SubscribableDB — runtime options, transactions, lifecycle hooks, and traits.
 sidebar:
   order: 1
 ---
@@ -95,24 +95,6 @@ Because hooks run **within** the transaction, anything they write commits
 atomically with the change that triggered them — and a throw rolls the whole
 thing back.
 
-## `SyncDB`
-
-`SyncDB` is a thin **synchronous** wrapper that exposes direct,
-non-generator methods (`insert`, `upsert`, `delete`, `intervalScan`, `beginTx`).
-It's convenient for imperative code paths against a synchronous driver, where you
-don't want to thread generators through `execSync`.
-
-```ts
-import { SyncDB } from "@will-be-done/hyperdb-lib";
-
-const sdb = new SyncDB(baseDb);
-sdb.loadTables([tasksTable]);
-sdb.insert(tasksTable, [{ id: "t1", /* ... */ }]);
-const rows = sdb.intervalScan(tasksTable, "byId", [{ eq: [{ col: "id", val: "t1" }] }]);
-```
-
-For most application code you'll prefer selectors/actions over `SyncDB`'s raw
-methods, because those give you tracing and reactivity.
 
 ## Executing commands
 

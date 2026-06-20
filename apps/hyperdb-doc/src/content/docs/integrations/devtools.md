@@ -9,6 +9,8 @@ HyperDB can record a **trace** of every selector run and mutation, and ships an
 in-app devtool to browse them. Tracing is what powers the devtool, but you can
 also configure it independently.
 
+![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
+
 ## The devtool panel
 
 The devtool is exported from `@will-be-done/hyperdb-lib/devtool`. Render

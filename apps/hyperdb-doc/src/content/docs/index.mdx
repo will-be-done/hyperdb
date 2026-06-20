@@ -3,7 +3,7 @@ title: HyperDB
 description: A local-first, reactive database for TypeScript — typed schemas, indexed queries, generator-based selectors and actions, and pluggable storage drivers.
 template: splash
 hero:
-  tagline: A universal, reactive database for TypeScript. Write typed schemas, indexed queries, and generator-based selectors & actions once — and run the same code on the frontend and the backend.
+  tagline: A universal, reactive database for local-first apps. Write typed schemas, indexed queries, and selectors & actions once — and run the same code on the frontend and the backend.
   actions:
     - text: Get started
       link: /start/introduction/
@@ -26,31 +26,57 @@ transactional actions — without writing SQL and without thinking about the
 storage engine underneath. The same slice of schema, selectors, and actions runs
 unchanged on the client and the backend; only the storage driver differs.
 
+It's built for speed: every table is backed by a real B-tree, so inserting into a
+sorted collection stays `O(log n)` instead of degrading the way a Redux or MobX
+array does — and on the frontend, against the in-memory driver, selectors and
+actions run **synchronously**, so a click updates the store and the UI in the
+same tick. [Why HyperDB?](/start/why/) tells the full story.
+
+## Top Features
+
 <CardGrid stagger>
 	<Card title="Typed schemas" icon="seti:typescript">
 		Define tables and validators with `defineTable` and `v`. Rows, queries, and
 		index columns are fully type-checked end to end.
 	</Card>
 	<Card title="Indexed queries" icon="magnifier">
-		Query through B-tree and hash indexes with a fluent, type-safe builder
+		Query through B-tree and hash indexes with a fluent, type-safe builder. Every
+		table is a real B+tree, so sorted inserts and range scans stay `O(log n)` —
+		ideal for local-first fractional ordering, where reordering an item touches
+		a single token instead of rebuilding the list.
 	</Card>
 	<Card title="Reactive by default" icon="random">
 		Selectors are cached and subscribed. They re-run only when a mutation
 		touches a range they actually scanned.
 	</Card>
+	<Card title="Instant on the frontend" icon="rocket">
+		Against the in-memory driver, selectors and actions execute synchronously —
+		no `await`, no microtask hop — so reads and writes land in the same tick.
+	</Card>
 	<Card title="Runs everywhere" icon="laptop">
 		The same schema, selectors, and actions run in the browser (in-memory,
-		IndexedDB, WebAssembly SQLite) and on the server (native SQLite). Swap the
-		driver, keep the logic.
+		IndexedDB, WebAssembly SQLite) and on the server (native SQLite). On the
+		backend the runtime reads only the rows a selector touches — it never
+		loads the whole dataset into memory.
 	</Card>
-	<Card title="React & devtools" icon="rocket">
+	<Card title="Just JavaScript, no SQL" icon="seti:javascript">
+		Write selectors and actions as ordinary JS — loops, conditionals, function
+		calls — on both client and server. HyperDB gives you fast indexed lookups
+		underneath, not a query language to learn.
+	</Card>
+	<Card title="Plain immutable data" icon="approve-check">
+		Components get plain, frozen rows — no proxies and no `observer()` wrapper,
+		so it composes with React's rendering model directly.
+	</Card>
+	<Card title="React & devtools" icon="list-format">
 		First-class React hooks plus an in-app devtool that traces every selector
-		and mutation.
+		and mutation into a call tree.
 	</Card>
 </CardGrid>
 
 ## Start here
 
 <LinkCard title="Introduction" href="/start/introduction/" description="What HyperDB is and when to reach for it." />
+<LinkCard title="Why HyperDB?" href="/start/how-it-works/" description="Why HyperDB is built." />
 <LinkCard title="How HyperDB Works" href="/start/how-it-works/" description="The three layers: tables, commands, and the DB runtime." />
 <LinkCard title="Quickstart" href="/start/quickstart/" description="Define a table, run a query, and wire it into React." />
