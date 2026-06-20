@@ -203,24 +203,19 @@ import {
   DB,
   BptreeInmemDriver,
   execAsync,
-  initSqlJsWasm,
   openIndexedDBDriver,
 } from "@will-be-done/hyperdb-lib";
 
 const memoryDb = new DB(new BptreeInmemDriver());
-
-const sqliteDriver = await initSqlJsWasm();
-const sqliteDb = new DB(sqliteDriver);
 
 const idbDriver = await openIndexedDBDriver("my-app-db");
 const idbDb = new DB(idbDriver);
 await execAsync(idbDb.loadTables([tasksTable]));
 ```
 
-SQLite helpers currently live next to the drivers:
-`src/hyperdb/drivers/sqlite/init-sql-js-wasm.ts` returns a `SqlDriver` backed by
-`sql.js`, and `src/hyperdb/drivers/sqlite/init-wa-sqlite.ts` returns an
-`AsyncSqlDriver` backed by `wa-sqlite`.
+SQLite drivers are adapter-based. Create the SQLite database with your runtime
+or package of choice, then pass a tiny `exec`/`prepare(...).values()` adapter to
+`SqlDriver`, or the async stepping adapter to `AsyncSqlDriver`.
 
 Use `execAsync`/`asyncDispatch` with IndexedDB and async SQLite. The in-memory
 driver and synchronous SQLite driver can also be used through `SyncDB`,

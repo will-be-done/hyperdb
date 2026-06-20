@@ -93,7 +93,6 @@ The package ships several entry points:
 | `@will-be-done/hyperdb-lib/tracing` | Tracing store and tracer configuration |
 | `@will-be-done/hyperdb-lib/drivers/inmemory` | `BptreeInmemDriver` |
 | `@will-be-done/hyperdb-lib/drivers/sqlite` | `SqlDriver`, `AsyncSqlDriver` |
-| `@will-be-done/hyperdb-lib/drivers/sqlite/wasm` | `initSqlJsWasm`, `initWasmIDBAsync` |
 | `@will-be-done/hyperdb-lib/drivers/idb` | `openIndexedDBDriver`, `IdbDriver` |
 
 ## Next steps

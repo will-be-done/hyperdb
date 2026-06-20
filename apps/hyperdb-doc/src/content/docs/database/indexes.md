@@ -84,12 +84,6 @@ for:
 - **A column that isn't in the index** (`Column 'X' not found in index`).
 - **No usable conditions** at all.
 
-### Effective equality
-
-A column constrained by both `gte` and `lte` with the **same value** is treated
-as an equality for prefix purposes. So `q.gte("projectId", "p1").lte("projectId",
-"p1").gte("orderToken", "m")` is a valid equality-prefix-plus-range query.
-
 ## Ordering with indexes
 
 Because a B-tree index is physically ordered, `order("asc")` returns rows in the
@@ -98,12 +92,3 @@ step. Choose your index column order to match how you want to read the data. For
 the `byProjectOrder` index, tasks come back ordered by `orderToken` within a
 project for free.
 
-## Designing indexes
-
-- Put the columns you filter by **equality** first, and the column you **range or
-  order** by last.
-- A single composite index often serves several queries — a query that constrains
-  only `projectId` and a query that constrains `projectId` + an `orderToken`
-  range can share `byProjectOrder`.
-- Use `string` order tokens (e.g. fractional-index strings) when you need stable,
-  insertable ordering without renumbering siblings.

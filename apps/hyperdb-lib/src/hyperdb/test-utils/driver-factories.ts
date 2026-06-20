@@ -2,7 +2,7 @@ import { afterEach } from "vitest";
 import type { DBDriver } from "../core/driver";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { IdbDriver, openIndexedDBDriver } from "../drivers/idb/idb-driver";
-import { initSqlJsWasm } from "../drivers/sqlite/init-sql-js-wasm";
+import { createSqlJsDriver } from "./sql-js-driver";
 
 export type DriverFactory = [string, () => Promise<DBDriver>];
 
@@ -47,7 +47,7 @@ export function createDriverFactories(options?: {
   const factories: DriverFactory[] = [];
 
   if (options?.includeSql !== false) {
-    factories.push(["SqlDriver", () => initSqlJsWasm()]);
+    factories.push(["SqlDriver", () => createSqlJsDriver()]);
   }
 
   factories.push(["BptreeInmemDriver", async () => new BptreeInmemDriver()]);
