@@ -67,6 +67,7 @@ never hands out mutable data: every row that goes into the store is
 data. That means it composes with React's rendering model directly — no
 `observer()`, no proxies leaking into your view layer.
 
+
 ## The backend problem
 
 This is the reason I actually started building HyperDB.
@@ -92,6 +93,48 @@ never loads the whole dataset into memory. You write your data logic once and ru
 it on both ends of the wire. The [Sync Engine guide](/guides/sync-engine/) shows a
 server doing exactly this, sharing its change-tracking code with every client.
 
+## Synchronous on the frontend
+
+On the frontend, against the [in-memory driver](/runtime/drivers/#in-memory),
+selectors and actions execute **synchronously** — start to finish, with no
+`await` in the middle. This is the whole reason HyperDB is built on
+[generators](/start/how-it-works/): a generator can describe code that runs either
+synchronously or asynchronously, so the *same* selector or action works against a
+sync in-memory driver and against an async driver like IndexedDB without being
+rewritten.
+
+When the driver is synchronous, the runtime never yields back to the event loop in
+the middle of a read or a write. There's no microtask hop, no promise to schedule,
+no frame where the work is half-done. A dispatch runs to completion and the result
+is available immediately, so a click can update the store and the UI in the same
+tick. That is what makes the frontend feel instant — sync code simply executes far
+faster than the same code broken up by `await`, because nothing pauses to wait for
+the event loop.
+
+You keep the async path for what genuinely needs it (persistence, IndexedDB,
+server SQLite), but the interactive hot path — the in-memory tier that the UI
+reads and writes — stays fully synchronous and responsive.
+
+## Every query is observable
+
+Because reads go through declarative queries rather than ad-hoc property access,
+HyperDB knows exactly what each selector and action did: which indexes were
+scanned, how many rows came back, and how long each step took. It surfaces all of
+that in a built-in [devtool](/integrations/devtools/).
+
+![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
+
+Every dispatch and selector run becomes a **trace** you can sort by duration. Open
+one and you get a full **call tree**: the selector at the top, every nested
+selector it composed, and at the leaves the actual index reads —
+`select project_categories.byProjectIdOrderToken → 3 rows` — each annotated with
+its own timing and row count. When a view is slow, you can see precisely which
+sub-query or which index is responsible, instead of guessing.
+
+This kind of insight is only possible *because* data is read by queries. A state
+library where components reach into plain objects has nothing to trace; HyperDB's
+declarative reads give it a complete, structured picture of every computation.
+
 ## It's still just JavaScript
 
 A fair worry about "use a database on the backend" is that it means writing SQL
@@ -108,10 +151,10 @@ HyperDB exists because local-first apps need:
 | Need | Redux | MobX | HyperDB |
 | --- | --- | --- | --- |
 | Cheap inserts into sorted data | `O(n)` (new array) | `O(n)` (array shift) | `O(log n)` (B-tree) |
-| Update only affected views | `O(selectors)` per dispatch | Fine-grained | Fine-grained (range-tracked) |
-| Works with React without hacks | Yes | Needs `observer()` | Yes (immutable data) |
-| Runs the same code on the backend | No | No | Yes (SQLite today) |
-| No SQL to learn | — | — | Plain JS logic |
+| Update only affected selectors | `O(selectors)` per dispatch | Fine-grained | Fine-grained (range-tracked) |
+| Works with React without hacks | Yes | Needs `observer()` | Yes |
+| Runs the same code on the backend | No | No | Yes (only SQLite for now) |
+| Per-action/selector + query tracing & call tree | — | — | Built-in devtool |
 
 If those rows describe problems you have, the rest of these docs show how HyperDB
 solves them. Start with [How HyperDB Works](/start/how-it-works/).
