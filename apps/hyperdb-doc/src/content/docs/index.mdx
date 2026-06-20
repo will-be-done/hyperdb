@@ -1,40 +1,56 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: HyperDB
+description: A local-first, reactive database for TypeScript — typed schemas, indexed queries, generator-based selectors and actions, and pluggable storage drivers.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
-  image:
-    file: ../../assets/houston.webp
+  tagline: A universal, reactive database for TypeScript. Write typed schemas, indexed queries, and generator-based selectors & actions once — and run the same code on the frontend and the backend.
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Get started
+      link: /start/introduction/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
-      icon: external
+    - text: Quickstart
+      link: /start/quickstart/
+      icon: rocket
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-## Next steps
+## Why HyperDB
+
+HyperDB brings the developer experience of a backend like
+[Convex](https://www.convex.dev/) to a database that runs **everywhere your
+TypeScript runs** — the browser *and* the server. You describe your data with
+typed schemas, read it through reactive selectors, and change it through
+transactional actions — without writing SQL and without thinking about the
+storage engine underneath. The same slice of schema, selectors, and actions runs
+unchanged on the client and the backend; only the storage driver differs.
 
 <CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
+	<Card title="Typed schemas" icon="seti:typescript">
+		Define tables and validators with `defineTable` and `v`. Rows, queries, and
+		index columns are fully type-checked end to end.
 	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
+	<Card title="Indexed queries" icon="magnifier">
+		Query through B-tree and hash indexes with a fluent, type-safe builder
 	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
+	<Card title="Reactive by default" icon="random">
+		Selectors are cached and subscribed. They re-run only when a mutation
+		touches a range they actually scanned.
 	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
+	<Card title="Runs everywhere" icon="laptop">
+		The same schema, selectors, and actions run in the browser (in-memory,
+		IndexedDB, WebAssembly SQLite) and on the server (native SQLite). Swap the
+		driver, keep the logic.
 	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
+	<Card title="React & devtools" icon="rocket">
+		First-class React hooks plus an in-app devtool that traces every selector
+		and mutation.
 	</Card>
 </CardGrid>
+
+## Start here
+
+<LinkCard title="Introduction" href="/start/introduction/" description="What HyperDB is and when to reach for it." />
+<LinkCard title="How HyperDB Works" href="/start/how-it-works/" description="The three layers: tables, commands, and the DB runtime." />
+<LinkCard title="Quickstart" href="/start/quickstart/" description="Define a table, run a query, and wire it into React." />
