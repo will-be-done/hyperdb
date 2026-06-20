@@ -6,7 +6,7 @@ TODO:
 1. Name package is @hyperdb/hyperdb
 1. Create @hyperdb/sync
 1. Remove SyncDB from doc
-1. Mention tanstack/db, ...
+1. Mention tanstack/db, ....
 1. Generate icon, favicon
 1. Check all links
 1. Update "start here" links
