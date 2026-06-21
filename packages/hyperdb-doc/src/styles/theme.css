@@ -1,0 +1,203 @@
+/* ===========================================================================
+   HyperDB — custom Starlight theme
+   Single solid brand color (violet). No gradients.
+   ========================================================================= */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
+:root {
+  /* One solid brand color used for buttons, logo, and accents */
+  --hd-accent: #6d5efc;
+  --hd-accent-hover: #5b4fe0;
+
+  --sl-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+/* ----- Accent ramp: dark theme (default) -------------------------------- */
+:root {
+  --sl-color-accent-low: #26224f;
+  --sl-color-accent: #6d5efc;
+  --sl-color-accent-high: #d6d1ff;
+  --sl-color-text-accent: #b3a9ff;
+
+  --sl-color-bg: #0c0d16;
+  --sl-color-bg-nav: #0c0d16;
+  --sl-color-bg-sidebar: #0c0d16;
+  --sl-color-hairline-shade: rgba(255, 255, 255, 0.08);
+}
+
+/* ----- Accent ramp: light theme ----------------------------------------- */
+:root[data-theme="light"] {
+  --sl-color-accent-low: #e7e4ff;
+  --sl-color-accent: #5b4fe0;
+  --sl-color-accent-high: #2a2070;
+  --sl-color-text-accent: #5b4fe0;
+
+  --sl-color-bg: #fbfaff;
+  --sl-color-bg-nav: #fbfaff;
+  --sl-color-bg-sidebar: #fbfaff;
+  --sl-color-hairline-shade: rgba(0, 0, 0, 0.08);
+}
+
+/* Header hairline */
+.header {
+  border-bottom: 1px solid var(--sl-color-hairline-shade);
+}
+
+/* Remove the vertical sidebar divider hairlines (left nav + right TOC).
+   Parent-scoped selectors beat Starlight's :where()-scoped defaults. */
+.page .sidebar-pane {
+  border-inline-end: none;
+}
+
+.right-sidebar-container .right-sidebar {
+  border-inline-start: none;
+}
+
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* ===========================================================================
+   Splash / hero
+   ========================================================================= */
+
+.hero h1 {
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  color: var(--sl-color-text-accent);
+}
+
+.hero .tagline {
+  max-width: 52ch;
+  font-size: clamp(1.05rem, 2.2vw, 1.25rem);
+  line-height: 1.55;
+  color: var(--sl-color-gray-2);
+}
+
+/* Action buttons — both variants share padding & shape so they line up */
+.hero .actions a.sl-link-button {
+  padding: 0.7rem 1.4rem;
+  border-radius: 10px;
+  font-weight: 600;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.hero .actions a.sl-link-button.primary {
+  background: var(--hd-accent);
+  border: 1px solid var(--hd-accent);
+  color: #ffffff;
+}
+
+.hero .actions a.sl-link-button.primary:hover {
+  background: var(--hd-accent-hover);
+  border-color: var(--hd-accent-hover);
+  color: #ffffff;
+}
+
+.hero .actions a.sl-link-button.minimal {
+  border: 1px solid var(--sl-color-gray-5);
+  color: var(--sl-color-white);
+  background: transparent;
+}
+
+.hero .actions a.sl-link-button.minimal:hover {
+  border-color: var(--hd-accent);
+  color: var(--sl-color-white);
+  background: transparent;
+}
+
+/* Make sure the icon inside buttons follows the text color */
+.hero .actions a.sl-link-button svg {
+  color: currentColor;
+}
+
+/* ===========================================================================
+   Cards (feature grid on the splash page)
+   ========================================================================= */
+
+.card {
+  border: 1px solid var(--sl-color-hairline-shade);
+  border-radius: 12px;
+  background: var(--sl-color-black);
+  transition: border-color 0.15s ease;
+}
+
+:root[data-theme="light"] .card {
+  background: var(--sl-color-gray-7);
+}
+
+.card:hover {
+  border-color: var(--hd-accent);
+}
+
+/* .card .icon { */
+/*   border-radius: 8px; */
+/*   padding: 0.4rem; */
+/*   color: var(--hd-accent); */
+/*   background: var(--sl-color-accent-low); */
+/* } */
+
+:root[data-theme="light"] .card .icon {
+  color: var(--sl-color-accent);
+}
+
+.card .title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Link cards in the "Start here" section */
+.sl-link-card {
+  border-radius: 10px;
+  border: 1px solid var(--sl-color-hairline-shade);
+  transition: border-color 0.15s ease;
+}
+
+.sl-link-card:hover {
+  border-color: var(--hd-accent);
+}
+
+/* ===========================================================================
+   Content polish
+   ========================================================================= */
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+h1,
+h2 {
+  letter-spacing: -0.02em;
+}
+
+/* Inline code: subtle tint, readable */
+.sl-markdown-content
+  :not(pre):not(a)
+  > code:not([class*="language-"]):not(:where(.not-content *)) {
+  background: var(--sl-color-gray-6);
+  border: 1px solid var(--sl-color-hairline-shade);
+  border-radius: 6px;
+  color: var(--sl-color-text-accent);
+}
+
+/* Active sidebar item: high contrast */
+.sidebar-content a[aria-current="page"] {
+  color: var(--sl-color-white);
+  background: var(--sl-color-accent-low);
+  font-weight: 600;
+  border-radius: 6px;
+}
+
+:root[data-theme="light"] .sidebar-content a[aria-current="page"] {
+  color: var(--sl-color-accent-high);
+}
+
+::selection {
+  background: var(--sl-color-accent-low);
+}

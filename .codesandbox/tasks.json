@@ -3,13 +3,13 @@
   "setupTasks": [
     {
       "name": "Install Dependencies",
-      "command": "npx pnpm@11.8.0 install --frozen-lockfile"
+      "command": "pnpm install --frozen-lockfile"
     }
   ],
   "tasks": {
     "demo": {
       "name": "HyperDB Demo",
-      "command": "npx pnpm@11.8.0 --filter '@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
+      "command": "pnpm --filter '@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
       "runAtStart": true,
       "preview": {
         "port": 5173,

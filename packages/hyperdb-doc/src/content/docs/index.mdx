@@ -3,7 +3,7 @@ title: HyperDB
 description: A local-first, reactive database for TypeScript — typed schemas, indexed queries, generator-based selectors and actions, and pluggable storage drivers.
 template: splash
 hero:
-  tagline: A universal, reactive database for local-first apps. Write typed schemas, indexed queries, and selectors & actions once — and run the same code on the frontend and the backend.
+  tagline: The reactive, local-first database for TypeScript. Write your schema, queries, selectors, and actions once — and run the exact same code in the browser and on the server.
   actions:
     - text: Get started
       link: /start/introduction/
@@ -31,6 +31,38 @@ sorted collection stays `O(log n)` instead of degrading the way a Redux or MobX
 array does — and on the frontend, against the in-memory driver, selectors and
 actions run **synchronously**, so a click updates the store and the UI in the
 same tick. [Why HyperDB?](/start/why/) tells the full story.
+
+## See it
+
+Define a table, describe a query as a plain generator, and read it reactively in
+React — no SQL, no `await` on the in-memory driver:
+
+```ts
+// One schema, fully typed end to end.
+export const tasksTable = defineTable("tasks", {
+  id: v.string(),
+  projectId: v.string(),
+  title: v.string(),
+  orderToken: v.string(),
+}).index("byProjectOrder", ["projectId", "orderToken"]);
+
+// A selector is just JavaScript over a real B+tree index.
+export const projectTasks = selector({
+  name: "projectTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectOrder")
+      .where((q) => q.eq("projectId", projectId))
+      .order("asc");
+  },
+});
+
+// The component re-renders only when a mutation touches what it read.
+function TaskList({ projectId }: { projectId: string }) {
+  const tasks = useSyncSelector(projectTasks, { projectId });
+  return <ul>{tasks.map((t) => <li key={t.id}>{t.title}</li>)}</ul>;
+}
+```
 
 ## Top Features
 

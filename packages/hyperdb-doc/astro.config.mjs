@@ -10,6 +10,11 @@ export default defineConfig({
       title: "HyperDB",
       description:
         "A local-first, reactive database for TypeScript with typed schemas, indexed queries, generator-based selectors/actions, and pluggable storage drivers.",
+      logo: {
+        src: "./src/assets/logo.svg",
+        alt: "HyperDB",
+      },
+      customCss: ["./src/styles/theme.css"],
       social: [
         {
           icon: "github",

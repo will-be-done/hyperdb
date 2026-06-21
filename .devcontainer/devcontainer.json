@@ -1,0 +1,15 @@
+{
+  "name": "hyperdb",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "postCreateCommand": "pnpm install --frozen-lockfile",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": {
+      "label": "HyperDB Demo",
+      "onAutoForward": "openPreview"
+    }
+  }
+}

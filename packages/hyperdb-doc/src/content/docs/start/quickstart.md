@@ -14,6 +14,8 @@ action, a database, and a React component.
 npm install @will-be-done/hyperdb
 # React integration (optional)
 npm install react react-dom
+# Devtool (optional)
+npm install @will-be-done/hyperdb-devtool
 ```
 
 ## 2. Define a table
@@ -123,6 +125,7 @@ import {
   useSyncSelector,
   useDispatch,
 } from "@will-be-done/hyperdb/react";
+import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
 import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
@@ -162,6 +165,7 @@ export function App() {
   return (
     <DBProvider value={db}>
       <Tasks projectId="p1" />
+      <HyperDBDevtools db={db} initialIsOpen={false} />
     </DBProvider>
   );
 }
