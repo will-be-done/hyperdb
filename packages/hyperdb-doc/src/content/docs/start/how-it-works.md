@@ -1,6 +1,6 @@
 ---
 title: How HyperDB Works
-description: The three layers of HyperDB: tables, generator commands, and the DB runtime.
+description: "The three layers of HyperDB: tables, generator commands, and the DB runtime."
 sidebar:
   order: 3
 ---
