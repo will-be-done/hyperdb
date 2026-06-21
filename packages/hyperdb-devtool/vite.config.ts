@@ -40,6 +40,30 @@ export default defineConfig({
     : [],
   test: {
     name: "browser",
+    alias: [
+      {
+        find: "@will-be-done/hyperdb/drivers/inmemory",
+        replacement: resolve(
+          __dirname,
+          "../hyperdb/src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",
+        ),
+      },
+      {
+        find: "@will-be-done/hyperdb/react",
+        replacement: resolve(__dirname, "../hyperdb/src/react.ts"),
+      },
+      {
+        find: "@will-be-done/hyperdb/tracing",
+        replacement: resolve(
+          __dirname,
+          "../hyperdb/src/hyperdb/tracing/index.ts",
+        ),
+      },
+      {
+        find: "@will-be-done/hyperdb",
+        replacement: resolve(__dirname, "../hyperdb/src/index.ts"),
+      },
+    ],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: [...configDefaults.exclude, "**/*.browser.test.ts", "e2e/**"],
     browser: {
