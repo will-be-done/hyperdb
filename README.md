@@ -27,7 +27,7 @@ It was built to fix the things that hurt when you reach for Redux or MobX or oth
   proxies or `observer()`.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
-  server (SQLite today). The runtime reads only the rows a selector touches; it
+  server (SQLite today, pg/mongodb in future). The runtime reads only the rows a selector touches; it
   never loads the whole dataset into memory.
 - **Instant on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
