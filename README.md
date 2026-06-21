@@ -4,6 +4,9 @@
 queries, selectors, and actions once, then run the exact same code in the
 browser _and_ on the server.
 
+<img width="2920" height="1736" alt="image" src="https://github.com/user-attachments/assets/023a5f91-bdea-4208-b2fc-1f445c958916" />
+
+
 📖 **[Full documentation → hyperdb.will-be-done.app](https://hyperdb.will-be-done.app)**
 
 ## What it solves
