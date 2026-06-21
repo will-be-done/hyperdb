@@ -48,7 +48,7 @@ across your whole stack:
 - **Large sorted collections** you reorder or insert into with fractional
   indexing, where a plain Redux/MobX array degrades to `O(n)`.
 - Anywhere you'd otherwise duplicate models and queries between frontend and
-  backend, or hand-roll in-memory indexes and manual invalidation.
+  backend.
 
 ## Installation
 
