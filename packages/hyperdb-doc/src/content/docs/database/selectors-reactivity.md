@@ -119,8 +119,7 @@ const unsub = db.subscribe((ops, traits, revision) => {
 
 ## Practical guidance
 
-- Default to the defaults. Root memoization on, `selfChild` off, `gcTime`
-  3000. This is right for most selectors.
+- Default to the defaults. Root memoization on, `selfChild` off, `gcTime` 3000. This is right for most selectors.
 - Keep args minimal and serializable. They form the cache key. Avoid passing
   large or unstable objects.
 - Reach for `selfChild` only when profiling (or the [devtool](/integrations/devtools/))

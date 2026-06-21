@@ -145,7 +145,11 @@ function Tasks({ projectId }: { projectId: string }) {
       <button
         onClick={() =>
           dispatch(
-            createTask({ id: crypto.randomUUID(), projectId, title: "New task" }),
+            createTask({
+              id: crypto.randomUUID(),
+              projectId,
+              title: "New task",
+            }),
           )
         }
       >
@@ -173,14 +177,14 @@ export function App() {
 
 ## Entry points
 
-| Import path                              | Contents                                                                  |
-| ---------------------------------------- | ------------------------------------------------------------------------- |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`  |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                              |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                    |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                       |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                             |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                        |
+| Import path                              | Contents                                                                 |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB` |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                             |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                   |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                      |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                            |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                       |
 | `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)             |
 
 ## Learn more

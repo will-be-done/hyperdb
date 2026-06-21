@@ -14,7 +14,7 @@ what comes back out matches your schema.
 | Validator              | TypeScript type  | Notes                                                                 |
 | ---------------------- | ---------------- | --------------------------------------------------------------------- |
 | `v.string()`           | `string`         |                                                                       |
-| `v.number()`           | `number`         | Finite only; `NaN`/`Infinity` are rejected                        |
+| `v.number()`           | `number`         | Finite only; `NaN`/`Infinity` are rejected                            |
 | `v.bigint()`           | `bigint`         |                                                                       |
 | `v.boolean()`          | `boolean`        |                                                                       |
 | `v.null()`             | `null`           |                                                                       |

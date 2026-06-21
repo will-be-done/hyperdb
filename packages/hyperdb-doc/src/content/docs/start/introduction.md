@@ -88,11 +88,11 @@ The core package ships several entry points:
 | Import path                              | Contents                                                                                  |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                               |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                     |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                         |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                               |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                         |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                              |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                    |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                       |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                             |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                        |
 
 The React devtool ships as a separate package, `@will-be-done/hyperdb-devtool`,
 exposing `HyperDBDevtools` from `@will-be-done/hyperdb-devtool/react`.

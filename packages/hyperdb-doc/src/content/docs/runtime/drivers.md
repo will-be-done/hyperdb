@@ -51,10 +51,7 @@ interface.
 For synchronous SQLite, implement this tiny shape and pass it to `SqlDriver`:
 
 ```ts
-import {
-  SqlDriver,
-  type SqlValue,
-} from "@will-be-done/hyperdb/drivers/sqlite";
+import { SqlDriver, type SqlValue } from "@will-be-done/hyperdb/drivers/sqlite";
 
 export interface SQLiteDB {
   exec(sql: string, params?: SqlValue[]): void;
@@ -230,10 +227,7 @@ On the server, point `SqlDriver` at a native SQLite binding, here Bun's built-in
 ```ts
 import { Database } from "bun:sqlite";
 import { DB } from "@will-be-done/hyperdb";
-import {
-  SqlDriver,
-  type SqlValue,
-} from "@will-be-done/hyperdb/drivers/sqlite";
+import { SqlDriver, type SqlValue } from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqliteDB = new Database("app.sqlite", { strict: true });
 sqliteDB.run("PRAGMA journal_mode=WAL;");

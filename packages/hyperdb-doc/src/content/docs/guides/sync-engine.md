@@ -247,12 +247,7 @@ and the `clientId` (e.g. `"server-<dbName>"`).
 ```ts
 import { Database } from "bun:sqlite";
 import { SqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
-import {
-  DB,
-  SubscribableDB,
-  syncDispatch,
-  noop,
-} from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, syncDispatch, noop } from "@will-be-done/hyperdb";
 import {
   changesTable,
   insertChangeFromInsert,

@@ -30,14 +30,14 @@ baseDb.loadTables([tasksTable]);
 
 ### Options
 
-| Option              | Default        | Description                                                                                                   |
-| ------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
-| `runtimeValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                   |
-| `freezeArgs`        | `false`        | Deep-freeze selector args used by cached selectors/runs                                                       |
-| `freezeRows`        | `false`        | Deep-freeze rows after write normalization                                                                    |
-| `traits`            | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                         |
-| `tracer`            | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/))  |
-| `dbName`            | none           | A name used by tracing/devtools to label this database                                                        |
+| Option              | Default        | Description                                                                                                  |
+| ------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `runtimeValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                  |
+| `freezeArgs`        | `false`        | Deep-freeze selector args used by cached selectors/runs                                                      |
+| `freezeRows`        | `false`        | Deep-freeze rows after write normalization                                                                   |
+| `traits`            | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                        |
+| `tracer`            | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
+| `dbName`            | none           | A name used by tracing/devtools to label this database                                                       |
 
 `runtimeValidation` is invaluable in development: it catches schema mismatches at
 the boundary instead of letting bad data into storage. `freezeArgs` / `freezeRows`
