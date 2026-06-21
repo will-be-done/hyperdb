@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.0.4
+
+### Patch Changes
+
+- 609ca09: bump version
+
 ## 0.0.3
 
 ### Patch Changes
