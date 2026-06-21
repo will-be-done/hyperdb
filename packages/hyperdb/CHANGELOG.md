@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.0.2
+
+### Patch Changes
+
+- a40fe17: verion bump for check
+
 ## 0.0.1
 
 ### Patch Changes
