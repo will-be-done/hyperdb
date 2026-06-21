@@ -1,5 +1,11 @@
-TODO:
+Github:
+1. Setup description, tags, auto-releaser
 
+Codesandbox:
+1. Add demo
+
+Doc:
+1. Fix npm install/doc links
 1. Add performance compare doc
 1. DONE Remove wa-sqlite from hyperdb-lib. Move wa-sqlite support to recipe
 1. Add screenshot of code to the home page

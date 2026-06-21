@@ -9,7 +9,7 @@
   "tasks": {
     "demo": {
       "name": "HyperDB Demo",
-      "command": "pnpm --filter '@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
+      "command": "pnpm install --frozen-lockfile && pnpm --filter '@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
       "runAtStart": true,
       "preview": {
         "port": 5173,
