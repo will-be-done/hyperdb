@@ -1,7 +1,13 @@
 {
   "name": "@will-be-done/hyperdb-devtool",
   "version": "0.0.3",
+  "license": "MIT",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/will-be-done/hyperdb.git",
+    "directory": "packages/hyperdb-devtool"
+  },
   "exports": {
     "./react": {
       "types": "./dist/react.d.ts",
