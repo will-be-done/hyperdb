@@ -9,7 +9,7 @@ browser _and_ on the server.
 ## What it solves
 
 HyperDB brings the developer experience of a backend like
-[Convex](https://www.convex.dev/) to a database that runs **everywhere your
+Convex to a database that runs **everywhere your
 TypeScript runs**. You describe data with typed schemas, read it through reactive
 selectors, and change it through transactional actions: no SQL, and no thinking
 about the storage engine underneath. The same slice of schema + selectors +
@@ -35,6 +35,11 @@ It was built to fix the things that hurt when you reach for Redux or MobX or oth
 - **Just JavaScript, no SQL.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
+
+And it has awesome devtool:
+
+<img width="1999" height="745" alt="image" src="https://github.com/user-attachments/assets/428d892b-8982-4bd5-8b62-402c04218690" />
+
 
 ## Who needs this
 
