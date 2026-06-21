@@ -4,7 +4,7 @@
   "author": "quolpr",
   "private": true,
   "license": "MIT",
-  "packageManager": "bun@1.3.14",
+  "packageManager": "pnpm@11.8.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/will-be-done/hyperdb.git"
@@ -13,15 +13,15 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-devtool' build && bun run --filter='@will-be-done/hyperdb-doc' build",
+    "build": "pnpm --filter '@will-be-done/hyperdb' build && pnpm --filter '@will-be-done/hyperdb-devtool' build && pnpm --filter '@will-be-done/hyperdb-doc' build",
     "changeset": "changeset",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "bun run --filter='@will-be-done/hyperdb' lint && bun run --filter='@will-be-done/hyperdb-devtool' lint",
-    "lint:cycles": "bun run --filter='@will-be-done/hyperdb' lint:cycles && bun run --filter='@will-be-done/hyperdb-devtool' lint:cycles",
-    "release": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-devtool' build && changeset publish",
-    "test": "bun run --filter='@will-be-done/hyperdb' test && bun run --filter='@will-be-done/hyperdb-devtool' test",
-    "ts": "bun run --filter='@will-be-done/hyperdb' ts && bun run --filter='@will-be-done/hyperdb-devtool' ts",
+    "lint": "pnpm --filter '@will-be-done/hyperdb' lint && pnpm --filter '@will-be-done/hyperdb-devtool' lint",
+    "lint:cycles": "pnpm --filter '@will-be-done/hyperdb' lint:cycles && pnpm --filter '@will-be-done/hyperdb-devtool' lint:cycles",
+    "release": "pnpm --filter '@will-be-done/hyperdb' build && pnpm --filter '@will-be-done/hyperdb-devtool' build && changeset publish",
+    "test": "pnpm --filter '@will-be-done/hyperdb' test && pnpm --filter '@will-be-done/hyperdb-devtool' test",
+    "ts": "pnpm --filter '@will-be-done/hyperdb' ts && pnpm --filter '@will-be-done/hyperdb-devtool' ts",
     "version-packages": "changeset version"
   },
   "devDependencies": {

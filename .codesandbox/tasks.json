@@ -3,13 +3,13 @@
   "setupTasks": [
     {
       "name": "Install Dependencies",
-      "command": "bun install"
+      "command": "pnpm install"
     }
   ],
   "tasks": {
     "demo": {
       "name": "HyperDB Demo",
-      "command": "bun run --filter='@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
+      "command": "pnpm --filter '@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
       "runAtStart": true,
       "preview": {
         "port": 5173,

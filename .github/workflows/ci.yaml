@@ -15,15 +15,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: 11.8.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: bun install
+        run: pnpm install --frozen-lockfile
 
       - name: Check formatting
-        run: bun run format:check
+        run: pnpm run format:check
 
   hyperdb:
     runs-on: ubuntu-latest
@@ -33,27 +39,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: 11.8.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: bun install
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: bun run lint
+        run: pnpm run lint
 
       - name: TypeCheck
-        run: bun run ts
+        run: pnpm run ts
 
       - name: Install Playwright browsers
-        run: cd packages/hyperdb && bun run playwright install --with-deps chromium
+        run: pnpm --filter '@will-be-done/hyperdb' exec playwright install --with-deps chromium
 
       - name: Test
-        run: bun run test
+        run: pnpm run test
 
       - name: Check import cycles
-        run: bun run lint:cycles
+        run: pnpm run lint:cycles
 
   hyperdb-doc:
     runs-on: ubuntu-latest
@@ -63,12 +75,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
+          version: 11.8.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: bun install
+        run: pnpm install --frozen-lockfile
 
       - name: Build docs
-        run: bun run --filter='@will-be-done/hyperdb-doc' build
+        run: pnpm --filter '@will-be-done/hyperdb-doc' build

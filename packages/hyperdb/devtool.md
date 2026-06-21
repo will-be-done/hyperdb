@@ -209,9 +209,9 @@ Tests:
 Validation:
 
 - Run these from apps/hyperdb-lib:
-  - bun run test
-  - bun run ts
-  - bun run build
+  - pnpm run test
+  - pnpm run ts
+  - pnpm run build
 - Fix all failures caused by the implementation.
 - Do not run formatters that rewrite unrelated files.
 - Do not modify unrelated dirty files such as todo.md.

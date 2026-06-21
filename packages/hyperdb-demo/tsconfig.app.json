@@ -23,9 +23,7 @@
       "@will-be-done/hyperdb/drivers/idb": [
         "../hyperdb/src/hyperdb/drivers/idb/idb-driver.ts"
       ],
-      "@will-be-done/hyperdb-devtool/react": [
-        "../hyperdb-devtool/src/react.ts"
-      ]
+      "@will-be-done/hyperdb-devtool/react": ["../hyperdb-devtool/src/react.ts"]
     },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
