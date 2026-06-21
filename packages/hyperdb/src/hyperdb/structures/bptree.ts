@@ -82,7 +82,9 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
 
   fork(): InMemoryBinaryPlusTree<K, V> {
     if (this.activeFork) {
-      throw new Error("Cannot create multiple active forks from the same tree.");
+      throw new Error(
+        "Cannot create multiple active forks from the same tree.",
+      );
     }
 
     const forked = new InMemoryBinaryPlusTree<K, V>(
@@ -412,8 +414,10 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
         if (!child) throw new Error("Broken.");
         cursor.nodePath[j] = child;
         if (j > 0)
-          cursor.indexPath[j - 1] = child.leaf === true ? child.values.length - 1
-            : child.children.length - 1;
+          cursor.indexPath[j - 1] =
+            child.leaf === true
+              ? child.values.length - 1
+              : child.children.length - 1;
       }
       return cursor;
     }
@@ -458,8 +462,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
   *iterate(args: IterateArgs<K> = {}): IterableIterator<{ key: K; value: V }> {
     if (args.limit !== undefined && args.limit <= 0) return;
 
-    const { start, startOpen, end, endOpen } =
-      this.validateIterateArgs(args);
+    const { start, startOpen, end, endOpen } = this.validateIterateArgs(args);
     let yielded = 0;
 
     if (args.reverse) {
@@ -574,7 +577,8 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     // Balance the tree by splitting nodes, starting from the leaf.
     let node = nodePath.pop();
     while (node) {
-      const size = node.leaf === true ? node.values.length : node.children.length;
+      const size =
+        node.leaf === true ? node.values.length : node.children.length;
       if (size <= this.maxSize) break;
       const splitIndex = Math.round(size / 2);
 
@@ -701,10 +705,12 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       if (!parent) throw new Error("Broken.");
       if (parentIndex === undefined) throw new Error("Broken.");
 
-      const size = node.leaf === true ? node.values.length : node.children.length;
+      const size =
+        node.leaf === true ? node.values.length : node.children.length;
       // console.log("minkey", node, node.leaf);
       // TODO: doesn't handle when leaf has values.length === 0
-      const minKey = node.leaf === true ? node.values[0].key : node.children[0].minKey;
+      const minKey =
+        node.leaf === true ? node.values[0].key : node.children[0].minKey;
 
       // No need to merge but we might need to update the minKey in the parent
       if (size >= this.minSize) {
@@ -910,10 +916,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return { closest: ~index };
   }
 
-  private searchLeafValueIndex(
-    values: { key: K; value: V }[],
-    searchKey: K,
-  ) {
+  private searchLeafValueIndex(values: { key: K; value: V }[], searchKey: K) {
     let left = 0;
     let right = values.length;
 

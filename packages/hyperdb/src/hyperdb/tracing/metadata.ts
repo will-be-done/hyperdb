@@ -30,10 +30,7 @@ export const getCommandFramePath = (
   return commandFramePath.get(cmd);
 };
 
-const annotateCommand = (
-  cmd: unknown,
-  meta: TraceFrameMeta,
-): unknown => {
+const annotateCommand = (cmd: unknown, meta: TraceFrameMeta): unknown => {
   if (typeof cmd !== "object" || cmd === null) return cmd;
   if (meta.skipChildTrace) return cmd;
 

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.astro/
+playwright-report/
+test-results/
+
+packages/hyperdb/dist/
+packages/hyperdb-doc/dist/

@@ -884,9 +884,11 @@ describe("SubscribableDB", async () => {
         });
 
         // Verify final state by scanning
-        const finalTasks = await asyncDB.intervalScan(tasksTable, "projectIdState", [
-          {},
-        ]);
+        const finalTasks = await asyncDB.intervalScan(
+          tasksTable,
+          "projectIdState",
+          [{}],
+        );
 
         expect(finalTasks).toHaveLength(2);
         expect(finalTasks.find((t) => t.id === "task-1")).toEqual(updatedTask);

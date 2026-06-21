@@ -47,10 +47,7 @@ const projectStateOrderKey = (row: Row): ScanValue[] => [
   row.order as ScanValue,
   row.id,
 ];
-const titleKey = (row: Row): ScanValue[] => [
-  row.title as ScanValue,
-  row.id,
-];
+const titleKey = (row: Row): ScanValue[] => [row.title as ScanValue, row.id];
 const keyFns = [projectStateOrderKey, titleKey];
 
 const runGenerator = <T>(generator: Generator<unknown, T>): T => {
@@ -152,10 +149,7 @@ describe("BptreeInmemDriver hash transaction index strategy", () => {
     () => {
       const originalRecords = createRawHashRecords(hashPreloadRows);
       const txRecords = new Map(
-        Array.from(originalRecords, ([value, rows]) => [
-          value,
-          new Map(rows),
-        ]),
+        Array.from(originalRecords, ([value, rows]) => [value, new Map(rows)]),
       );
 
       for (const row of hashWriteRows) {

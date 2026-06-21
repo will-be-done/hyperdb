@@ -11,22 +11,22 @@ what comes back out matches your schema.
 
 ## Supported values
 
-| Validator | TypeScript type | Notes |
-| --- | --- | --- |
-| `v.string()` | `string` | |
-| `v.number()` | `number` | **Finite only** — `NaN`/`Infinity` are rejected |
-| `v.bigint()` | `bigint` | |
-| `v.boolean()` | `boolean` | |
-| `v.null()` | `null` | |
-| `v.literal(x)` | the literal | `x` is a `string`, `number`, `bigint`, `boolean`, or `null` |
-| `v.array(item)` | `T[]` | Items cannot be `undefined` |
-| `v.object(fields)` | `{ ... }` | Field map; optional fields may be omitted |
-| `v.record(key, value)` | `Record<K, V>` | Keys are non-empty ASCII strings not starting with `$` |
-| `v.union(...)` | a union | First matching variant wins |
-| `v.optional(inner)` | `T \| undefined` | Only meaningful for object fields |
-| `v.arrayBuffer()` | `ArrayBuffer` | Typed arrays / data views are accepted and copied to an `ArrayBuffer` |
-| `v.any()` | `any` | Validates structurally (see below) |
-| `v.pass<T>()` | `T` | Accepts any value, no normalization |
+| Validator              | TypeScript type  | Notes                                                                 |
+| ---------------------- | ---------------- | --------------------------------------------------------------------- |
+| `v.string()`           | `string`         |                                                                       |
+| `v.number()`           | `number`         | **Finite only** — `NaN`/`Infinity` are rejected                       |
+| `v.bigint()`           | `bigint`         |                                                                       |
+| `v.boolean()`          | `boolean`        |                                                                       |
+| `v.null()`             | `null`           |                                                                       |
+| `v.literal(x)`         | the literal      | `x` is a `string`, `number`, `bigint`, `boolean`, or `null`           |
+| `v.array(item)`        | `T[]`            | Items cannot be `undefined`                                           |
+| `v.object(fields)`     | `{ ... }`        | Field map; optional fields may be omitted                             |
+| `v.record(key, value)` | `Record<K, V>`   | Keys are non-empty ASCII strings not starting with `$`                |
+| `v.union(...)`         | a union          | First matching variant wins                                           |
+| `v.optional(inner)`    | `T \| undefined` | Only meaningful for object fields                                     |
+| `v.arrayBuffer()`      | `ArrayBuffer`    | Typed arrays / data views are accepted and copied to an `ArrayBuffer` |
+| `v.any()`              | `any`            | Validates structurally (see below)                                    |
+| `v.pass<T>()`          | `T`              | Accepts any value, no normalization                                   |
 
 ### Composite helpers
 

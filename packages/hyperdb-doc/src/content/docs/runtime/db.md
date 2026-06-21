@@ -30,14 +30,14 @@ baseDb.loadTables([tasksTable]);
 
 ### Options
 
-| Option | Default | Description |
-| --- | --- | --- |
-| `runtimeValidation` | `false` | Validate full records against their table validators on writes and on reads from the driver |
-| `freezeArgs` | `false` | Deep-freeze selector args used by cached selectors/runs |
-| `freezeRows` | `false` | Deep-freeze rows after write normalization |
-| `traits` | `[]` | Initial [metadata traits](#traits) attached to the DB |
-| `tracer` | global default | Per-DB tracer — an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
-| `dbName` | — | A name used by tracing/devtools to label this database |
+| Option              | Default        | Description                                                                                                   |
+| ------------------- | -------------- | ------------------------------------------------------------------------------------------------------------- |
+| `runtimeValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                   |
+| `freezeArgs`        | `false`        | Deep-freeze selector args used by cached selectors/runs                                                       |
+| `freezeRows`        | `false`        | Deep-freeze rows after write normalization                                                                    |
+| `traits`            | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                         |
+| `tracer`            | global default | Per-DB tracer — an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
+| `dbName`            | —              | A name used by tracing/devtools to label this database                                                        |
 
 `runtimeValidation` is invaluable in development: it catches schema mismatches at
 the boundary instead of letting bad data into storage. `freezeArgs` / `freezeRows`
@@ -83,9 +83,15 @@ const off = db.afterChange(function* (db, table, traits, ops) {
   // runs for every insert/upsert/delete, within the committing transaction
 });
 
-db.afterInsert(function* (db, table, traits, ops) { /* InsertOp[] */ });
-db.afterUpsert(function* (db, table, traits, ops) { /* UpsertOp[] */ });
-db.afterDelete(function* (db, table, traits, ops) { /* DeleteOp[] */ });
+db.afterInsert(function* (db, table, traits, ops) {
+  /* InsertOp[] */
+});
+db.afterUpsert(function* (db, table, traits, ops) {
+  /* UpsertOp[] */
+});
+db.afterDelete(function* (db, table, traits, ops) {
+  /* DeleteOp[] */
+});
 ```
 
 `InsertOp` / `UpsertOp` / `DeleteOp` carry the affected rows (upserts and deletes
@@ -95,20 +101,19 @@ Because hooks run **within** the transaction, anything they write commits
 atomically with the change that triggered them — and a throw rolls the whole
 thing back.
 
-
 ## Executing commands
 
 Selectors and actions are generators. The dispatch and select helpers run them
 for you, but you can also drive a generator directly:
 
-| Helper | Use |
-| --- | --- |
-| `syncDispatch(db, action(args))` | Run an action in a transaction (sync drivers) |
+| Helper                            | Use                                            |
+| --------------------------------- | ---------------------------------------------- |
+| `syncDispatch(db, action(args))`  | Run an action in a transaction (sync drivers)  |
 | `asyncDispatch(db, action(args))` | Run an action in a transaction (async drivers) |
-| `select(db, gen)` | Run a selector once (sync drivers) |
-| `runSelectorAsync(db, () => gen)` | Run a selector once (async drivers) |
-| `execSync(generator)` | Drive a raw DB-command generator (sync) |
-| `execAsync(generator)` | Drive a raw DB-command generator (async) |
+| `select(db, gen)`                 | Run a selector once (sync drivers)             |
+| `runSelectorAsync(db, () => gen)` | Run a selector once (async drivers)            |
+| `execSync(generator)`             | Drive a raw DB-command generator (sync)        |
+| `execAsync(generator)`            | Drive a raw DB-command generator (async)       |
 
 `execSync` throws if the generator yields an async command, which is how the
 sync/async split is enforced. Async drivers must go through `execAsync` /

@@ -8,10 +8,7 @@ import {
   type RootTrace,
   type TraceFrame,
 } from "../hyperdb/tracing/store";
-import {
-  traceStoreTraceSelection,
-  traceStoreTraces,
-} from "./traces";
+import { traceStoreTraceSelection, traceStoreTraces } from "./traces";
 
 const traceFrame = (cached = false): TraceFrame => ({
   id: cached ? "cached-frame" : "frame",

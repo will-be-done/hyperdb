@@ -67,7 +67,6 @@ frozen by the in-memory driver, and [deep-frozen end to end](/runtime/db/) when
 you opt in with `freezeRows`. That means it composes with React's rendering
 model directly — no `observer()`, no proxies leaking into your view layer.
 
-
 ## The backend problem
 
 This is the reason I actually started building HyperDB.
@@ -77,7 +76,7 @@ run the same business logic authoritatively, or to merge changes from many
 clients. With Redux or MobX you have two bad options:
 
 1. **Load everything into memory** and run your selectors and actions against it.
-   This works for one user, but a server holds *many* users' data at once. Keeping
+   This works for one user, but a server holds _many_ users' data at once. Keeping
    it all resident is memory-hungry and adds real startup latency while you hydrate
    it.
 2. **Reimplement the logic** in SQL or some other backend stack. Now you maintain
@@ -99,7 +98,7 @@ On the frontend, against the [in-memory driver](/runtime/drivers/#in-memory),
 selectors and actions execute **synchronously** — start to finish, with no
 `await` in the middle. This is the whole reason HyperDB is built on
 [generators](/start/how-it-works/): a generator can describe code that runs either
-synchronously or asynchronously, so the *same* selector or action works against a
+synchronously or asynchronously, so the _same_ selector or action works against a
 sync in-memory driver and against an async driver like IndexedDB without being
 rewritten.
 
@@ -117,7 +116,7 @@ reads and writes — stays fully synchronous and responsive.
 
 That same generator flexibility opens up a middle ground. A **hybrid** mode is in
 development: instead of loading everything into memory up front, a read checks the
-in-memory tier first and, on a miss, runs the *same* query against IndexedDB and
+in-memory tier first and, on a miss, runs the _same_ query against IndexedDB and
 caches the rows back into memory. Because a selector is just a description, it
 runs unchanged either way — you trade synchronous reads for async ones, but
 startup is near-instant and memory stays low, since data is pulled in lazily, on
@@ -160,8 +159,8 @@ and actions stay synchronous and instant, and the data is still persistent. The
 this, step by step.
 
 **And SQLite couldn't match the reactivity anyway.** Even setting the bundle and
-serialization costs aside, a SQL query carries no record of *which ranges it
-read*. When any row in a table changes, you have no cheap way to know which
+serialization costs aside, a SQL query carries no record of _which ranges it
+read_. When any row in a table changes, you have no cheap way to know which
 subscribed queries it could have touched — so you re-run all of them. That's the
 [notification problem](#the-notification-problem) all over again. HyperDB tracks
 the exact index ranges each selector scanned, so a write wakes only the selectors
@@ -184,7 +183,7 @@ selector it composed, and at the leaves the actual index reads —
 its own timing and row count. When a view is slow, you can see precisely which
 sub-query or which index is responsible, instead of guessing.
 
-This kind of insight is only possible *because* data is read by queries. A state
+This kind of insight is only possible _because_ data is read by queries. A state
 library where components reach into plain objects has nothing to trace; HyperDB's
 declarative reads give it a complete, structured picture of every computation.
 
@@ -201,13 +200,13 @@ server: plain JS logic over typed, indexed, reactive data.
 
 HyperDB exists because local-first apps need:
 
-| Need | Redux | MobX | HyperDB |
-| --- | --- | --- | --- |
-| Cheap inserts into sorted data | `O(n)` (new array) | `O(n)` (array shift) | `O(log n)` (B-tree) |
-| Update only affected selectors | `O(selectors)` per dispatch | Fine-grained | Fine-grained (range-tracked) |
-| Works with React without hacks | Yes | Needs `observer()` | Yes |
-| Runs the same code on the backend | No | No | Yes (only SQLite for now) |
-| Per-action/selector + query tracing & call tree | — | — | Built-in devtool |
+| Need                                            | Redux                       | MobX                 | HyperDB                      |
+| ----------------------------------------------- | --------------------------- | -------------------- | ---------------------------- |
+| Cheap inserts into sorted data                  | `O(n)` (new array)          | `O(n)` (array shift) | `O(log n)` (B-tree)          |
+| Update only affected selectors                  | `O(selectors)` per dispatch | Fine-grained         | Fine-grained (range-tracked) |
+| Works with React without hacks                  | Yes                         | Needs `observer()`   | Yes                          |
+| Runs the same code on the backend               | No                          | No                   | Yes (only SQLite for now)    |
+| Per-action/selector + query tracing & call tree | —                           | —                    | Built-in devtool             |
 
 If those rows describe problems you have, the rest of these docs show how HyperDB
 solves them. Start with [How HyperDB Works](/start/how-it-works/).

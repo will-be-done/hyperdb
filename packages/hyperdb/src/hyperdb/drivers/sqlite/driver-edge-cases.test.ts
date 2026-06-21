@@ -54,10 +54,7 @@ const multiColumnHashTable = {
   },
 } as unknown as TableDefinition<unknown, AnyIndexDefinitions>;
 
-function sqliteRows(
-  sqldb: InspectableSqlDatabase,
-  sql: string,
-): SqlValue[][] {
+function sqliteRows(sqldb: InspectableSqlDatabase, sql: string): SqlValue[][] {
   return sqldb.exec(sql)[0]?.values ?? [];
 }
 
@@ -109,7 +106,9 @@ describe("SQLite driver edge case regressions", () => {
       sqldb,
       "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'driverEdgePruneSortKeys'",
     ).map(([name]) => String(name));
-    expect(indexNames).toContain("idx_driverEdgePruneSortKeys_byState_sort_key");
+    expect(indexNames).toContain(
+      "idx_driverEdgePruneSortKeys_byState_sort_key",
+    );
     expect(indexNames).not.toContain(
       "idx_driverEdgePruneSortKeys_byTitle_sort_key",
     );

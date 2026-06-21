@@ -12,18 +12,18 @@ whether to use the sync or async runtime helpers, which depends on the driver.
 
 ## Choosing a driver
 
-| Driver | Import | Mode | Environment | Use for |
-| --- | --- | --- | --- | --- |
-| `BptreeInmemDriver` | `.../drivers/inmemory` | sync | both | Tests, ephemeral state, the fast in-memory tier |
-| `SqlDriver` | `.../drivers/sqlite` | sync | both | Any synchronous SQLite binding (native server SQLite, sql.js) |
-| `AsyncSqlDriver` | `.../drivers/sqlite` | async | both | Asynchronous SQLite (e.g. wa-sqlite) |
-| `IdbDriver` | `.../drivers/idb` | async | browser | Browser persistence via IndexedDB |
+| Driver              | Import                 | Mode  | Environment | Use for                                                       |
+| ------------------- | ---------------------- | ----- | ----------- | ------------------------------------------------------------- |
+| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, ephemeral state, the fast in-memory tier               |
+| `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js) |
+| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Asynchronous SQLite (e.g. wa-sqlite)                          |
+| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence via IndexedDB                             |
 
 Sync drivers work with `syncDispatch` / `select` / `execSync`. Async drivers
 require `asyncDispatch` / `runSelectorAsync` / `execAsync`.
 
 A typical full-stack setup uses an in-memory or IndexedDB driver in the browser
-and a native `SqlDriver` on the server — running the *same* schema, selectors,
+and a native `SqlDriver` on the server — running the _same_ schema, selectors,
 and actions on both sides.
 
 ## In-memory
@@ -51,7 +51,10 @@ interface.
 For synchronous SQLite, implement this tiny shape and pass it to `SqlDriver`:
 
 ```ts
-import { SqlDriver, type SqlValue } from "@will-be-done/hyperdb-lib/drivers/sqlite";
+import {
+  SqlDriver,
+  type SqlValue,
+} from "@will-be-done/hyperdb-lib/drivers/sqlite";
 
 export interface SQLiteDB {
   exec(sql: string, params?: SqlValue[]): void;
@@ -150,11 +153,19 @@ import {
   type SqlValue,
 } from "@will-be-done/hyperdb-lib/drivers/sqlite";
 
-type WaSQLiteValue = number | string | Uint8Array | Array<number> | bigint | null;
+type WaSQLiteValue =
+  | number
+  | string
+  | Uint8Array
+  | Array<number>
+  | bigint
+  | null;
 type WaSQLiteDB = {
   bind_collection(
     stmt: number,
-    bindings: { [index: string]: WaSQLiteValue | null } | Array<WaSQLiteValue | null>,
+    bindings:
+      | { [index: string]: WaSQLiteValue | null }
+      | Array<WaSQLiteValue | null>,
   ): number;
   statements(db: number, sql: string): AsyncIterable<number>;
   step(stmt: number): Promise<number>;
@@ -216,7 +227,10 @@ await execAsync(db.loadTables([tasksTable]));
 ```ts
 import { Database } from "bun:sqlite";
 import { DB } from "@will-be-done/hyperdb-lib";
-import { SqlDriver, type SqlValue } from "@will-be-done/hyperdb-lib/drivers/sqlite";
+import {
+  SqlDriver,
+  type SqlValue,
+} from "@will-be-done/hyperdb-lib/drivers/sqlite";
 
 const sqliteDB = new Database("app.sqlite", { strict: true });
 sqliteDB.run("PRAGMA journal_mode=WAL;");
@@ -276,7 +290,10 @@ const idbDriver = await openIndexedDBDriver("my-app-db");
 const idbDb = new DB(idbDriver);
 await execAsync(idbDb.loadTables([tasksTable]));
 
-await asyncDispatch(idbDb, createTask({ id: "t1", projectId: "p1", title: "Ship" }));
+await asyncDispatch(
+  idbDb,
+  createTask({ id: "t1", projectId: "p1", title: "Ship" }),
+);
 ```
 
 The IndexedDB driver uses the **same storage encoding and sort-key ordering as

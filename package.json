@@ -15,6 +15,8 @@
   "scripts": {
     "build": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-doc' build",
     "changeset": "changeset",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "lint": "bun run --filter='@will-be-done/hyperdb' lint",
     "lint:cycles": "bun run --filter='@will-be-done/hyperdb' lint:cycles",
     "release": "bun run --filter='@will-be-done/hyperdb' build && changeset publish",
@@ -23,6 +25,7 @@
     "version-packages": "changeset version"
   },
   "devDependencies": {
-    "@changesets/cli": "^2.31.0"
+    "@changesets/cli": "^2.31.0",
+    "prettier": "^3.8.4"
   }
 }

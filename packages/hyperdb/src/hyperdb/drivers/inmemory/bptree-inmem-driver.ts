@@ -444,7 +444,8 @@ class HashIndex implements Index {
   }
 
   scan(tupleBounds: TupleScanOptions[], selectOptions: SelectOptions): Row[] {
-    if (selectOptions.limit !== undefined && selectOptions.limit <= 0) return [];
+    if (selectOptions.limit !== undefined && selectOptions.limit <= 0)
+      return [];
 
     const idxValues = getColumnValuesFromBounds(this.indexDef, tupleBounds);
 
@@ -553,7 +554,8 @@ class HashIndexTx implements IndexTx {
 
   scan(tupleBounds: TupleScanOptions[], selectOptions: SelectOptions): Row[] {
     if (this.isCommitted) throw new Error("Can't scan after commit");
-    if (selectOptions.limit !== undefined && selectOptions.limit <= 0) return [];
+    if (selectOptions.limit !== undefined && selectOptions.limit <= 0)
+      return [];
 
     const idxValues = getColumnValuesFromBounds(
       this.originalIndex.indexDef,

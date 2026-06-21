@@ -11,7 +11,7 @@ drivers, React hooks, and an in-app devtool.
 
 The defining idea: **the same code runs on the frontend and the backend.** Your
 schema, selectors, and actions are written once and executed unchanged in the
-browser (over in-memory B+trees, IndexedDB, or WebAssembly SQLite) *and* on the
+browser (over in-memory B+trees, IndexedDB, or WebAssembly SQLite) _and_ on the
 server (over native SQLite). Only the storage driver differs per environment.
 
 It was inspired by [Convex](https://www.convex.dev/): you model your data with
@@ -30,7 +30,7 @@ anywhere TypeScript runs — client or server.
   collection stays `O(log n)` instead of the `O(n)` you pay rebuilding or
   shifting an array.
 - **Selectors & actions** — reads and writes are expressed as generator
-  functions that *describe* what to do. The runtime executes them, which makes
+  functions that _describe_ what to do. The runtime executes them, which makes
   the same code work synchronously or asynchronously. Against the in-memory
   driver it runs **fully synchronously** — a dispatch updates the store and the
   UI in the same tick, with no `await` in the hot path.
@@ -66,7 +66,7 @@ one data layer shared across your whole stack:
 
 On the server, the persistent store is SQLite today (MongoDB and PostgreSQL are
 not supported yet). HyperDB gives you the storage, query, and reactivity
-primitives, not a network layer. Synchronization between peers (clients *and* servers) is something you
+primitives, not a network layer. Synchronization between peers (clients _and_ servers) is something you
 build on top with the built-in primitives — the
 [Building a Sync Engine](/guides/sync-engine/) guide shows exactly how, with the
 same change-tracking code running on the browser and a Bun/SQLite server.
@@ -85,15 +85,15 @@ npm install react react-dom
 
 The package ships several entry points:
 
-| Import path | Contents |
-| --- | --- |
-| `@will-be-done/hyperdb-lib` | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
-| `@will-be-done/hyperdb-lib/react` | React hooks and `DBProvider` |
-| `@will-be-done/hyperdb-lib/devtool` | `HyperDBDevtools` panel |
-| `@will-be-done/hyperdb-lib/tracing` | Tracing store and tracer configuration |
-| `@will-be-done/hyperdb-lib/drivers/inmemory` | `BptreeInmemDriver` |
-| `@will-be-done/hyperdb-lib/drivers/sqlite` | `SqlDriver`, `AsyncSqlDriver` |
-| `@will-be-done/hyperdb-lib/drivers/idb` | `openIndexedDBDriver`, `IdbDriver` |
+| Import path                                  | Contents                                                                                  |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `@will-be-done/hyperdb-lib`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
+| `@will-be-done/hyperdb-lib/react`            | React hooks and `DBProvider`                                                              |
+| `@will-be-done/hyperdb-lib/devtool`          | `HyperDBDevtools` panel                                                                   |
+| `@will-be-done/hyperdb-lib/tracing`          | Tracing store and tracer configuration                                                    |
+| `@will-be-done/hyperdb-lib/drivers/inmemory` | `BptreeInmemDriver`                                                                       |
+| `@will-be-done/hyperdb-lib/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                             |
+| `@will-be-done/hyperdb-lib/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                        |
 
 ## Next steps
 

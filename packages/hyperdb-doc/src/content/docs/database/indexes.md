@@ -19,19 +19,19 @@ defineTable("tasks", {
   orderToken: v.string(),
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // composite btree
-  .index("byState", ["state"], { type: "hash" });        // single-column hash
+  .index("byState", ["state"], { type: "hash" }); // single-column hash
 ```
 
 The built-in `byId` hash index on `id` is always present — you never declare it.
 
 ### B-tree vs. hash
 
-| | B-tree (default) | Hash |
-| --- | --- | --- |
-| Equality (`eq`) | ✅ | ✅ |
-| Range (`gt`/`gte`/`lt`/`lte`) | ✅ | ❌ |
-| `order("asc" \| "desc")` | ✅ | ❌ |
-| Composite (multi-column) | ✅ | ❌ (exactly one column) |
+|                               | B-tree (default) | Hash                    |
+| ----------------------------- | ---------------- | ----------------------- |
+| Equality (`eq`)               | ✅               | ✅                      |
+| Range (`gt`/`gte`/`lt`/`lte`) | ✅               | ❌                      |
+| `order("asc" \| "desc")`      | ✅               | ❌                      |
+| Composite (multi-column)      | ✅               | ❌ (exactly one column) |
 
 Reach for a **hash** index when you only ever look up a column by exact value;
 use a **btree** index when you need ranges, ordering, or multi-column keys.
@@ -77,7 +77,7 @@ for:
 
 - **A non-prefix column** — using a column without `eq` on all preceding columns
   (`Cannot use column 'X' without specifying eq conditions for all preceding
-  columns`).
+columns`).
 - **`eq` mixed with a range on the same column** — e.g. `eq("c", 1).gt("c", 0)`
   (`Conflicting conditions for column 'c'`).
 - **Two equality conditions on one column** (`Multiple equality conditions`).
@@ -91,4 +91,3 @@ index's key order and `order("desc")` returns them reversed — no separate sort
 step. Choose your index column order to match how you want to read the data. For
 the `byProjectOrder` index, tasks come back ordered by `orderToken` within a
 project for free.
-

@@ -1,17 +1,20 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { HyperDB, HyperDBTx } from "../core/contracts";
 import type {
-  HyperDB,
-  HyperDBTx,
-} from "../core/contracts";
-import type { Row, SelectOptions, Trait, WhereClause } from "../core/primitives";
+  Row,
+  SelectOptions,
+  Trait,
+  WhereClause,
+} from "../core/primitives";
 import { runCommandGenerator } from "../commands/runner";
 import type { DBCmd } from "../commands/async";
-import {
-  DEFAULT_CODEC_OPTIONS,
-  type CodecOptions,
-} from "../storage/codec";
+import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
 // import { collectAll } from "../commands/async";
-import type { ExtractIndexes, ExtractSchema, TableDefinition } from "../schema/table";
+import type {
+  ExtractIndexes,
+  ExtractSchema,
+  TableDefinition,
+} from "../schema/table";
 import { getTraceContextForDB, type HyperDBTracerOption } from "../core/tracer";
 import { refVar, type RefVar } from "../utils";
 
@@ -149,12 +152,10 @@ export class SubscribableDBTx implements HyperDBTx {
   }
 
   withTraits(...traits: Trait[]): HyperDBTx {
-    return new SubscribableDBTx(
-      this.subDb,
-      this.txDb,
-      this.state,
-      [...this.traits, ...traits],
-    );
+    return new SubscribableDBTx(this.subDb, this.txDb, this.state, [
+      ...this.traits,
+      ...traits,
+    ]);
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
@@ -501,10 +502,7 @@ export class SubscribableDB implements HyperDB {
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
-    return new SubscribableDBTx(
-      this,
-      yield* this.db.beginTx(),
-    );
+    return new SubscribableDBTx(this, yield* this.db.beginTx());
   }
 
   withTraits(...traits: Trait[]): HyperDB {

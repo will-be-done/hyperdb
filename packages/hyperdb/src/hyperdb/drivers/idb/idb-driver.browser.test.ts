@@ -236,20 +236,28 @@ describe("IdbDriver", () => {
       );
 
       const messages = logSpy.mock.calls.map(([message]) => String(message));
-      expect(messages.some((message) =>
-        /IDB transaction start .* mode readwrite/.test(message),
-      )).toBe(true);
-      expect(messages.some((message) =>
-        /IDB transaction commit .* mode readwrite/.test(message),
-      )).toBe(true);
-      expect(messages.some((message) =>
-        /IDB insert .* table idbTasks .* 2 rows/.test(message),
-      )).toBe(true);
-      expect(messages.some((message) =>
-        /IDB scan .* table idbTasks .* using index byProjectRank .* 2 rows/.test(
-          message,
+      expect(
+        messages.some((message) =>
+          /IDB transaction start .* mode readwrite/.test(message),
         ),
-      )).toBe(true);
+      ).toBe(true);
+      expect(
+        messages.some((message) =>
+          /IDB transaction commit .* mode readwrite/.test(message),
+        ),
+      ).toBe(true);
+      expect(
+        messages.some((message) =>
+          /IDB insert .* table idbTasks .* 2 rows/.test(message),
+        ),
+      ).toBe(true);
+      expect(
+        messages.some((message) =>
+          /IDB scan .* table idbTasks .* using index byProjectRank .* 2 rows/.test(
+            message,
+          ),
+        ),
+      ).toBe(true);
     } finally {
       logSpy.mockRestore();
     }
@@ -289,7 +297,8 @@ describe("IdbDriver", () => {
       ).resolves.toEqual([second, first]);
 
       expect(
-        (getAllRecordsSpy?.mock.calls.length ?? 0) + indexGetAllSpy.mock.calls.length,
+        (getAllRecordsSpy?.mock.calls.length ?? 0) +
+          indexGetAllSpy.mock.calls.length,
       ).toBeGreaterThan(0);
       expect(getSpy).not.toHaveBeenCalled();
       expect(storeOpenCursorSpy).not.toHaveBeenCalled();
@@ -482,7 +491,9 @@ describe("IdbDriver", () => {
     await deleteDatabase(dbName);
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    let firstDriver: Awaited<ReturnType<typeof openIndexedDBDriver>> | undefined;
+    let firstDriver:
+      | Awaited<ReturnType<typeof openIndexedDBDriver>>
+      | undefined;
     let secondDriver:
       | Awaited<ReturnType<typeof openIndexedDBDriver>>
       | undefined;
@@ -507,9 +518,11 @@ describe("IdbDriver", () => {
       await execAsync(secondDb.loadTables([tasksTable]));
 
       const messages = logSpy.mock.calls.map(([message]) => String(message));
-      expect(messages.some((message) =>
-        /IDB rebuild indexes .* table idbTasks/.test(message),
-      )).toBe(false);
+      expect(
+        messages.some((message) =>
+          /IDB rebuild indexes .* table idbTasks/.test(message),
+        ),
+      ).toBe(false);
       expect(
         await execAsync(
           secondDb.intervalScan(tasksTable, "byProjectRank", [
@@ -545,9 +558,7 @@ describe("IdbDriver", () => {
 
     expect(versionChanges).toHaveLength(1);
     await expect(
-      execAsync(
-        oldDb.upsert(reloadTableV1, [{ id: "row-1", title: "Stale" }]),
-      ),
+      execAsync(oldDb.upsert(reloadTableV1, [{ id: "row-1", title: "Stale" }])),
     ).rejects.toThrow(/stale.*reopen/i);
 
     await execAsync(

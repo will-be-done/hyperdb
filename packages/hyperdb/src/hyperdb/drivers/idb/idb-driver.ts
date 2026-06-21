@@ -151,15 +151,17 @@ function createIndexSignature(tableDef: TableDefinition): string {
     layout: "native-table-store",
     rowStorage: "raw",
     sortKeyMode: tableDef.schemaValidator ? "scan" : "stored",
-    indexes: Object.keys(tableDef.indexes).sort().map((indexName) => {
-      const indexDef = tableDef.indexes[indexName];
+    indexes: Object.keys(tableDef.indexes)
+      .sort()
+      .map((indexName) => {
+        const indexDef = tableDef.indexes[indexName];
 
-      return {
-        name: indexName,
-        type: indexDef.type,
-        cols: indexDef.cols.map(String),
-      };
-    }),
+        return {
+          name: indexName,
+          type: indexDef.type,
+          cols: indexDef.cols.map(String),
+        };
+      }),
   });
 }
 
@@ -213,7 +215,9 @@ function validateHashBounds(
       );
     }
 
-    if (bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))) {
+    if (
+      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
+    ) {
       throw new Error(
         `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
       );
@@ -418,7 +422,9 @@ async function getAllRecords<T>(
 
     while (true) {
       const remaining =
-        options.limit === undefined ? undefined : options.limit - results.length;
+        options.limit === undefined
+          ? undefined
+          : options.limit - results.length;
       if (remaining !== undefined && remaining <= 0) return results;
 
       const count =
@@ -488,7 +494,9 @@ async function getAllRecords<T>(
         direction === "prev" || direction === "prevunique"
           ? [...results].reverse()
           : results;
-      return options.limit === undefined ? ordered : ordered.slice(0, options.limit);
+      return options.limit === undefined
+        ? ordered
+        : ordered.slice(0, options.limit);
     }
 
     currentQuery = advanceRange(currentQuery, keys[keys.length - 1], "next");
@@ -691,13 +699,14 @@ async function performScan(
         return result;
       }
 
-      if (
-        isUnfilteredClauses(clauses) &&
-        selectOptions.limit === undefined
-      ) {
-        const records = await getAllRecords<NativeStoredRecord>(store, undefined, {
-          direction,
-        });
+      if (isUnfilteredClauses(clauses) && selectOptions.limit === undefined) {
+        const records = await getAllRecords<NativeStoredRecord>(
+          store,
+          undefined,
+          {
+            direction,
+          },
+        );
         const result = records.map(decodeStoredRecord);
         logIdbOperation("scan", startedAt, {
           tableName,
@@ -932,7 +941,9 @@ export class IdbDriver implements DBDriver {
     }
   }
 
-  *loadTables(tableDefinitions: TableDefinition<any>[]): Generator<DBCmd, void> {
+  *loadTables(
+    tableDefinitions: TableDefinition<any>[],
+  ): Generator<DBCmd, void> {
     yield* unwrapCb(async () => {
       const release = await this.lock.acquireWrite();
       try {
@@ -956,25 +967,37 @@ export class IdbDriver implements DBDriver {
   *insert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
-      await performInsert(tx, tableDef, values);
-    });
+    yield* this.withTransaction(
+      "readwrite",
+      [tableStoreName(tableName)],
+      async (tx) => {
+        await performInsert(tx, tableDef, values);
+      },
+    );
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
-      await performUpsert(tx, tableDef, values);
-    });
+    yield* this.withTransaction(
+      "readwrite",
+      [tableStoreName(tableName)],
+      async (tx) => {
+        await performUpsert(tx, tableDef, values);
+      },
+    );
   }
 
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
     if (values.length === 0) return;
     const tableDef = this.getTableDefinition(tableName);
-    yield* this.withTransaction("readwrite", [tableStoreName(tableName)], async (tx) => {
-      await performDelete(tx, tableDef, values);
-    });
+    yield* this.withTransaction(
+      "readwrite",
+      [tableStoreName(tableName)],
+      async (tx) => {
+        await performDelete(tx, tableDef, values);
+      },
+    );
   }
 
   *intervalScan(

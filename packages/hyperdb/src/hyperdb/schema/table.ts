@@ -78,7 +78,9 @@ export interface TableDefinition<
   schemaFields?: ValidatorSchema;
   indexes: I;
   idIndexName: string;
-  v(): TSchema extends ValidatorSchema ? ObjectValidator<TSchema> : Validator<T>;
+  v(): TSchema extends ValidatorSchema
+    ? ObjectValidator<TSchema>
+    : Validator<T>;
   index<
     const TName extends string,
     const TCols extends readonly IndexableColumn<T>[],
@@ -128,11 +130,7 @@ export interface TableDefinition<
   >;
 }
 
-export type AnyTableDefinition = TableDefinition<
-  any,
-  AnyIndexDefinitions,
-  any
->;
+export type AnyTableDefinition = TableDefinition<any, AnyIndexDefinitions, any>;
 
 export type ExtractSchema<TTable> =
   TTable extends TableDefinition<infer T, any, any> ? T : never;

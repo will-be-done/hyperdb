@@ -1,5 +1,3 @@
- 
-
 import { describe, expect, it } from "vitest";
 import { convertWhereToBound } from "./bounds";
 import { MAX, MIN } from "../primitives";

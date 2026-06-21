@@ -141,9 +141,7 @@ describe("ordered array", () => {
       for (let j = 0; j < i; j++) {
         const m = numbers[j];
         // search
-        expect(search(a, m).found).toBe(
-          a.findIndex((x) => x.key === m),
-        );
+        expect(search(a, m).found).toBe(a.findIndex((x) => x.key === m));
         expect(search(a, m - 0.1).closest).toBe(
           a.findIndex((x) => x.key === m) + 1,
         );

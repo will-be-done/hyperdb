@@ -15,15 +15,14 @@ export type NormalizeResult<T> =
   | { ok: true; omitted: true }
   | { ok: false; message: string; path: ValidationPath };
 
-export type Infer<TValidator> =
-  TValidator extends {
-    normalize(
-      value: unknown,
-      path?: ValidationPath,
-    ): NormalizeResult<infer TValue>;
-  }
-    ? TValue
-    : never;
+export type Infer<TValidator> = TValidator extends {
+  normalize(
+    value: unknown,
+    path?: ValidationPath,
+  ): NormalizeResult<infer TValue>;
+}
+  ? TValue
+  : never;
 
 type OptionalKeys<TFields extends Record<string, Validator<any>>> = {
   [K in keyof TFields]: TFields[K] extends OptionalValidator<any> ? K : never;
@@ -80,8 +79,10 @@ interface ValidatorOutput<T> {
   normalize(value: unknown, path?: ValidationPath): NormalizeResult<T>;
 }
 
-interface BaseValidator<T, TKind extends ValidatorKind>
-  extends ValidatorOutput<T> {
+interface BaseValidator<
+  T,
+  TKind extends ValidatorKind,
+> extends ValidatorOutput<T> {
   readonly kind: TKind;
 }
 
@@ -107,26 +108,30 @@ export interface ObjectValidator<
   readonly fields: TFields;
 }
 
-export interface RecordValidator<TKey extends string, TValue>
-  extends BaseValidator<Record<TKey, TValue>, "record"> {
+export interface RecordValidator<
+  TKey extends string,
+  TValue,
+> extends BaseValidator<Record<TKey, TValue>, "record"> {
   readonly keyValidator: Validator<TKey>;
   readonly valueValidator: Validator<TValue>;
 }
 
-export interface UnionValidator<TValidators extends readonly Validator<any>[]>
-  extends BaseValidator<Infer<TValidators[number]>, "union"> {
+export interface UnionValidator<
+  TValidators extends readonly Validator<any>[],
+> extends BaseValidator<Infer<TValidators[number]>, "union"> {
   readonly validators: TValidators;
 }
 
 export interface LiteralValidator<
   T extends string | number | bigint | boolean | null,
->
-  extends BaseValidator<T, "literal"> {
+> extends BaseValidator<T, "literal"> {
   readonly literalValue: T;
 }
 
-export interface OptionalValidator<T>
-  extends BaseValidator<T | undefined, "optional"> {
+export interface OptionalValidator<T> extends BaseValidator<
+  T | undefined,
+  "optional"
+> {
   readonly isOptional: true;
   readonly inner: Validator<T>;
 }
@@ -300,7 +305,9 @@ export function assertValid<T>(validator: Validator<T>, value: unknown): T {
   return result.value;
 }
 
-export function isIndexableValueValidator(validator: Validator<unknown>): boolean {
+export function isIndexableValueValidator(
+  validator: Validator<unknown>,
+): boolean {
   switch (validator.kind) {
     case "string":
     case "number":
@@ -481,10 +488,10 @@ export const v = {
         const normalized: Record<string, TValue> = {};
         for (const [key, fieldValue] of Object.entries(value)) {
           if (!validRecordKey(key)) {
-            return fail("record keys must be non-empty ASCII keys that do not start with $", [
-              ...path,
-              key,
-            ]);
+            return fail(
+              "record keys must be non-empty ASCII keys that do not start with $",
+              [...path, key],
+            );
           }
 
           const keyResult = keyValidator.normalize(key, [...path, key]);

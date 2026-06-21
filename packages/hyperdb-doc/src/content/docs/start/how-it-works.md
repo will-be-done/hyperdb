@@ -35,7 +35,7 @@ See [Schemas](/database/schemas/) and [Data Types](/database/data-types/).
 
 ### 2. Commands: selectors and actions
 
-Reads and writes are **generator functions** that *describe* work instead of
+Reads and writes are **generator functions** that _describe_ work instead of
 performing it directly. When you `yield*` a query or a mutation, you are emitting
 a command; you never call the storage driver yourself.
 
@@ -69,7 +69,7 @@ export const createTask = action({
 });
 ```
 
-Because commands are *descriptions*, the same selector or action can be executed
+Because commands are _descriptions_, the same selector or action can be executed
 synchronously against an in-memory driver, or asynchronously against IndexedDB —
 the code does not change. See [Reading Data](/database/reading-data/) and
 [Writing Data](/database/writing-data/).
@@ -131,11 +131,11 @@ Every driver is either synchronous (in-memory, sync SQLite) or asynchronous
 (IndexedDB, async SQLite). The runtime exposes a matching pair of entry points
 for almost everything:
 
-| Sync | Async |
-| --- | --- |
-| `syncDispatch(db, action(args))` | `asyncDispatch(db, action(args))` |
-| `select(db, gen)` | `runSelectorAsync(db, () => gen)` |
-| `execSync(generator)` | `execAsync(generator)` |
+| Sync                              | Async                                   |
+| --------------------------------- | --------------------------------------- |
+| `syncDispatch(db, action(args))`  | `asyncDispatch(db, action(args))`       |
+| `select(db, gen)`                 | `runSelectorAsync(db, () => gen)`       |
+| `execSync(generator)`             | `execAsync(generator)`                  |
 | `useSyncSelector` / `useDispatch` | `useAsyncSelector` / `useAsyncDispatch` |
 
 Use the sync variants with the in-memory and synchronous SQLite drivers; use the

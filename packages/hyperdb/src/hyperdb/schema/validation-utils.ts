@@ -16,7 +16,10 @@ export function validRecordKey(key: string): boolean {
   return true;
 }
 
-export function fail(message: string, path: ValidationPath): NormalizeResult<never> {
+export function fail(
+  message: string,
+  path: ValidationPath,
+): NormalizeResult<never> {
   return { ok: false, message, path };
 }
 

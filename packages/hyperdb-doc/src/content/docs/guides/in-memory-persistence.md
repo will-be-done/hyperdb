@@ -36,7 +36,7 @@ and **persist** each batch of changes to IndexedDB.
 
 ## 1. Give each persisted table a full-scan index
 
-To hydrate you need to read *every* row of a table. The built-in `byId` index is
+To hydrate you need to read _every_ row of a table. The built-in `byId` index is
 a **hash** index — it can only look up a single id, not scan a whole table. So add
 a **btree** index over `id` (here `byIds`) to every table you persist:
 
@@ -138,7 +138,7 @@ the rows a selector touches. Don't hydrate an unbounded server table this way.
 :::note[Load on demand: a hybrid mode (in development)]
 Eager hydration is the simplest model, but not the only one. A **hybrid** mode —
 in development — flips it around: instead of loading everything up front, a read
-checks the in-memory tier first and, on a miss, runs the *same* query against the
+checks the in-memory tier first and, on a miss, runs the _same_ query against the
 persistent tier and caches the result back into memory for next time.
 
 The trade-off is that selectors and dispatch become **async** (a read may need to
@@ -162,7 +162,12 @@ Because IndexedDB is async while commits arrive synchronously, a small queue
 transaction at a time.
 
 ```ts
-import { execAsync, type HyperDB, type Op, type SubscribableDB } from "@will-be-done/hyperdb-lib";
+import {
+  execAsync,
+  type HyperDB,
+  type Op,
+  type SubscribableDB,
+} from "@will-be-done/hyperdb-lib";
 
 export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
   const pending: Op[][] = [];

@@ -30,12 +30,12 @@ export const projectTasks = selector({
 
 Object-form selectors accept:
 
-| Field | Description |
-| --- | --- |
-| `name` | Required display/debug name (shown in traces) |
-| `args` | Validator map for the single args object |
-| `handler` | Generator function that does the reading |
-| `skipTrace` | `true`, or `{ rootTrace, childTrace }` to skip tracing |
+| Field         | Description                                                                                            |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| `name`        | Required display/debug name (shown in traces)                                                          |
+| `args`        | Validator map for the single args object                                                               |
+| `handler`     | Generator function that does the reading                                                               |
+| `skipTrace`   | `true`, or `{ rootTrace, childTrace }` to skip tracing                                                 |
 | `memoization` | `{ root?, selfChild? }` cache controls — see [Selectors & Reactivity](/database/selectors-reactivity/) |
 
 You can also wrap a bare generator function instead of using the object form.
@@ -65,13 +65,13 @@ on it; each column you constrain must belong to the index you selected.
 
 Available comparisons:
 
-| Method | Meaning |
-| --- | --- |
-| `q.eq(col, val)` | equal to |
-| `q.gt(col, val)` | greater than |
+| Method            | Meaning               |
+| ----------------- | --------------------- |
+| `q.eq(col, val)`  | equal to              |
+| `q.gt(col, val)`  | greater than          |
 | `q.gte(col, val)` | greater than or equal |
-| `q.lt(col, val)` | less than |
-| `q.lte(col, val)` | less than or equal |
+| `q.lt(col, val)`  | less than             |
+| `q.lte(col, val)` | less than or equal    |
 
 Comparisons apply to **index columns**, and which combinations are legal depends
 on the column order of the index. The rules (equality prefix + one trailing
@@ -85,18 +85,15 @@ To express an OR, return an **array** of query branches from `where`, or use the
 ```ts
 import { selectFrom, or } from "@will-be-done/hyperdb-lib";
 
-selectFrom(tasksTable, "byProjectState")
-  .where((q) => or(
-    q.eq("projectId", "p1").eq("state", "todo"),
-    q.eq("projectId", "p2"),
-  ));
+selectFrom(tasksTable, "byProjectState").where((q) =>
+  or(q.eq("projectId", "p1").eq("state", "todo"), q.eq("projectId", "p2")),
+);
 
 // equivalent, returning an array directly:
-selectFrom(tasksTable, "byProjectState")
-  .where((q) => [
-    q.eq("projectId", "p1").eq("state", "todo"),
-    q.eq("projectId", "p2"),
-  ]);
+selectFrom(tasksTable, "byProjectState").where((q) => [
+  q.eq("projectId", "p1").eq("state", "todo"),
+  q.eq("projectId", "p2"),
+]);
 ```
 
 This is the idiom for batched lookups — for example fetching many rows by id in
@@ -123,8 +120,11 @@ reverse. Hash indexes are for equality lookups and do not provide ordering.
 `yield*`-ing a query returns an **array** of rows:
 
 ```ts
-const tasks = yield* selectFrom(tasksTable, "byProjectOrder")
-  .where((q) => q.eq("projectId", projectId));
+const tasks =
+  yield *
+  selectFrom(tasksTable, "byProjectOrder").where((q) =>
+    q.eq("projectId", projectId),
+  );
 ```
 
 ### The first row
@@ -133,13 +133,17 @@ const tasks = yield* selectFrom(tasksTable, "byProjectOrder")
 returns a fallback instead of `undefined`.
 
 ```ts
-const task = yield* selectFrom(tasksTable, "byId")
-  .where((q) => q.eq("id", taskId))
-  .first();
+const task =
+  yield *
+  selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", taskId))
+    .first();
 
-const stateOrDefault = yield* selectFrom(tasksTable, "byId")
-  .where((q) => q.eq("id", taskId))
-  .firstOr({ id: taskId, state: "todo" } as Task);
+const stateOrDefault =
+  yield *
+  selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", taskId))
+    .firstOr({ id: taskId, state: "todo" } as Task);
 ```
 
 Both apply a `limit(1)` internally, so they stop after the first match.
@@ -176,7 +180,9 @@ import { select, runSelectorAsync } from "@will-be-done/hyperdb-lib";
 const tasks = select(db, projectTasks({ projectId: "p1" }));
 
 // asynchronous drivers (IndexedDB, async SQLite)
-const tasksAsync = await runSelectorAsync(db, () => projectTasks({ projectId: "p1" }));
+const tasksAsync = await runSelectorAsync(db, () =>
+  projectTasks({ projectId: "p1" }),
+);
 ```
 
 For cached, subscribed reads outside React, see

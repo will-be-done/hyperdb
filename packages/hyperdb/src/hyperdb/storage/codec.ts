@@ -206,9 +206,15 @@ function assertRecordResult<T>(
   return result.value;
 }
 
-function assertStringId(table: TableDefinition, original: unknown, value: unknown) {
+function assertStringId(
+  table: TableDefinition,
+  original: unknown,
+  value: unknown,
+) {
   if (!isPlainObject(value) || typeof value.id !== "string") {
-    throw new Error(`${errorPrefix(table, original)}: id must be a string at id`);
+    throw new Error(
+      `${errorPrefix(table, original)}: id must be a string at id`,
+    );
   }
 }
 
@@ -262,10 +268,7 @@ export function decodeValueFromStorage(value: unknown): unknown {
       return BigInt(value.value);
     }
 
-    if (
-      value.$hyperdbType === "arrayBuffer" &&
-      Array.isArray(value.value)
-    ) {
+    if (value.$hyperdbType === "arrayBuffer" && Array.isArray(value.value)) {
       return new Uint8Array(value.value as number[]).buffer;
     }
 
@@ -290,7 +293,11 @@ export function normalizeRecordForDriver<TTable extends TableDefinition>(
 ): Row {
   const normalized = table.schemaValidator
     ? options.runtimeValidation
-      ? assertRecordResult(table, record, table.schemaValidator.normalize(record))
+      ? assertRecordResult(
+          table,
+          record,
+          table.schemaValidator.normalize(record),
+        )
       : assertRecordResult(
           table,
           record,
@@ -308,7 +315,9 @@ export function normalizeRecordsForDriver<TTable extends TableDefinition>(
   records: unknown[],
   options: CodecOptions,
 ): Row[] {
-  return records.map((record) => normalizeRecordForDriver(table, record, options));
+  return records.map((record) =>
+    normalizeRecordForDriver(table, record, options),
+  );
 }
 
 export function validateRecordFromDriver<T>(
@@ -320,7 +329,11 @@ export function validateRecordFromDriver<T>(
     return record as T;
   }
 
-  return assertRecordResult(table, record, table.schemaValidator.normalize(record));
+  return assertRecordResult(
+    table,
+    record,
+    table.schemaValidator.normalize(record),
+  );
 }
 
 export function validateRecordsFromDriver<T>(
@@ -328,5 +341,7 @@ export function validateRecordsFromDriver<T>(
   records: unknown[],
   options: CodecOptions,
 ): T[] {
-  return records.map((record) => validateRecordFromDriver(table, record, options));
+  return records.map((record) =>
+    validateRecordFromDriver(table, record, options),
+  );
 }

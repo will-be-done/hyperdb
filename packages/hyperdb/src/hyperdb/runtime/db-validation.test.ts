@@ -7,7 +7,10 @@ import type { Row, SelectOptions, WhereClause } from "../core/primitives";
 import type { DBCmd } from "../commands/async";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
-import { insert as actionInsert, syncDispatch } from "../commands/action/builders";
+import {
+  insert as actionInsert,
+  syncDispatch,
+} from "../commands/action/builders";
 import { AsyncDB } from "../test-utils/async-db";
 import { createDriverFactories } from "../test-utils/driver-factories";
 
@@ -94,7 +97,9 @@ describe("DB runtime validation and codec boundary", () => {
           } as any,
         ]),
       ),
-    ).toThrow(/Table docs record doc-1: unexpected object field extra at extra/);
+    ).toThrow(
+      /Table docs record doc-1: unexpected object field extra at extra/,
+    );
 
     expect(driver.inserted).toEqual([]);
   });
@@ -234,9 +239,9 @@ describe("DB runtime validation and codec boundary", () => {
     driver.scanRows = [{ id: "doc-1", title: 123, payload: null }];
     const db = new DB(driver, { runtimeValidation: true });
 
-    expect(() => execSync(db.intervalScan(docsTable, "byTitle", scanAll))).toThrow(
-      /Table docs record doc-1: expected string at title/,
-    );
+    expect(() =>
+      execSync(db.intervalScan(docsTable, "byTitle", scanAll)),
+    ).toThrow(/Table docs record doc-1: expected string at title/);
   });
 
   it("passes normalized logical records through the driver boundary", () => {
@@ -316,7 +321,6 @@ describe("DB runtime validation and codec boundary", () => {
     );
     expect(driver.inserted).toEqual([]);
   });
-
 
   it("treats empty write batches as no-ops", () => {
     const driver = new RecordingDriver();

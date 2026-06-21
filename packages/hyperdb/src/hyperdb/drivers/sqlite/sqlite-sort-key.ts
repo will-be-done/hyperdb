@@ -116,7 +116,7 @@ function encodeNumber(value: number): string {
 
   if ((bytes[0] & 0x80) !== 0) {
     for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = (~bytes[i]) & 0xff;
+      bytes[i] = ~bytes[i] & 0xff;
     }
   } else {
     bytes[0] = bytes[0] ^ 0x80;

@@ -378,7 +378,10 @@ describe("devtool runtime tracing", () => {
       select(
         hyperDBTraceStore.getDB(),
         (function* () {
-          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbDurationMs")
+          const rows = yield* selectFrom(
+            traceRootsRuntimeTable,
+            "byDbDurationMs",
+          )
             .where((q) => q.eq("dbKey", "db-a"))
             .order("asc")
             .limit(10);
@@ -392,7 +395,10 @@ describe("devtool runtime tracing", () => {
       select(
         hyperDBTraceStore.getDB(),
         (function* () {
-          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbStartedAt")
+          const rows = yield* selectFrom(
+            traceRootsRuntimeTable,
+            "byDbStartedAt",
+          )
             .where((q) => q.eq("dbKey", unassignedTraceDBKey))
             .order("desc")
             .limit(10);

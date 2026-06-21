@@ -11,9 +11,7 @@ import {
   type InferObject,
   type Validator,
 } from "../../schema/values";
-import {
-  wrapGeneratorWithTraceMeta,
-} from "../../tracing/metadata";
+import { wrapGeneratorWithTraceMeta } from "../../tracing/metadata";
 import {
   pruneChildMemo,
   runCommandGenerator,

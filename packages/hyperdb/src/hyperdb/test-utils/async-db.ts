@@ -83,7 +83,9 @@ export class AsyncDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Promise<ExtractSchema<TTable>[]> {
-    return execAsync(this.db.intervalScan(table, indexName, clauses, selectOptions));
+    return execAsync(
+      this.db.intervalScan(table, indexName, clauses, selectOptions),
+    );
   }
 
   insert<TTable extends TableDefinition<any, any, any>>(

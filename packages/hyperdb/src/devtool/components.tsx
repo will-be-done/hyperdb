@@ -256,8 +256,7 @@ type TraceDBOption = {
   traceCount: number;
 };
 
-const traceDBId = (trace: TraceSummary): string =>
-  trace.dbId ?? unassignedDBId;
+const traceDBId = (trace: TraceSummary): string => trace.dbId ?? unassignedDBId;
 
 const getTraceDBOptions = (traces: TraceSummary[]): TraceDBOption[] => {
   const optionMap = new Map<string, TraceDBOption>();
@@ -2112,7 +2111,9 @@ const TraceRowView = React.memo(
         <RowBody>
           <RowTitle>
             <RowName>{name}</RowName>
-            {cached ? <TraceListCachedBadge>cached</TraceListCachedBadge> : null}
+            {cached ? (
+              <TraceListCachedBadge>cached</TraceListCachedBadge>
+            ) : null}
           </RowTitle>
           <RowMeta>
             <span>
@@ -2172,17 +2173,14 @@ const TraceRowsView = React.memo(
       return () => observer.disconnect();
     }, []);
 
-    const handleScroll = useCallback(
-      (event: React.UIEvent<HTMLDivElement>) => {
-        const nextScrollTop = event.currentTarget.scrollTop;
-        setViewport((current) =>
-          current.scrollTop === nextScrollTop
-            ? current
-            : { ...current, scrollTop: nextScrollTop },
-        );
-      },
-      [],
-    );
+    const handleScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+      const nextScrollTop = event.currentTarget.scrollTop;
+      setViewport((current) =>
+        current.scrollTop === nextScrollTop
+          ? current
+          : { ...current, scrollTop: nextScrollTop },
+      );
+    }, []);
 
     const virtualWindow = useMemo(() => {
       if (viewport.height <= 0) {
@@ -2326,11 +2324,13 @@ const MutationEventData = React.memo(({ event }: { event: MutationEvent }) => {
 });
 MutationEventData.displayName = "MutationEventData";
 
-const SelectEventData = React.memo(({ event }: { event: SelectCommandEvent }) => (
-  <>
-    <DataBlock>{formatSelectQuery(event)}</DataBlock>
-  </>
-));
+const SelectEventData = React.memo(
+  ({ event }: { event: SelectCommandEvent }) => (
+    <>
+      <DataBlock>{formatSelectQuery(event)}</DataBlock>
+    </>
+  ),
+);
 SelectEventData.displayName = "SelectEventData";
 
 const TraceOverview = React.memo(({ trace }: { trace: RootTrace }) => (
@@ -2369,167 +2369,173 @@ const TraceOverview = React.memo(({ trace }: { trace: RootTrace }) => (
 ));
 TraceOverview.displayName = "TraceOverview";
 
-const SelectEvents = React.memo(({ events }: { events: SelectCommandEvent[] }) => {
-  if (events.length === 0) return <Empty>No selects</Empty>;
+const SelectEvents = React.memo(
+  ({ events }: { events: SelectCommandEvent[] }) => {
+    if (events.length === 0) return <Empty>No selects</Empty>;
 
-  return (
-    <>
-      {events.map((event) => (
-        <EventBlock key={event.id}>
-          <EventHeader>
-            <EventHeaderLeft>
-              <StatusDot tone={statusTone(event.status)} />
-              <span>
-                {event.tableName}.{event.index}
-              </span>
-            </EventHeaderLeft>
-            <RowMeta>
-              <span>{formatRecordCount(event)} rows</span>
-              <span>{formatDuration(event.durationMs)}</span>
-            </RowMeta>
-          </EventHeader>
-          <EventBlockContent>
-            <SelectEventData event={event} />
-          </EventBlockContent>
-        </EventBlock>
-      ))}
-    </>
-  );
-});
+    return (
+      <>
+        {events.map((event) => (
+          <EventBlock key={event.id}>
+            <EventHeader>
+              <EventHeaderLeft>
+                <StatusDot tone={statusTone(event.status)} />
+                <span>
+                  {event.tableName}.{event.index}
+                </span>
+              </EventHeaderLeft>
+              <RowMeta>
+                <span>{formatRecordCount(event)} rows</span>
+                <span>{formatDuration(event.durationMs)}</span>
+              </RowMeta>
+            </EventHeader>
+            <EventBlockContent>
+              <SelectEventData event={event} />
+            </EventBlockContent>
+          </EventBlock>
+        ))}
+      </>
+    );
+  },
+);
 SelectEvents.displayName = "SelectEvents";
 
-const MutationEvents = React.memo(({
-  events,
-  scrollParentRef,
-}: {
-  events: MutationEvent[];
-  scrollParentRef: React.RefObject<HTMLDivElement | null>;
-}) => {
-  const [visibleCount, setVisibleCount] = useState(mutationEventBatchSize);
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  const hasMore = visibleCount < events.length;
-  const visibleEvents = events.slice(0, visibleCount);
+const MutationEvents = React.memo(
+  ({
+    events,
+    scrollParentRef,
+  }: {
+    events: MutationEvent[];
+    scrollParentRef: React.RefObject<HTMLDivElement | null>;
+  }) => {
+    const [visibleCount, setVisibleCount] = useState(mutationEventBatchSize);
+    const sentinelRef = useRef<HTMLDivElement>(null);
+    const hasMore = visibleCount < events.length;
+    const visibleEvents = events.slice(0, visibleCount);
 
-  useEffect(() => {
-    if (!hasMore) return;
+    useEffect(() => {
+      if (!hasMore) return;
 
-    const root = scrollParentRef.current;
-    const sentinel = sentinelRef.current;
-    const IntersectionObserverCtor = globalThis.IntersectionObserver;
+      const root = scrollParentRef.current;
+      const sentinel = sentinelRef.current;
+      const IntersectionObserverCtor = globalThis.IntersectionObserver;
 
-    if (!root || !sentinel || !IntersectionObserverCtor) return;
+      if (!root || !sentinel || !IntersectionObserverCtor) return;
 
-    const observer = new IntersectionObserverCtor(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
+      const observer = new IntersectionObserverCtor(
+        (entries) => {
+          if (!entries.some((entry) => entry.isIntersecting)) return;
+
+          setVisibleCount((count) =>
+            Math.min(count + mutationEventBatchSize, events.length),
+          );
+        },
+        { root, rootMargin: "96px 0px" },
+      );
+
+      observer.observe(sentinel);
+
+      return () => {
+        observer.disconnect();
+      };
+    }, [events.length, hasMore, scrollParentRef, visibleCount]);
+
+    useEffect(() => {
+      if (!hasMore || globalThis.IntersectionObserver) return;
+
+      const root = scrollParentRef.current;
+      if (!root) return;
+
+      const loadWhenNearBottom = () => {
+        const distanceFromBottom =
+          root.scrollHeight - root.scrollTop - root.clientHeight;
+
+        if (distanceFromBottom > 96) return;
 
         setVisibleCount((count) =>
           Math.min(count + mutationEventBatchSize, events.length),
         );
-      },
-      { root, rootMargin: "96px 0px" },
+      };
+
+      root.addEventListener("scroll", loadWhenNearBottom, { passive: true });
+      loadWhenNearBottom();
+
+      return () => {
+        root.removeEventListener("scroll", loadWhenNearBottom);
+      };
+    }, [events.length, hasMore, scrollParentRef, visibleCount]);
+
+    if (events.length === 0) return <Empty>No mutations</Empty>;
+
+    return (
+      <>
+        {visibleEvents.map((event) => (
+          <EventBlock key={event.id}>
+            <EventHeader>
+              <EventHeaderLeft>
+                <StatusDot tone={statusTone(event.status)} />
+                <span>
+                  {event.kind} {event.tableName}
+                </span>
+              </EventHeaderLeft>
+              <RowMeta>
+                <span>{formatMutationSummary(event)}</span>
+                <span>{formatDuration(event.durationMs)}</span>
+              </RowMeta>
+            </EventHeader>
+            <EventBlockContent>
+              <MutationEventData event={event} />
+            </EventBlockContent>
+          </EventBlock>
+        ))}
+        {hasMore ? (
+          <LoadMoreSentinel ref={sentinelRef} aria-hidden="true" />
+        ) : null}
+      </>
     );
-
-    observer.observe(sentinel);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [events.length, hasMore, scrollParentRef, visibleCount]);
-
-  useEffect(() => {
-    if (!hasMore || globalThis.IntersectionObserver) return;
-
-    const root = scrollParentRef.current;
-    if (!root) return;
-
-    const loadWhenNearBottom = () => {
-      const distanceFromBottom =
-        root.scrollHeight - root.scrollTop - root.clientHeight;
-
-      if (distanceFromBottom > 96) return;
-
-      setVisibleCount((count) =>
-        Math.min(count + mutationEventBatchSize, events.length),
-      );
-    };
-
-    root.addEventListener("scroll", loadWhenNearBottom, { passive: true });
-    loadWhenNearBottom();
-
-    return () => {
-      root.removeEventListener("scroll", loadWhenNearBottom);
-    };
-  }, [events.length, hasMore, scrollParentRef, visibleCount]);
-
-  if (events.length === 0) return <Empty>No mutations</Empty>;
-
-  return (
-    <>
-      {visibleEvents.map((event) => (
-        <EventBlock key={event.id}>
-          <EventHeader>
-            <EventHeaderLeft>
-              <StatusDot tone={statusTone(event.status)} />
-              <span>
-                {event.kind} {event.tableName}
-              </span>
-            </EventHeaderLeft>
-            <RowMeta>
-              <span>{formatMutationSummary(event)}</span>
-              <span>{formatDuration(event.durationMs)}</span>
-            </RowMeta>
-          </EventHeader>
-          <EventBlockContent>
-            <MutationEventData event={event} />
-          </EventBlockContent>
-        </EventBlock>
-      ))}
-      {hasMore ? (
-        <LoadMoreSentinel ref={sentinelRef} aria-hidden="true" />
-      ) : null}
-    </>
-  );
-});
+  },
+);
 MutationEvents.displayName = "MutationEvents";
 
-const CallTreeOperationView = React.memo(({
-  operation,
-  lookup,
-}: {
-  operation: CallTreeOperation;
-  lookup: CallTreeOperationLookup;
-}) => {
-  const childOperations =
-    operation.kind === "frame"
-      ? getCallTreeOperationsFromLookup(operation.frame, lookup)
-      : [];
-  const badges = getCallTreeOperationBadges(operation);
+const CallTreeOperationView = React.memo(
+  ({
+    operation,
+    lookup,
+  }: {
+    operation: CallTreeOperation;
+    lookup: CallTreeOperationLookup;
+  }) => {
+    const childOperations =
+      operation.kind === "frame"
+        ? getCallTreeOperationsFromLookup(operation.frame, lookup)
+        : [];
+    const badges = getCallTreeOperationBadges(operation);
 
-  return (
-    <div>
-      <TreeRow>
-        <TreeLabel>{formatCallTreeOperation(operation)}</TreeLabel>
-        {badges.map((badge) => (
-          <TreeBadge key={badge.text} tone={badge.tone}>
-            {badge.text}
-          </TreeBadge>
-        ))}
-      </TreeRow>
-      {childOperations.length > 0 && (
-        <div className={frameIndent}>
-          {childOperations.map((child) => (
-            <CallTreeOperationView
-              key={child.id}
-              operation={child}
-              lookup={lookup}
-            />
+    return (
+      <div>
+        <TreeRow>
+          <TreeLabel>{formatCallTreeOperation(operation)}</TreeLabel>
+          {badges.map((badge) => (
+            <TreeBadge key={badge.text} tone={badge.tone}>
+              {badge.text}
+            </TreeBadge>
           ))}
-        </div>
-      )}
-    </div>
-  );
-});
+        </TreeRow>
+        {childOperations.length > 0 && (
+          <div className={frameIndent}>
+            {childOperations.map((child) => (
+              <CallTreeOperationView
+                key={child.id}
+                operation={child}
+                lookup={lookup}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  },
+);
 CallTreeOperationView.displayName = "CallTreeOperationView";
 
 const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
@@ -2559,72 +2565,71 @@ const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
 });
 CallTree.displayName = "CallTree";
 
-const TraceDetails = React.memo(({
-  trace,
-  onBack,
-}: {
-  trace: RootTrace;
-  onBack?: () => void;
-}) => {
-  const [tab, setTab] = useState<"overview" | "data" | "mutations" | "tree">(
-    "overview",
-  );
-  const contentRef = useRef<HTMLDivElement>(null);
+const TraceDetails = React.memo(
+  ({ trace, onBack }: { trace: RootTrace; onBack?: () => void }) => {
+    const [tab, setTab] = useState<"overview" | "data" | "mutations" | "tree">(
+      "overview",
+    );
+    const contentRef = useRef<HTMLDivElement>(null);
 
-  const tone = statusTone(trace.status);
+    const tone = statusTone(trace.status);
 
-  return (
-    <Detail>
-      <DetailHeader>
-        <DetailHeaderLeft>
-          {onBack ? (
-            <BackButton aria-label="Back to traces" onClick={onBack}>
-              ←
-            </BackButton>
-          ) : null}
-          <DetailTitle>
-            <strong>{trace.name}</strong>
-            <span>
-              {trace.kind} · {formatTime(trace.startedAt)}
-            </span>
-          </DetailTitle>
-        </DetailHeaderLeft>
-        <HeaderBadges>
-          <StatusPill tone={tone}>
-            <StatusDot tone={tone} />
-            {formatDuration(trace.durationMs)}
-          </StatusPill>
-        </HeaderBadges>
-      </DetailHeader>
-      <Tabs>
-        <Tab selected={tab === "overview"} onClick={() => setTab("overview")}>
-          Overview
-        </Tab>
-        <Tab selected={tab === "data"} onClick={() => setTab("data")}>
-          Queries
-        </Tab>
-        <Tab selected={tab === "mutations"} onClick={() => setTab("mutations")}>
-          Mutations
-        </Tab>
-        <Tab selected={tab === "tree"} onClick={() => setTab("tree")}>
-          Call Tree
-        </Tab>
-      </Tabs>
-      <Content ref={contentRef}>
-        {tab === "overview" && <TraceOverview trace={trace} />}
-        {tab === "data" && <SelectEvents events={trace.commandEvents} />}
-        {tab === "mutations" && (
-          <MutationEvents
-            key={trace.id}
-            events={trace.mutationEvents}
-            scrollParentRef={contentRef}
-          />
-        )}
-        {tab === "tree" && <CallTree trace={trace} />}
-      </Content>
-    </Detail>
-  );
-});
+    return (
+      <Detail>
+        <DetailHeader>
+          <DetailHeaderLeft>
+            {onBack ? (
+              <BackButton aria-label="Back to traces" onClick={onBack}>
+                ←
+              </BackButton>
+            ) : null}
+            <DetailTitle>
+              <strong>{trace.name}</strong>
+              <span>
+                {trace.kind} · {formatTime(trace.startedAt)}
+              </span>
+            </DetailTitle>
+          </DetailHeaderLeft>
+          <HeaderBadges>
+            <StatusPill tone={tone}>
+              <StatusDot tone={tone} />
+              {formatDuration(trace.durationMs)}
+            </StatusPill>
+          </HeaderBadges>
+        </DetailHeader>
+        <Tabs>
+          <Tab selected={tab === "overview"} onClick={() => setTab("overview")}>
+            Overview
+          </Tab>
+          <Tab selected={tab === "data"} onClick={() => setTab("data")}>
+            Queries
+          </Tab>
+          <Tab
+            selected={tab === "mutations"}
+            onClick={() => setTab("mutations")}
+          >
+            Mutations
+          </Tab>
+          <Tab selected={tab === "tree"} onClick={() => setTab("tree")}>
+            Call Tree
+          </Tab>
+        </Tabs>
+        <Content ref={contentRef}>
+          {tab === "overview" && <TraceOverview trace={trace} />}
+          {tab === "data" && <SelectEvents events={trace.commandEvents} />}
+          {tab === "mutations" && (
+            <MutationEvents
+              key={trace.id}
+              events={trace.mutationEvents}
+              scrollParentRef={contentRef}
+            />
+          )}
+          {tab === "tree" && <CallTree trace={trace} />}
+        </Content>
+      </Detail>
+    );
+  },
+);
 TraceDetails.displayName = "TraceDetails";
 
 const DevtoolsPanelInner = ({

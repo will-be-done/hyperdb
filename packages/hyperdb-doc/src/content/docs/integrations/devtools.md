@@ -34,14 +34,14 @@ export function App() {
 
 ### `HyperDBDevtools` props
 
-| Prop | Description |
-| --- | --- |
-| `db` | The `SubscribableDB` to inspect (defaults to context) |
-| `initialIsOpen` | Whether the panel starts open (persisted in `localStorage`) |
-| `position` | `"top"` \| `"bottom"` \| `"left"` \| `"right"` |
-| `buttonPosition` | Corner for the toggle button |
-| `maxTraces` | Maximum number of traces to retain |
-| `theme` | `"dark"` \| `"light"` \| `"system"` |
+| Prop             | Description                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| `db`             | The `SubscribableDB` to inspect (defaults to context)       |
+| `initialIsOpen`  | Whether the panel starts open (persisted in `localStorage`) |
+| `position`       | `"top"` \| `"bottom"` \| `"left"` \| `"right"`              |
+| `buttonPosition` | Corner for the toggle button                                |
+| `maxTraces`      | Maximum number of traces to retain                          |
+| `theme`          | `"dark"` \| `"light"` \| `"system"`                         |
 
 There is also `HyperDBDevtoolsPanel` for embedding the panel directly (without
 the floating toggle), with an `embedded` flag and an `onClose` callback.
@@ -70,7 +70,10 @@ To enable tracing for all databases that don't specify their own, set the global
 default:
 
 ```ts
-import { setDefaultHyperDBTracer, hyperDBTraceStore } from "@will-be-done/hyperdb-lib/tracing";
+import {
+  setDefaultHyperDBTracer,
+  hyperDBTraceStore,
+} from "@will-be-done/hyperdb-lib/tracing";
 
 setDefaultHyperDBTracer(hyperDBTraceStore);
 ```
@@ -87,10 +90,10 @@ const selector = createSelector({
 });
 ```
 
-| Field | Values | Meaning |
-| --- | --- | --- |
-| `enabled` | `boolean` (default `true`) | Whether this factory's commands are traced |
-| `startOn` | `"devtoolOpen"` (default) \| `"load"` | When to begin collecting traces |
+| Field     | Values                                | Meaning                                    |
+| --------- | ------------------------------------- | ------------------------------------------ |
+| `enabled` | `boolean` (default `true`)            | Whether this factory's commands are traced |
+| `startOn` | `"devtoolOpen"` (default) \| `"load"` | When to begin collecting traces            |
 
 `startOn: "devtoolOpen"` keeps overhead near zero until you actually open the
 devtool; `"load"` traces from startup.
@@ -104,7 +107,9 @@ selector({
   name: "hotPathSelector",
   args: {},
   skipTrace: true, // or { rootTrace: boolean, childTrace: boolean }
-  handler: function* () { /* ... */ },
+  handler: function* () {
+    /* ... */
+  },
 });
 ```
 

@@ -54,8 +54,9 @@ const allChangesAfter = selector({
   name: "allChangesAfter",
   args: { after: v.string() },
   handler: function* ({ after }) {
-    return (yield* selectFrom(changesTable, "byUpdatedAt")
-      .where((q) => q.gt("updatedAt", after))) as Change[];
+    return (yield* selectFrom(changesTable, "byUpdatedAt").where((q) =>
+      q.gt("updatedAt", after),
+    )) as Change[];
   },
 });
 ```
@@ -71,7 +72,7 @@ never be lost or get out of step with the data.
 import { noop, syncDispatch } from "@will-be-done/hyperdb-lib";
 
 syncSubDb.afterInsert(function* (db, table, traits, ops) {
-  if (table === changesTable) return;                 // don't track the tracker
+  if (table === changesTable) return; // don't track the tracker
   if (traits.some((t) => t.type === "skip-sync")) return; // see "traits" below
 
   for (const op of ops) {
@@ -107,12 +108,15 @@ The update hook stamps changed columns with the current clock:
 ```ts
 export const insertChangeFromUpdate = action({
   name: "insertChangeFromUpdate",
-  args: { /* tableDef, oldRow, newRow, clientId, nextClock */ },
+  args: {
+    /* tableDef, oldRow, newRow, clientId, nextClock */
+  },
   handler: function* ({ tableDef, oldRow, newRow, clientId, nextClock }) {
-    const change = (yield* getChangeByEntityAndTableName({
-      entityId: oldRow.id,
-      tableName: tableDef.tableName,
-    })) ?? freshChange(oldRow, tableDef, clientId, nextClock);
+    const change =
+      (yield* getChangeByEntityAndTableName({
+        entityId: oldRow.id,
+        tableName: tableDef.tableName,
+      })) ?? freshChange(oldRow, tableDef, clientId, nextClock);
 
     const changedCols = change.changes;
     for (const col of uniq([...Object.keys(oldRow), ...Object.keys(newRow)])) {
@@ -141,7 +145,9 @@ the recomputed change rows with `upsert` — all in one transaction:
 ```ts
 export const mergeChanges = action({
   name: "mergeChangesAction",
-  args: { /* input, nextClock, clientId, registeredSyncableTableNameMap */ },
+  args: {
+    /* input, nextClock, clientId, registeredSyncableTableNameMap */
+  },
   handler: function* ({ input, nextClock, registeredSyncableTableNameMap }) {
     for (const changeset of input) {
       const table = registeredSyncableTableNameMap[changeset.tableName];
@@ -172,21 +178,44 @@ need durable local storage; the change tracking below layers on top of it.
 This is what wiring it all together looks like (condensed from a real app):
 
 ```ts
-export const initDbStore = async (syncConfig: SyncConfig): Promise<SubscribableDB> => {
+export const initDbStore = async (
+  syncConfig: SyncConfig,
+): Promise<SubscribableDB> => {
   // in-memory `syncDB` for the UI; persistent `persistentDB`; `syncSubDb` wraps the in-memory DB
-  const { persistentDB, syncDB, syncSubDb } = await createStoreDbs(dbName, syncConfig);
+  const { persistentDB, syncDB, syncSubDb } = await createStoreDbs(
+    dbName,
+    syncConfig,
+  );
 
   // 1. change-tracking hooks on the in-memory subscribable DB
   registerSyncChangeHooks({ syncSubDb, clientId, nextClock });
 
   // 2. load persisted rows into the in-memory tier
-  await hydrateSyncDb({ persistentDB, syncDB, syncableDBTables: syncConfig.syncableDBTables });
+  await hydrateSyncDb({
+    persistentDB,
+    syncDB,
+    syncableDBTables: syncConfig.syncableDBTables,
+  });
 
   // 3. cross-tab + server sync, and a queue that flushes the in-memory tier to disk
-  const crossTabChanges = createCrossTabChanges({ clientId, syncSubDb, syncConfig, nextClock });
-  const syncer = new Syncer(persistentDB, clientId, syncConfig, nextClock, crossTabChanges.applyChanges);
+  const crossTabChanges = createCrossTabChanges({
+    clientId,
+    syncSubDb,
+    syncConfig,
+    nextClock,
+  });
+  const syncer = new Syncer(
+    persistentDB,
+    clientId,
+    syncConfig,
+    nextClock,
+    crossTabChanges.applyChanges,
+  );
   const localPersistQueue = createLocalPersistQueue({
-    clientId, persistentDB, syncSubDb, nextClock,
+    clientId,
+    persistentDB,
+    syncSubDb,
+    nextClock,
     postChanges: crossTabChanges.postChanges,
     onPersisted: () => syncer.forceSync(),
   });
@@ -218,7 +247,12 @@ and the `clientId` (e.g. `"server-<dbName>"`).
 ```ts
 import { Database } from "bun:sqlite";
 import { SqlDriver } from "@will-be-done/hyperdb-lib/drivers/sqlite";
-import { DB, SubscribableDB, syncDispatch, noop } from "@will-be-done/hyperdb-lib";
+import {
+  DB,
+  SubscribableDB,
+  syncDispatch,
+  noop,
+} from "@will-be-done/hyperdb-lib";
 import {
   changesTable,
   insertChangeFromInsert,
@@ -226,7 +260,9 @@ import {
   insertChangeFromDelete,
 } from "@will-be-done/slices/common"; // ← same slice the client imports
 
-const hyperDB = new SubscribableDB(new DB(makeBunSqliteDriver("space-42.sqlite")));
+const hyperDB = new SubscribableDB(
+  new DB(makeBunSqliteDriver("space-42.sqlite")),
+);
 const clientId = "server-space-42";
 
 // identical to the browser's registerSyncChangeHooks
@@ -234,9 +270,15 @@ hyperDB.afterInsert(function* (db, table, traits, ops) {
   if (table === changesTable) return;
   if (traits.some((t) => t.type === "skip-sync")) return;
   for (const op of ops) {
-    syncDispatch(db, insertChangeFromInsert({
-      tableDef: op.table, row: op.newValue, clientId, nextClock: nextClock(),
-    }));
+    syncDispatch(
+      db,
+      insertChangeFromInsert({
+        tableDef: op.table,
+        row: op.newValue,
+        clientId,
+        nextClock: nextClock(),
+      }),
+    );
   }
   yield* noop();
 });
@@ -253,16 +295,16 @@ once and shared.
 Everything above is application code — but it leans entirely on built-in
 primitives:
 
-| Need | HyperDB feature |
-| --- | --- |
-| Atomic data + bookkeeping | [Transactional dispatch](/database/writing-data/#transactions) |
+| Need                            | HyperDB feature                                                                         |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| Atomic data + bookkeeping       | [Transactional dispatch](/database/writing-data/#transactions)                          |
 | React to every mutation in-band | [`afterInsert`/`afterUpsert`/`afterDelete`/`afterChange`](/runtime/db/#lifecycle-hooks) |
-| Diff a write | `oldValue`/`newValue` on ops |
-| Tag a write's origin | [Traits](/runtime/db/#traits) |
-| "What changed after X?" | A [B-tree range query](/database/indexes/) on `updatedAt` |
-| Batched reads/writes | Array-form `where` + array mutations |
-| Fast UI + durable storage | Two [DBs](/runtime/db/) with different [drivers](/runtime/drivers/) |
-| Same logic on client & server | One schema + actions, swap only the [driver](/runtime/drivers/#backend-native-sqlite) |
+| Diff a write                    | `oldValue`/`newValue` on ops                                                            |
+| Tag a write's origin            | [Traits](/runtime/db/#traits)                                                           |
+| "What changed after X?"         | A [B-tree range query](/database/indexes/) on `updatedAt`                               |
+| Batched reads/writes            | Array-form `where` + array mutations                                                    |
+| Fast UI + durable storage       | Two [DBs](/runtime/db/) with different [drivers](/runtime/drivers/)                     |
+| Same logic on client & server   | One schema + actions, swap only the [driver](/runtime/drivers/#backend-native-sqlite)   |
 
 You supply the merge policy and the transport; HyperDB supplies the reactive,
 transactional, indexed store underneath.

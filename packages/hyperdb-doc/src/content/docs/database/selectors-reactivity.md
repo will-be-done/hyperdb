@@ -31,7 +31,7 @@ import { initCachedSelector } from "@will-be-done/hyperdb-lib";
 
 const store = initCachedSelector(db, projectTasks, { projectId: "p1" });
 
-store.getSnapshot();             // current value
+store.getSnapshot(); // current value
 const unsub = store.subscribe(() => {
   console.log("changed:", store.getSnapshot());
 });
@@ -69,7 +69,9 @@ const projectTasks = selector({
   name: "projectTasks",
   args: { projectId: v.string() },
   memoization: { root: true, selfChild: false }, // defaults
-  handler: function* ({ projectId }) { /* ... */ },
+  handler: function* ({ projectId }) {
+    /* ... */
+  },
 });
 ```
 
@@ -81,7 +83,9 @@ per args. Set `root: false` to opt out — each use gets an **uncached** store t
 still tracks ranges and stays reactive, but isn't shared or retained between uses.
 
 ```ts
-memoization: { root: false }
+memoization: {
+  root: false;
+}
 ```
 
 ### `selfChild` (default `false`)
@@ -93,7 +97,9 @@ child's previous result and ranges are reused instead of recomputed. Turn it on
 for expensive nested selectors that change less often than their parents.
 
 ```ts
-memoization: { selfChild: true }
+memoization: {
+  selfChild: true;
+}
 ```
 
 ## Subscriptions and revisions

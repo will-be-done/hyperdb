@@ -243,7 +243,10 @@ export function compareStoredValue(a: unknown, b: unknown): number {
     if (a === MIN) return -1;
     if (a === MAX) return 1;
 
-    return compare(storedEncodingRank.indexOf(at), storedEncodingRank.indexOf(bt));
+    return compare(
+      storedEncodingRank.indexOf(at),
+      storedEncodingRank.indexOf(bt),
+    );
   }
 
   if (at === "virtual") {

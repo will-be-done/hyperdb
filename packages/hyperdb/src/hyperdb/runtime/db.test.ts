@@ -1049,9 +1049,14 @@ describe("Database Operations Edge Cases", async () => {
         expect(limitBoundResults[1].value).toBe(6);
 
         // Test limit of 0
-        const zeroLimitResults = await db.intervalScan(testTable, "byValue", [{}], {
-          limit: 0,
-        });
+        const zeroLimitResults = await db.intervalScan(
+          testTable,
+          "byValue",
+          [{}],
+          {
+            limit: 0,
+          },
+        );
         expect(zeroLimitResults.length).toBe(0);
       });
 
@@ -1545,28 +1550,28 @@ describe("Database Operations Edge Cases", async () => {
         expect(
           (
             await db.intervalScan(testTable, "byInt", [
-            { gte: [{ col: "intVal", val: 42 }] },
+              { gte: [{ col: "intVal", val: 42 }] },
             ])
           ).length,
         ).toBe(1);
         expect(
           (
             await db.intervalScan(testTable, "byFloat", [
-            { lt: [{ col: "floatVal", val: 3.5 }] },
+              { lt: [{ col: "floatVal", val: 3.5 }] },
             ])
           ).length,
         ).toBe(2);
         expect(
           (
             await db.intervalScan(testTable, "byString", [
-            { gte: [{ col: "stringVal", val: "hello" }] },
+              { gte: [{ col: "stringVal", val: "hello" }] },
             ])
           ).length,
         ).toBe(2);
         expect(
           (
             await db.intervalScan(testTable, "byBool", [
-            { gte: [{ col: "boolVal", val: true }] },
+              { gte: [{ col: "boolVal", val: true }] },
             ])
           ).length,
         ).toBe(1);

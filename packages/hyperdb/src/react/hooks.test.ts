@@ -158,18 +158,16 @@ describe("useAsyncSelector", () => {
     const secondCmd = { table: "tasks", range: "second" };
     let runCount = 0;
 
-    mocks.runSelectorAsync.mockImplementation(
-      (_db, _gen, cmds: unknown[]) => {
-        runCount++;
-        if (runCount === 1) {
-          cmds.push(firstCmd);
-          return first.promise;
-        }
+    mocks.runSelectorAsync.mockImplementation((_db, _gen, cmds: unknown[]) => {
+      runCount++;
+      if (runCount === 1) {
+        cmds.push(firstCmd);
+        return first.promise;
+      }
 
-        cmds.push(secondCmd);
-        return second.promise;
-      },
-    );
+      cmds.push(secondCmd);
+      return second.promise;
+    });
 
     useAsyncSelector({
       selector: function* selector() {
@@ -216,12 +214,10 @@ describe("useAsyncSelector", () => {
     const pending = deferred<string>();
     const cmd = { table: "tasks", range: "pending" };
 
-    mocks.runSelectorAsync.mockImplementation(
-      (_db, _gen, cmds: unknown[]) => {
-        cmds.push(cmd);
-        return pending.promise;
-      },
-    );
+    mocks.runSelectorAsync.mockImplementation((_db, _gen, cmds: unknown[]) => {
+      cmds.push(cmd);
+      return pending.promise;
+    });
 
     useAsyncSelector({
       selector: function* selector() {

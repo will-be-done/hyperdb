@@ -56,11 +56,11 @@ blocks:
 
 ```ts
 v.string();
-v.number();          // finite numbers only
+v.number(); // finite numbers only
 v.bigint();
 v.boolean();
 v.null();
-v.literal("done");   // string | number | bigint | boolean | null literals
+v.literal("done"); // string | number | bigint | boolean | null literals
 v.array(v.string());
 v.object({ x: v.number(), y: v.number() });
 v.record(v.string(), v.number());
@@ -122,12 +122,14 @@ queries fast. Each `.index(...)` call returns a new table definition, so you can
 chain them.
 
 ```ts
-defineTable("tasks", { /* fields */ })
+defineTable("tasks", {
+  /* fields */
+})
   .index("byProjectOrder", ["projectId", "orderToken"]) // btree (default)
-  .index("byTitle", ["title"], { type: "hash" });        // hash
+  .index("byTitle", ["title"], { type: "hash" }); // hash
 ```
 
-- **`btree`** (the default) supports equality *and* range queries, ordering, and
+- **`btree`** (the default) supports equality _and_ range queries, ordering, and
   composite (multi-column) keys.
 - **`hash`** supports equality lookups only and must have **exactly one column**.
 
@@ -151,9 +153,9 @@ omitted entirely, and `{ field: undefined }` is normalized to "missing". But
 
 ## Type helpers reference
 
-| Helper | Purpose |
-| --- | --- |
-| `ExtractSchema<typeof table>` | Row type of a table |
-| `ExtractIndexes<typeof table>` | Index definitions of a table |
-| `Infer<typeof validator>` | TypeScript type of any validator |
-| `InferObject<fields>` | TypeScript type of an object field map |
+| Helper                         | Purpose                                |
+| ------------------------------ | -------------------------------------- |
+| `ExtractSchema<typeof table>`  | Row type of a table                    |
+| `ExtractIndexes<typeof table>` | Index definitions of a table           |
+| `Infer<typeof validator>`      | TypeScript type of any validator       |
+| `InferObject<fields>`          | TypeScript type of an object field map |

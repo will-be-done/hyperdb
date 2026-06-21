@@ -20,12 +20,7 @@ const sharedPrefixTuples: [ScanValue[], ScanValue[]][] = Array.from(
   { length: tupleCount },
   (_, i) => [
     [`project-${i % 64}`, i % 3 === 0 ? "done" : "todo", i, `id-${i}`],
-    [
-      `project-${i % 64}`,
-      i % 3 === 0 ? "done" : "todo",
-      i + 1,
-      `id-${i + 1}`,
-    ],
+    [`project-${i % 64}`, i % 3 === 0 ? "done" : "todo", i + 1, `id-${i + 1}`],
   ],
 );
 

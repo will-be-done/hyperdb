@@ -45,11 +45,7 @@ const normalizedLimit = (maxTraces: number): number => {
 const traceSortIndex = (
   sortField: TraceSortField,
   dbKey: string | undefined,
-):
-  | "byStartedAt"
-  | "byDurationMs"
-  | "byDbStartedAt"
-  | "byDbDurationMs" => {
+): "byStartedAt" | "byDurationMs" | "byDbStartedAt" | "byDbDurationMs" => {
   if (dbKey !== undefined) {
     return sortField === "duration" ? "byDbDurationMs" : "byDbStartedAt";
   }

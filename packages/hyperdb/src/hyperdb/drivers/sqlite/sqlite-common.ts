@@ -8,7 +8,10 @@ import {
 } from "../../core/primitives";
 import type { TableDefinition } from "../../schema/table";
 import { convertWhereToBound } from "../../core/query/bounds";
-import { decodeValueFromStorage, encodeValueForStorage } from "../../storage/codec";
+import {
+  decodeValueFromStorage,
+  encodeValueForStorage,
+} from "../../storage/codec";
 import {
   encodeSqliteSortKeyTuple,
   getSqliteSortKeyTuple,
@@ -109,7 +112,8 @@ export function getSqliteIndexSortKeyValue(
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
   const sortColumns = sqliteIndexSortColumns(indexDef.cols);
-  const includeMissing = indexDef.type === "btree" && isSchemalessTable(tableDef);
+  const includeMissing =
+    indexDef.type === "btree" && isSchemalessTable(tableDef);
   const mode = sqliteIndexSortKeyMode(tableDef, indexName);
   const tuple = getSqliteSortKeyTuple(row, sortColumns, includeMissing);
 
@@ -172,7 +176,9 @@ function validateHashBounds(
       );
     }
 
-    if (bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))) {
+    if (
+      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
+    ) {
       throw new Error(
         `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
       );
@@ -333,12 +339,11 @@ export function buildInsertSQL(
   const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
   const valuesQ = Array(valueCount).fill(rowPlaceholders).join(", ");
   const conflictMode = options.replace ? "INSERT OR REPLACE" : "INSERT";
-  const sql =
-    `${conflictMode} INTO ${tableDef.tableName} (${columns.join(
-      ", ",
-    )}) VALUES ${valuesQ}`
-      .trim()
-      .replace(/\n+/g, " ");
+  const sql = `${conflictMode} INTO ${tableDef.tableName} (${columns.join(
+    ", ",
+  )}) VALUES ${valuesQ}`
+    .trim()
+    .replace(/\n+/g, " ");
 
   return sql;
 }
@@ -391,10 +396,7 @@ export function createTableSQL(tableDef: TableDefinition): string {
   return sql;
 }
 
-export function createIndexSQL(
-  tableName: string,
-  indexName: string,
-): string {
+export function createIndexSQL(tableName: string, indexName: string): string {
   const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
   const indexIdentifier = sqliteIndexIdentifier(tableName, indexName);
   const sql = `

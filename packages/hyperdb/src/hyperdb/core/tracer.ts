@@ -141,10 +141,7 @@ export type MutationTracePatch = Partial<
 >;
 
 export interface HyperDBTracer {
-  startRootTrace(
-    meta: TraceFrameMeta,
-    db?: object,
-  ): TraceContext | undefined;
+  startRootTrace(meta: TraceFrameMeta, db?: object): TraceContext | undefined;
   enterFramePath(
     context: TraceContext,
     path: TraceFrameMeta[] | undefined,
@@ -253,9 +250,7 @@ export const traceContextTrait = (
   traceContext,
 });
 
-export const isTraceContextTrait = (
-  trait: Trait,
-): trait is TraceContextTrait =>
+export const isTraceContextTrait = (trait: Trait): trait is TraceContextTrait =>
   trait.type === traceContextTraitType && "traceContext" in trait;
 
 export const getTraceContextFromTraits = (
@@ -269,14 +264,16 @@ export const getTraceContextFromTraits = (
   }
 };
 
-export const getTraceContextForDB = (
-  db: { getTraits(): Trait[] },
-): TraceContext | undefined => getTraceContextFromTraits(db.getTraits());
-
-export const withTraceContextTrait = <TDB extends {
+export const getTraceContextForDB = (db: {
   getTraits(): Trait[];
-  withTraits(...trait: Trait[]): unknown;
-}>(
+}): TraceContext | undefined => getTraceContextFromTraits(db.getTraits());
+
+export const withTraceContextTrait = <
+  TDB extends {
+    getTraits(): Trait[];
+    withTraits(...trait: Trait[]): unknown;
+  },
+>(
   db: TDB,
   context: TraceContext,
 ): TDB => {

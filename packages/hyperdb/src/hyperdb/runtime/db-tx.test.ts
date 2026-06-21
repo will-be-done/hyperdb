@@ -115,7 +115,9 @@ describe("Database Transactions", async () => {
         await tx.insert(tasksTable, [newTask]);
 
         // Upsert existing task in transaction
-        await tx.upsert(tasksTable, [{ ...initialTask, title: "Updated Title" }]);
+        await tx.upsert(tasksTable, [
+          { ...initialTask, title: "Updated Title" },
+        ]);
 
         // Delete existing task in transaction
         await tx.delete(tasksTable, ["task-initial"]);

@@ -309,9 +309,7 @@ describe("runtime index value types", () => {
             ),
           ).toEqual(testCase.eqIds);
           expect(
-            (
-              await db.intervalScan(testCase.table, "byValueHash", eqClause)
-            )
+            (await db.intervalScan(testCase.table, "byValueHash", eqClause))
               .map((row) => row.id)
               .sort(),
           ).toEqual([...testCase.eqIds].sort());

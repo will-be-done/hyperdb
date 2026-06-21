@@ -103,7 +103,10 @@ import { syncDispatch, select } from "@will-be-done/hyperdb-lib";
 import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
-syncDispatch(db, createTask({ id: "task-1", projectId: "p1", title: "Ship it" }));
+syncDispatch(
+  db,
+  createTask({ id: "task-1", projectId: "p1", title: "Ship it" }),
+);
 
 const tasks = select(db, projectTasks({ projectId: "p1" }));
 console.log(tasks); // [{ id: "task-1", ... }]
@@ -115,7 +118,11 @@ Provide the database through `DBProvider`, then read with `useSyncSelector` and
 write with `useDispatch`.
 
 ```tsx
-import { DBProvider, useSyncSelector, useDispatch } from "@will-be-done/hyperdb-lib/react";
+import {
+  DBProvider,
+  useSyncSelector,
+  useDispatch,
+} from "@will-be-done/hyperdb-lib/react";
 import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
@@ -132,7 +139,11 @@ function Tasks({ projectId }: { projectId: string }) {
       <button
         onClick={() =>
           dispatch(
-            createTask({ id: crypto.randomUUID(), projectId, title: "New task" }),
+            createTask({
+              id: crypto.randomUUID(),
+              projectId,
+              title: "New task",
+            }),
           )
         }
       >

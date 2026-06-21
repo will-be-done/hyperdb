@@ -1,9 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type {
-  Row,
-  SelectOptions,
-  WhereClause,
-} from "../../core/primitives";
+import type { Row, SelectOptions, WhereClause } from "../../core/primitives";
 import type { DBDriver, DBDriverTX } from "../../core/driver";
 import { cloneDeep } from "es-toolkit";
 import type { TableDefinition } from "../../schema/table";
@@ -395,7 +391,9 @@ export class SqlDriver implements DBDriver {
     }
   }
 
-  private getExpectedSortKeyColumns(tableDef: TableDefinition<any>): Set<string> {
+  private getExpectedSortKeyColumns(
+    tableDef: TableDefinition<any>,
+  ): Set<string> {
     return new Set(
       Object.keys(tableDef.indexes).map((indexName) =>
         sqliteIndexSortKeyColumn(indexName),

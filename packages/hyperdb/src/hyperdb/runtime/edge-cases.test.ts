@@ -587,7 +587,9 @@ describe("runtime edge case regressions", () => {
         const db = new AsyncDB(new DB(await createDriver()));
         await db.loadTables([duplicateTable]);
 
-        await db.insert(duplicateTable, [{ id: "same-id", title: "Old title" }]);
+        await db.insert(duplicateTable, [
+          { id: "same-id", title: "Old title" },
+        ]);
 
         await expect(
           db.insert(duplicateTable, [{ id: "same-id", title: "New title" }]),
@@ -669,11 +671,15 @@ describe("runtime edge case regressions", () => {
         await db.loadTables([rollbackTable]);
 
         await expect(
-          execAsync(driver.insert("missingRollbackTable", [{ id: "bad" } as Row])),
+          execAsync(
+            driver.insert("missingRollbackTable", [{ id: "bad" } as Row]),
+          ),
         ).rejects.toThrow();
 
         const goodRecord = { id: "good", title: "Good" };
-        await expect(db.insert(rollbackTable, [goodRecord])).resolves.toBeUndefined();
+        await expect(
+          db.insert(rollbackTable, [goodRecord]),
+        ).resolves.toBeUndefined();
         expect(
           await db.intervalScan(rollbackTable, "byId", [
             { eq: [{ col: "id", val: "good" }] },

@@ -54,19 +54,25 @@ function Tasks({ projectId }: { projectId: string }) {
     args: { projectId },
     defaultValue: [],
   });
-  return <ul>{tasks.map((t) => <li key={t.id}>{t.title}</li>)}</ul>;
+  return (
+    <ul>
+      {tasks.map((t) => (
+        <li key={t.id}>{t.title}</li>
+      ))}
+    </ul>
+  );
 }
 ```
 
 Options:
 
-| Option | Description |
-| --- | --- |
-| `selector` | The selector to run |
-| `args` | Its arguments (also the cache key) |
-| `defaultValue` | Value returned before the first result / when disabled |
-| `enabled` | Set `false` to skip running; returns `defaultValue` |
-| `gcTime` | Override the cache [garbage-collection time](/database/selectors-reactivity/#garbage-collection) |
+| Option         | Description                                                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| `selector`     | The selector to run                                                                              |
+| `args`         | Its arguments (also the cache key)                                                               |
+| `defaultValue` | Value returned before the first result / when disabled                                           |
+| `enabled`      | Set `false` to skip running; returns `defaultValue`                                              |
+| `gcTime`       | Override the cache [garbage-collection time](/database/selectors-reactivity/#garbage-collection) |
 
 ### `useAsyncSelector`
 
@@ -97,7 +103,9 @@ function AddButton({ projectId }: { projectId: string }) {
   return (
     <button
       onClick={() =>
-        dispatch(createTask({ id: crypto.randomUUID(), projectId, title: "New" }))
+        dispatch(
+          createTask({ id: crypto.randomUUID(), projectId, title: "New" }),
+        )
       }
     >
       Add
@@ -125,12 +133,12 @@ const handleClick = () => {
 
 ## Hook reference
 
-| Hook | Returns | For |
-| --- | --- | --- |
-| `useDB()` | the `SubscribableDB` | accessing the DB directly |
-| `useSyncSelector(opts)` | the selector result | reactive read, sync drivers |
-| `useAsyncSelector(opts)` | the result or default | reactive read, async drivers |
-| `useDispatch()` | `(action) => TReturn` | write, sync drivers |
-| `useAsyncDispatch()` | `(action) => Promise<TReturn>` | write, async drivers |
-| `useSelect()` | `(gen) => TReturn` | one-off read, sync drivers |
-| `useAsyncSelect()` | `(gen) => Promise<TReturn>` | one-off read, async drivers |
+| Hook                     | Returns                        | For                          |
+| ------------------------ | ------------------------------ | ---------------------------- |
+| `useDB()`                | the `SubscribableDB`           | accessing the DB directly    |
+| `useSyncSelector(opts)`  | the selector result            | reactive read, sync drivers  |
+| `useAsyncSelector(opts)` | the result or default          | reactive read, async drivers |
+| `useDispatch()`          | `(action) => TReturn`          | write, sync drivers          |
+| `useAsyncDispatch()`     | `(action) => Promise<TReturn>` | write, async drivers         |
+| `useSelect()`            | `(gen) => TReturn`             | one-off read, sync drivers   |
+| `useAsyncSelect()`       | `(gen) => Promise<TReturn>`    | one-off read, async drivers  |
