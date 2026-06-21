@@ -15,15 +15,7 @@ export default defineConfig({
         `${entryName}.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
-      external: [
-        "react",
-        "react-dom",
-        "sql.js",
-        "wa-sqlite",
-        "wa-sqlite/dist/wa-sqlite-async.mjs",
-        "wa-sqlite/dist/wa-sqlite-async.wasm?url",
-        "wa-sqlite/src/examples/MemoryAsyncVFS.js",
-      ],
+      external: ["react", "react-dom"],
     },
   },
   test: {

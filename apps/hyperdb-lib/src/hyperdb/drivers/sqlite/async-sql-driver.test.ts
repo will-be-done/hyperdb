@@ -3,7 +3,7 @@ import { defineTable } from "../../schema/table";
 import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
-import { initWasmIDBAsync } from "./init-wa-sqlite";
+import { createSqlJsAsyncDriver } from "../../test-utils/sql-js-driver";
 
 type Task = {
   type: "task";
@@ -29,7 +29,7 @@ const tasksTable = defineTable("tasks", {
   .index("projectIdState", ["projectId", "state", "lastToggledAt"]);
 
 describe("db", async () => {
-  for (const driver of [initWasmIDBAsync]) {
+  for (const driver of [createSqlJsAsyncDriver]) {
     it("works", async () => {
       const db = new DB(await driver());
 

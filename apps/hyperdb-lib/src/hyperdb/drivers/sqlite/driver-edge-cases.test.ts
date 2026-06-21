@@ -1,5 +1,3 @@
-import initSqlJs from "sql.js";
-import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import { describe, expect, it } from "vitest";
 import { DB } from "../../runtime/db";
 import { SyncDB } from "../../runtime/sync-db";
@@ -8,11 +6,13 @@ import {
   type AnyIndexDefinitions,
   type TableDefinition,
 } from "../../schema/table";
+import {
+  createInspectableSqlDriver,
+  createSqlJsDriver,
+  type InspectableSqlDatabase,
+} from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
-import { initSqlJsWasm } from "./init-sql-js-wasm";
-import { SqlDriver, type SQLStatement } from "./sql-driver";
 import type { SqlValue } from "./sqlite-common";
-import { normalizeWasmUrl } from "./wasm-url";
 
 const noSideTablesTable = defineTable("driverEdgeNoSideTables", {
   id: v.string(),
@@ -53,59 +53,6 @@ const multiColumnHashTable = {
     throw new Error("Not used in tests");
   },
 } as unknown as TableDefinition<unknown, AnyIndexDefinitions>;
-
-type InspectableSqlDatabase = {
-  exec(sql: string, params?: SqlValue[]): { values: SqlValue[][] }[];
-  prepare(sql: string): {
-    bind(values: SqlValue[]): boolean;
-    step(): boolean;
-    get(): SqlValue[];
-    free(): void;
-  };
-};
-
-async function createInspectableSqlDriver(): Promise<{
-  driver: SqlDriver;
-  sqldb: InspectableSqlDatabase;
-  execLog: string[];
-}> {
-  const SQL = await initSqlJs({
-    locateFile: () => normalizeWasmUrl(wasmUrl),
-  });
-  const sqldb: InspectableSqlDatabase = new SQL.Database();
-  const execLog: string[] = [];
-
-  return {
-    sqldb,
-    execLog,
-    driver: new SqlDriver({
-      exec(sql: string, params: SqlValue[]): void {
-        execLog.push(sql);
-        sqldb.exec(sql, params);
-      },
-      prepare(sql: string): SQLStatement {
-        execLog.push(sql);
-        const prepared = sqldb.prepare(sql);
-
-        return {
-          values(values: SqlValue[]): SqlValue[][] {
-            prepared.bind(values);
-
-            const result: SqlValue[][] = [];
-            while (prepared.step()) {
-              result.push(prepared.get());
-            }
-
-            return result;
-          },
-          finalize(): void {
-            prepared.free();
-          },
-        };
-      },
-    }),
-  };
-}
 
 function sqliteRows(
   sqldb: InspectableSqlDatabase,
@@ -175,7 +122,7 @@ describe("SQLite driver edge case regressions", () => {
   });
 
   it("supports tuple equality bounds for direct multi-column hash definitions", async () => {
-    const db = new SyncDB(new DB(await initSqlJsWasm()));
+    const db = new SyncDB(new DB(await createSqlJsDriver()));
     db.loadTables([multiColumnHashTable]);
     db.insert(multiColumnHashTable, [
       { id: "task-a", projectId: "project-1", state: "open" },

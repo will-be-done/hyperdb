@@ -41,7 +41,7 @@ export interface SQLStatement {
   // step(): boolean;
   finalize(): void;
 }
-interface SQLiteDB {
+export interface SQLiteDB {
   exec(sql: string, params?: BindParams): void;
   prepare(sql: string): SQLStatement;
 }
