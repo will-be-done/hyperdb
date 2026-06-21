@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "bun ./node_modules/vite/bin/vite.js",
-    "build": "tsc -b && bun ./node_modules/vite/bin/vite.js build",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "bun ./node_modules/vite/bin/vite.js preview"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.12.0",
@@ -15,6 +15,7 @@
     "@tanstack/query-db-collection": "^1.0.40",
     "@tanstack/react-db": "^0.1.86",
     "@will-be-done/hyperdb": "workspace:*",
+    "@will-be-done/hyperdb-devtool": "workspace:*",
     "lokijs": "^1.5.12",
     "react": "19.2.7",
     "react-dom": "19.2.7",

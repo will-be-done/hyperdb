@@ -2,7 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
-import { DBProvider } from "@will-be-done/hyperdb";
+import { DBProvider } from "@will-be-done/hyperdb/react";
 import App from "./App.tsx";
 import {
   hyperdbDemoDbOptions,

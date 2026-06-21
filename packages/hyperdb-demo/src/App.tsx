@@ -2,8 +2,8 @@ import { Provider as ReduxProvider } from "react-redux";
 import {
   useDispatch as useHyperdbDispatch,
   useSyncSelector,
-} from "@will-be-done/hyperdb-lib/react";
-import { HyperDBDevtools } from "@will-be-done/hyperdb-lib/devtool";
+} from "@will-be-done/hyperdb/react";
+import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
 import { BenchmarkApp } from "./BenchmarkApp";
 import {
   clearWorkload as clearHyperdbWorkload,

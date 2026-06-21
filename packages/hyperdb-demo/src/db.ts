@@ -1,11 +1,11 @@
 import {
-  action,
+  createAction,
   defineTable,
   deleteRows,
   type DBOptions,
+  createSelector,
   insert,
   selectFrom,
-  selector,
   type SubscribableDB,
   upsert,
   v,
@@ -15,6 +15,9 @@ import {
   type DashboardSnapshot,
   type Task,
 } from "./workload";
+
+const action = createAction();
+const selector = createSelector();
 
 export const hyperdbDemoDbOptions: DBOptions = {
   freezeArgs: false,

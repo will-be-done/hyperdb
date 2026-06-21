@@ -49,6 +49,7 @@
         "@tanstack/query-db-collection": "^1.0.40",
         "@tanstack/react-db": "^0.1.86",
         "@will-be-done/hyperdb": "workspace:*",
+        "@will-be-done/hyperdb-devtool": "workspace:*",
         "lokijs": "^1.5.12",
         "react": "19.2.7",
         "react-dom": "19.2.7",
