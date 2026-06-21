@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
-import { DB, execSync } from "../hyperdb/db";
-import { BptreeInmemDriver } from "../hyperdb/drivers/inmemory/bptree-inmem-driver";
-import { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
+import { DB, execSync, SubscribableDB } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import {
   HyperDBDevtools,
   HyperDBDevtoolsPanel,
@@ -25,13 +24,13 @@ import {
   hyperDBTraceStore,
   markTraceFrameCached,
   startRootTrace,
-} from "../hyperdb/tracing/store";
-import type { SelectCommandEvent } from "../hyperdb/tracing/store";
+} from "@will-be-done/hyperdb/tracing";
+import type { SelectCommandEvent } from "@will-be-done/hyperdb/tracing";
 import type {
   MutationEvent,
   RootTrace,
   TraceFrame,
-} from "../hyperdb/tracing/store";
+} from "@will-be-done/hyperdb/tracing";
 
 const createDB = (dbName?: string): SubscribableDB => {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver(), { dbName }));

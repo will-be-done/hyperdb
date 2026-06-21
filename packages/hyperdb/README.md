@@ -237,7 +237,7 @@ import {
   useDispatch,
   useSyncSelector,
 } from "@will-be-done/hyperdb/react";
-import { HyperDBDevtools } from "@will-be-done/hyperdb/devtool";
+import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
 
 function Tasks({ projectId }: { projectId: string }) {
   const tasks = useSyncSelector({

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { select } from "../hyperdb";
+import { select } from "@will-be-done/hyperdb";
 import {
   createTraceFrameMeta,
   endTraceSuccess,
@@ -7,7 +7,7 @@ import {
   startRootTrace,
   type RootTrace,
   type TraceFrame,
-} from "../hyperdb/tracing/store";
+} from "@will-be-done/hyperdb/tracing";
 import { traceStoreTraceSelection, traceStoreTraces } from "./traces";
 
 const traceFrame = (cached = false): TraceFrame => ({

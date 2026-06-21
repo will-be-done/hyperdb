@@ -1,6 +1,4 @@
-import { createSelector } from "../hyperdb";
-import { selectFrom } from "../hyperdb/commands/selector/builder";
-import { v } from "../hyperdb/schema/values";
+import { createSelector, selectFrom, v } from "@will-be-done/hyperdb";
 import {
   hydrateTracePayload,
   tracePayloadsRuntimeTable,
@@ -10,7 +8,7 @@ import {
   type TraceRootRow,
   type TraceSortDir,
   type TraceSortField,
-} from "../hyperdb/tracing/store";
+} from "@will-be-done/hyperdb/tracing";
 
 const devtoolTraceOptions = { enabled: false, startOn: "devtoolOpen" } as const;
 const selector = createSelector({ trace: devtoolTraceOptions });

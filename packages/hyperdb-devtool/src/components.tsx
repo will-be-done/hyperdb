@@ -6,8 +6,8 @@ import React, {
   useState,
 } from "react";
 import { css, setup, styled } from "goober";
-import { DBProvider, useSyncSelector } from "../react";
-import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
+import { DBProvider, useSyncSelector } from "@will-be-done/hyperdb/react";
+import type { SubscribableDB } from "@will-be-done/hyperdb";
 import {
   getTraceDBInfo,
   hyperDBTraceStore,
@@ -22,7 +22,7 @@ import {
   type TraceDBInfo,
   type TraceFrame,
   type TraceStatus,
-} from "../hyperdb/tracing/store";
+} from "@will-be-done/hyperdb/tracing";
 import {
   traceStoreTraceSelection,
   traceStoreTraces,

@@ -9,28 +9,22 @@ export default defineConfig({
   build: {
     lib: {
       entry: {
-        index: resolve(__dirname, "src/index.ts"),
         react: resolve(__dirname, "src/react.ts"),
-        tracing: resolve(__dirname, "src/hyperdb/tracing/index.ts"),
-        "drivers/inmemory": resolve(
-          __dirname,
-          "src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",
-        ),
-        "drivers/sqlite": resolve(
-          __dirname,
-          "src/hyperdb/drivers/sqlite/index.ts",
-        ),
-        "drivers/idb": resolve(
-          __dirname,
-          "src/hyperdb/drivers/idb/idb-driver.ts",
-        ),
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) =>
         `${entryName}.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
-      external: ["react", "react-dom"],
+      external: [
+        "@will-be-done/hyperdb",
+        "@will-be-done/hyperdb/drivers/inmemory",
+        "@will-be-done/hyperdb/react",
+        "@will-be-done/hyperdb/tracing",
+        "react",
+        "react-dom",
+        "react/jsx-runtime",
+      ],
     },
   },
   plugins: shouldAnalyze

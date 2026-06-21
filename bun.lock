@@ -12,9 +12,6 @@
     "packages/hyperdb": {
       "name": "@will-be-done/hyperdb",
       "version": "0.0.0",
-      "dependencies": {
-        "goober": "^2.1.18",
-      },
       "devDependencies": {
         "@eslint/js": "^9.39.1",
         "@types/react": "19.2.17",
@@ -33,6 +30,38 @@
         "react-dom": "19.2.7",
         "rollup-plugin-visualizer": "^7.0.1",
         "sql.js": "^1.13.0",
+        "typescript": "~5.9.3",
+        "typescript-eslint": "^8.48.0",
+        "vite": "^8.0.12",
+        "vitest": "4.1.5",
+      },
+      "peerDependencies": {
+        "react": ">=18.0.0",
+        "react-dom": ">=18.0.0",
+      },
+    },
+    "packages/hyperdb-devtool": {
+      "name": "@will-be-done/hyperdb-devtool",
+      "version": "0.0.0",
+      "dependencies": {
+        "@will-be-done/hyperdb": "0.0.0",
+        "goober": "^2.1.18",
+      },
+      "devDependencies": {
+        "@eslint/js": "^9.39.1",
+        "@types/react": "19.2.17",
+        "@types/react-dom": "19.2.3",
+        "@vitest/browser-playwright": "4.1.5",
+        "dependency-cruiser": "^17.4.3",
+        "eslint": "^9.39.1",
+        "eslint-plugin-import": "^2.32.0",
+        "eslint-plugin-react-hooks": "7.1.1",
+        "eslint-plugin-unused-imports": "^4.3.0",
+        "globals": "^16.5.0",
+        "playwright": "^1.61.0",
+        "react": "19.2.7",
+        "react-dom": "19.2.7",
+        "rollup-plugin-visualizer": "^7.0.1",
         "typescript": "~5.9.3",
         "typescript-eslint": "^8.48.0",
         "vite": "^8.0.12",
@@ -527,6 +556,8 @@
     "@vitest/utils": ["@vitest/utils@4.1.5", "", { "dependencies": { "@vitest/pretty-format": "4.1.5", "convert-source-map": "^2.0.0", "tinyrainbow": "^3.1.0" } }, "sha512-76wdkrmfXfqGjueGgnb45ITPyUi1ycZ4IHgC2bhPDUfWHklY/q3MdLOAB+TF1e6xfl8NxNY0ZYaPCFNWSsw3Ug=="],
 
     "@will-be-done/hyperdb": ["@will-be-done/hyperdb@workspace:packages/hyperdb"],
+
+    "@will-be-done/hyperdb-devtool": ["@will-be-done/hyperdb-devtool@workspace:packages/hyperdb-devtool"],
 
     "@will-be-done/hyperdb-doc": ["@will-be-done/hyperdb-doc@workspace:packages/hyperdb-doc"],
 

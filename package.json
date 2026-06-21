@@ -13,15 +13,15 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-doc' build",
+    "build": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-devtool' build && bun run --filter='@will-be-done/hyperdb-doc' build",
     "changeset": "changeset",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "bun run --filter='@will-be-done/hyperdb' lint",
-    "lint:cycles": "bun run --filter='@will-be-done/hyperdb' lint:cycles",
-    "release": "bun run --filter='@will-be-done/hyperdb' build && changeset publish",
-    "test": "bun run --filter='@will-be-done/hyperdb' test",
-    "ts": "bun run --filter='@will-be-done/hyperdb' ts",
+    "lint": "bun run --filter='@will-be-done/hyperdb' lint && bun run --filter='@will-be-done/hyperdb-devtool' lint",
+    "lint:cycles": "bun run --filter='@will-be-done/hyperdb' lint:cycles && bun run --filter='@will-be-done/hyperdb-devtool' lint:cycles",
+    "release": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-devtool' build && changeset publish",
+    "test": "bun run --filter='@will-be-done/hyperdb' test && bun run --filter='@will-be-done/hyperdb-devtool' test",
+    "ts": "bun run --filter='@will-be-done/hyperdb' ts && bun run --filter='@will-be-done/hyperdb-devtool' ts",
     "version-packages": "changeset version"
   },
   "devDependencies": {
