@@ -26,12 +26,6 @@ import {
   toggleTanstackTaskDone,
   useTanstackDashboardSnapshot,
 } from "./tanstackDbStore";
-import {
-  clearLokiWorkload,
-  generateLokiWorkload,
-  toggleLokiTaskDone,
-  useLokiDashboardSnapshot,
-} from "./lokiDbStore";
 import { useBenchmarkState } from "./useBenchmarkState";
 import type { Task } from "./workload";
 import "./App.css";
@@ -81,7 +75,7 @@ function ReduxBenchmarkContent() {
 
   return (
     <BenchmarkApp
-      backendName="Redux Toolkit"
+      backendName="Redux"
       benchmarkState={benchmarkState}
       dashboard={dashboard}
       generateWorkload={(projectCount, tasksPerProject) =>
@@ -133,30 +127,9 @@ function TanstackBenchmark() {
   );
 }
 
-function LokiBenchmark() {
-  const benchmarkState = useBenchmarkState();
-  const dashboard = useLokiDashboardSnapshot(
-    benchmarkState.taskLimit,
-    benchmarkState.projectLimit,
-    benchmarkState.selectedProjectId,
-  );
-
-  return (
-    <BenchmarkApp
-      backendName="LokiJS"
-      benchmarkState={benchmarkState}
-      dashboard={dashboard}
-      generateWorkload={generateLokiWorkload}
-      clearWorkload={clearLokiWorkload}
-      toggleTaskDone={toggleLokiTaskDone}
-    />
-  );
-}
-
 function App() {
   if (window.location.pathname === "/redux") return <ReduxBenchmark />;
   if (window.location.pathname === "/db") return <TanstackBenchmark />;
-  if (window.location.pathname === "/loki") return <LokiBenchmark />;
 
   return <HyperdbBenchmark />;
 }

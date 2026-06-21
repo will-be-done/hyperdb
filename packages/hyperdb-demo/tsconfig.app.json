@@ -8,6 +8,25 @@
     "skipLibCheck": true,
 
     /* Bundler mode */
+    "paths": {
+      "@will-be-done/hyperdb": ["../hyperdb/src/index.ts"],
+      "@will-be-done/hyperdb/react": ["../hyperdb/src/react.ts"],
+      "@will-be-done/hyperdb/tracing": [
+        "../hyperdb/src/hyperdb/tracing/index.ts"
+      ],
+      "@will-be-done/hyperdb/drivers/inmemory": [
+        "../hyperdb/src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts"
+      ],
+      "@will-be-done/hyperdb/drivers/sqlite": [
+        "../hyperdb/src/hyperdb/drivers/sqlite/index.ts"
+      ],
+      "@will-be-done/hyperdb/drivers/idb": [
+        "../hyperdb/src/hyperdb/drivers/idb/idb-driver.ts"
+      ],
+      "@will-be-done/hyperdb-devtool/react": [
+        "../hyperdb-devtool/src/react.ts"
+      ]
+    },
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,

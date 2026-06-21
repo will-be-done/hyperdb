@@ -90,7 +90,7 @@ export function BenchmarkApp({
   };
 
   const runTenThousandTasks = () => {
-    runMeasured("10,000 task batch", () => generateWorkload(20, 500));
+    runMeasured("100,000 task batch", () => generateWorkload(20, 5000));
   };
 
   const clearAll = () => {
@@ -108,12 +108,15 @@ export function BenchmarkApp({
   return (
     <main className="app-shell">
       <nav className="route-tabs" aria-label="Backend comparison">
-        <a href="/" aria-current={backendName === "HyperDB" ? "page" : undefined}>
+        <a
+          href="/"
+          aria-current={backendName === "HyperDB" ? "page" : undefined}
+        >
           HyperDB
         </a>
         <a
           href="/redux"
-          aria-current={backendName === "Redux Toolkit" ? "page" : undefined}
+          aria-current={backendName === "Redux" ? "page" : undefined}
         >
           Redux
         </a>
@@ -122,12 +125,6 @@ export function BenchmarkApp({
           aria-current={backendName === "TanStack DB" ? "page" : undefined}
         >
           TanStack DB
-        </a>
-        <a
-          href="/loki"
-          aria-current={backendName === "LokiJS" ? "page" : undefined}
-        >
-          LokiJS
         </a>
       </nav>
 
@@ -151,7 +148,9 @@ export function BenchmarkApp({
             type="number"
             value={projectCount}
             onChange={(event) =>
-              setProjectCount(clampInteger(event.currentTarget.valueAsNumber, 1))
+              setProjectCount(
+                clampInteger(event.currentTarget.valueAsNumber, 1),
+              )
             }
           />
         </label>
@@ -174,7 +173,11 @@ export function BenchmarkApp({
           <strong>{formatNumber(projectCount + queuedTasks)}</strong>
         </div>
         <div className="button-group">
-          <button type="button" onClick={runCustomWorkload} disabled={isWorking}>
+          <button
+            type="button"
+            onClick={runCustomWorkload}
+            disabled={isWorking}
+          >
             Generate batch
           </button>
           <button
@@ -183,7 +186,7 @@ export function BenchmarkApp({
             onClick={runTenThousandTasks}
             disabled={isWorking}
           >
-            Generate 10,000 tasks
+            Generate 100,000 tasks
           </button>
           <button
             type="button"
@@ -271,7 +274,9 @@ export function BenchmarkApp({
               <div className="show-more-row">
                 <button
                   className="secondary"
-                  onClick={() => setTaskLimit((limit) => limit + LIST_PAGE_SIZE)}
+                  onClick={() =>
+                    setTaskLimit((limit) => limit + LIST_PAGE_SIZE)
+                  }
                   type="button"
                 >
                   Show more
@@ -284,7 +289,8 @@ export function BenchmarkApp({
         <div className="data-panel">
           <div className="panel-heading">
             <h2>
-              First {formatNumber(visibleProjectCount || LIST_PAGE_SIZE)} projects
+              First {formatNumber(visibleProjectCount || LIST_PAGE_SIZE)}{" "}
+              projects
             </h2>
             <span>{formatNumber(dashboard.totalProjects)} total</span>
           </div>
