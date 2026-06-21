@@ -119,6 +119,49 @@
   color: currentColor;
 }
 
+/* Center the hero copy & actions (tRPC-style).
+   Starlight reserves a 7fr/4fr two-column grid for a hero image; with no
+   image we collapse it to a single centered column. `div.hero` outranks
+   Starlight's `:where()`-scoped rule without needing !important. */
+div.hero {
+  grid-template-columns: 100%;
+  justify-items: center;
+  padding-bottom: 4rem;
+  padding-top: 1rem;
+}
+
+.hero > .stack {
+  align-items: center;
+  text-align: center;
+}
+
+.hero .copy {
+  align-items: center;
+}
+
+.hero .tagline {
+  margin-inline: auto;
+}
+
+.hero .actions {
+  justify-content: center;
+}
+
+/* Code screenshot under the hero (tRPC-style) */
+.hero-screenshot {
+  margin: 0 auto 3rem;
+  max-width: 1100px;
+  text-align: center;
+}
+
+.hero-screenshot img {
+  width: 100%;
+  height: auto;
+  border-radius: 14px;
+  border: 1px solid var(--sl-color-hairline-shade);
+  box-shadow: 0 24px 70px -30px rgba(109, 94, 252, 0.45);
+}
+
 /* ===========================================================================
    Cards (feature grid on the splash page)
    ========================================================================= */

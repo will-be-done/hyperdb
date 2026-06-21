@@ -12,6 +12,7 @@ Devtool:
 
 Doc:
 
+1. MIGRATE TO DOCUSAURUS
 1. Fix npm install/doc links
 1. Add performance compare doc
 1. DONE Remove wa-sqlite from hyperdb-lib. Move wa-sqlite support to recipe
@@ -33,3 +34,6 @@ Doc:
 1. adopt styling of trpc
 1. move devtool to separate package
 1. how to isolate devtool styling?
+
+Others:
+1. intent skills css tanstack support
