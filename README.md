@@ -44,7 +44,6 @@ And it has awesome devtool:
 
 <img width="1999" height="745" alt="image" src="https://github.com/user-attachments/assets/428d892b-8982-4bd5-8b62-402c04218690" />
 
-
 ## Who needs this
 
 Reach for HyperDB when you want **structured, queryable, reactive data** shared
