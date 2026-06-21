@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.0.3
+
+### Patch Changes
+
+- dbc1b5d: version bump check
+
 ## 0.0.2
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@will-be-done/hyperdb-devtool",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "exports": {
     "./react": {
