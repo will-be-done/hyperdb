@@ -5,19 +5,13 @@
   "private": true,
   "license": "MIT",
   "workspaces": [
-    "apps/*"
+    "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter='@will-be-done/hyperdb-lib' build && bun run --filter='hyperdb-doc' build",
-    "lint": "bun run --filter='@will-be-done/hyperdb-lib' lint",
-    "lint:cycles": "bun run --filter='@will-be-done/hyperdb-lib' lint:cycles",
-    "test": "bun run --filter='@will-be-done/hyperdb-lib' test",
-    "ts": "bun run --filter='@will-be-done/hyperdb-lib' ts"
-  },
-  "overrides": {
-    "@types/react": "19.2.17",
-    "@types/react-dom": "19.2.3",
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "build": "bun run --filter='@will-be-done/hyperdb' build && bun run --filter='@will-be-done/hyperdb-doc' build",
+    "lint": "bun run --filter='@will-be-done/hyperdb' lint",
+    "lint:cycles": "bun run --filter='@will-be-done/hyperdb' lint:cycles",
+    "test": "bun run --filter='@will-be-done/hyperdb' test",
+    "ts": "bun run --filter='@will-be-done/hyperdb' ts"
   }
 }
