@@ -1,6 +1,6 @@
 # HyperDB
 
-**The reactive, local-first database for TypeScript.** Write your schema,
+**The reactive database for local-first apps.** Write your schema,
 queries, selectors, and actions once, then run the exact same code in the
 browser _and_ on the server.
 
