@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-The React integration lives at `@will-be-done/hyperdb-lib/react`. It provides a
+The React integration lives at `@will-be-done/hyperdb/react`. It provides a
 context provider plus hooks for reactive reads, dispatching actions, and one-off
 reads. React 19 is a peer dependency.
 
@@ -22,7 +22,7 @@ Wrap your tree in `DBProvider` and pass a [`SubscribableDB`](/runtime/db/) as it
 value. Every hook reads the database from this context.
 
 ```tsx
-import { DBProvider } from "@will-be-done/hyperdb-lib/react";
+import { DBProvider } from "@will-be-done/hyperdb/react";
 import { db } from "./db";
 
 export function App() {
@@ -45,7 +45,7 @@ For synchronous drivers (in-memory, sync SQLite). It subscribes to a cached
 selector and re-renders only when the selector's scanned ranges change.
 
 ```tsx
-import { useSyncSelector } from "@will-be-done/hyperdb-lib/react";
+import { useSyncSelector } from "@will-be-done/hyperdb/react";
 import { projectTasks } from "./tasks";
 
 function Tasks({ projectId }: { projectId: string }) {
@@ -95,7 +95,7 @@ const tasks = useAsyncSelector({
 Return a function that dispatches an action against the context database.
 
 ```tsx
-import { useDispatch } from "@will-be-done/hyperdb-lib/react";
+import { useDispatch } from "@will-be-done/hyperdb/react";
 import { createTask } from "./tasks";
 
 function AddButton({ projectId }: { projectId: string }) {
@@ -123,7 +123,7 @@ drivers.
 reads — for example reading inside an event handler. They don't subscribe.
 
 ```tsx
-import { useSelect } from "@will-be-done/hyperdb-lib/react";
+import { useSelect } from "@will-be-done/hyperdb/react";
 
 const select = useSelect();
 const handleClick = () => {

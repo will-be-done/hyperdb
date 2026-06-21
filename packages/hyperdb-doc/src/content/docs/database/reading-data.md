@@ -13,7 +13,7 @@ mutation emitted from a read.
 ## A first selector
 
 ```ts
-import { selectFrom, v } from "@will-be-done/hyperdb-lib";
+import { selectFrom, v } from "@will-be-done/hyperdb";
 import { selector } from "./builders"; // createSelector()
 import { tasksTable } from "./schema";
 
@@ -83,7 +83,7 @@ To express an OR, return an **array** of query branches from `where`, or use the
 `or(...)` helper. Each branch is scanned and the results are combined.
 
 ```ts
-import { selectFrom, or } from "@will-be-done/hyperdb-lib";
+import { selectFrom, or } from "@will-be-done/hyperdb";
 
 selectFrom(tasksTable, "byProjectState").where((q) =>
   or(q.eq("projectId", "p1").eq("state", "todo"), q.eq("projectId", "p2")),
@@ -174,7 +174,7 @@ Inside React, use [`useSyncSelector` / `useAsyncSelector`](/integrations/react/)
 Outside React, run them directly:
 
 ```ts
-import { select, runSelectorAsync } from "@will-be-done/hyperdb-lib";
+import { select, runSelectorAsync } from "@will-be-done/hyperdb";
 
 // synchronous drivers (in-memory, sync SQLite)
 const tasks = select(db, projectTasks({ projectId: "p1" }));

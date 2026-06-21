@@ -4,6 +4,7 @@ import starlight from "@astrojs/starlight";
 
 // https://astro.build/config
 export default defineConfig({
+  site: "https://hyperdb.will-be-done.app",
   integrations: [
     starlight({
       title: "HyperDB",
@@ -13,7 +14,7 @@ export default defineConfig({
         {
           icon: "github",
           label: "GitHub",
-          href: "https://github.com/withastro/starlight",
+          href: "https://github.com/will-be-done/hyperdb",
         },
       ],
       sidebar: [

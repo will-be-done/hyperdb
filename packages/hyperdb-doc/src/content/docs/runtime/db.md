@@ -15,8 +15,8 @@ together.
 then load your tables.
 
 ```ts
-import { DB, hyperDBTraceStore } from "@will-be-done/hyperdb-lib";
-import { BptreeInmemDriver } from "@will-be-done/hyperdb-lib/drivers/inmemory";
+import { DB, hyperDBTraceStore } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const baseDb = new DB(new BptreeInmemDriver(), {
   runtimeValidation: true,
@@ -50,7 +50,7 @@ revisions, subscriptions, and lifecycle hooks. Wrap your base `DB` in it for any
 app that renders from the data.
 
 ```ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb-lib";
+import { DB, SubscribableDB } from "@will-be-done/hyperdb";
 
 const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
 db.loadTables([tasksTable]);
@@ -126,7 +126,7 @@ through to hooks and the tracer. Derive a DB view that carries extra traits with
 `withTraits`, and read the current set inside an action with `getCurrentTraits`.
 
 ```ts
-import { getCurrentTraits } from "@will-be-done/hyperdb-lib";
+import { getCurrentTraits } from "@will-be-done/hyperdb";
 
 const scopedDb = db.withTraits({ type: "myFeature.source", value: "import" });
 

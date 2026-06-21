@@ -13,7 +13,7 @@ action inside a single transaction.
 ## Defining an action
 
 ```ts
-import { insert, v } from "@will-be-done/hyperdb-lib";
+import { insert, v } from "@will-be-done/hyperdb";
 import { action } from "./builders"; // createAction()
 import { tasksTable } from "./schema";
 
@@ -83,7 +83,7 @@ transaction rolls back and nothing is written. Use the variant that matches your
 driver.
 
 ```ts
-import { syncDispatch, asyncDispatch } from "@will-be-done/hyperdb-lib";
+import { syncDispatch, asyncDispatch } from "@will-be-done/hyperdb";
 
 // synchronous drivers (in-memory, sync SQLite)
 syncDispatch(db, createTask({ id: "t1", projectId: "p1", title: "Ship" }));

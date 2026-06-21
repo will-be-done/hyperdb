@@ -2,7 +2,7 @@
 title: Quickstart
 description: Define a table, create a database, run selectors and actions, and wire it into React.
 sidebar:
-  order: 3
+  order: 4
 ---
 
 This quickstart builds a tiny task app end to end: a schema, a selector, an
@@ -11,7 +11,7 @@ action, a database, and a React component.
 ## 1. Install
 
 ```bash
-npm install @will-be-done/hyperdb-lib
+npm install @will-be-done/hyperdb
 # React integration (optional)
 npm install react react-dom
 ```
@@ -23,7 +23,7 @@ A table needs a string `id`. HyperDB automatically adds a hash index named
 
 ```ts
 // schema.ts
-import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb-lib";
+import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -44,7 +44,7 @@ you set defaults like argument validation.
 
 ```ts
 // builders.ts
-import { createSelector, createAction } from "@will-be-done/hyperdb-lib";
+import { createSelector, createAction } from "@will-be-done/hyperdb";
 
 export const selector = createSelector({ validateArgs: false });
 export const action = createAction({ validateArgs: false });
@@ -54,7 +54,7 @@ export const action = createAction({ validateArgs: false });
 
 ```ts
 // tasks.ts
-import { selectFrom, insert, v } from "@will-be-done/hyperdb-lib";
+import { selectFrom, insert, v } from "@will-be-done/hyperdb";
 import { selector, action } from "./builders";
 import { tasksTable } from "./schema";
 
@@ -86,8 +86,8 @@ core `DB` in a `SubscribableDB` so selectors can react to changes.
 
 ```ts
 // db.ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb-lib";
-import { BptreeInmemDriver } from "@will-be-done/hyperdb-lib/drivers/inmemory";
+import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
 const baseDb = new DB(new BptreeInmemDriver());
@@ -99,7 +99,7 @@ db.loadTables([tasksTable]);
 ## 6. Read and write outside React
 
 ```ts
-import { syncDispatch, select } from "@will-be-done/hyperdb-lib";
+import { syncDispatch, select } from "@will-be-done/hyperdb";
 import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
@@ -122,7 +122,7 @@ import {
   DBProvider,
   useSyncSelector,
   useDispatch,
-} from "@will-be-done/hyperdb-lib/react";
+} from "@will-be-done/hyperdb/react";
 import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 

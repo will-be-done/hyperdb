@@ -31,8 +31,8 @@ and actions on both sides.
 The simplest driver — a set of in-memory B+trees. Construct it with no arguments.
 
 ```ts
-import { DB } from "@will-be-done/hyperdb-lib";
-import { BptreeInmemDriver } from "@will-be-done/hyperdb-lib/drivers/inmemory";
+import { DB } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const memoryDb = new DB(new BptreeInmemDriver());
 memoryDb.loadTables([tasksTable]);
@@ -54,7 +54,7 @@ For synchronous SQLite, implement this tiny shape and pass it to `SqlDriver`:
 import {
   SqlDriver,
   type SqlValue,
-} from "@will-be-done/hyperdb-lib/drivers/sqlite";
+} from "@will-be-done/hyperdb/drivers/sqlite";
 
 export interface SQLiteDB {
   exec(sql: string, params?: SqlValue[]): void;
@@ -74,7 +74,7 @@ For asynchronous SQLite, implement the same shape with promises and pass it to
 import {
   AsyncSqlDriver,
   type SqlValue,
-} from "@will-be-done/hyperdb-lib/drivers/sqlite";
+} from "@will-be-done/hyperdb/drivers/sqlite";
 
 interface AsyncSQLiteDB {
   exec(sql: string, params?: SqlValue[]): Promise<void>;
@@ -97,12 +97,12 @@ typed-array/data-view values around JSON storage so they round-trip exactly.
 ```ts
 import initSqlJs from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
-import { DB } from "@will-be-done/hyperdb-lib";
+import { DB } from "@will-be-done/hyperdb";
 import {
   SqlDriver,
   type SQLStatement,
   type SqlValue,
-} from "@will-be-done/hyperdb-lib/drivers/sqlite";
+} from "@will-be-done/hyperdb/drivers/sqlite";
 
 const SQL = await initSqlJs({
   locateFile: () => wasmUrl,
@@ -146,12 +146,12 @@ import SQLiteAsyncESMFactory from "wa-sqlite/dist/wa-sqlite-async.mjs";
 import asyncSqlWasmUrl from "wa-sqlite/dist/wa-sqlite-async.wasm?url";
 import * as SQLite from "wa-sqlite";
 import { MemoryAsyncVFS } from "wa-sqlite/src/examples/MemoryAsyncVFS.js";
-import { DB, execAsync } from "@will-be-done/hyperdb-lib";
+import { DB, execAsync } from "@will-be-done/hyperdb";
 import {
   AsyncSqlDriver,
   type AsyncSQLiteDB,
   type SqlValue,
-} from "@will-be-done/hyperdb-lib/drivers/sqlite";
+} from "@will-be-done/hyperdb/drivers/sqlite";
 
 type WaSQLiteValue =
   | number
@@ -222,15 +222,18 @@ await execAsync(db.loadTables([tasksTable]));
 `AsyncSqlDriver` is asynchronous, so use it with `execAsync`,
 `asyncDispatch`, and `runSelectorAsync`.
 
-### Bun sync
+### Backend: native SQLite
+
+On the server, point `SqlDriver` at a native SQLite binding — here Bun's built-in
+`bun:sqlite`:
 
 ```ts
 import { Database } from "bun:sqlite";
-import { DB } from "@will-be-done/hyperdb-lib";
+import { DB } from "@will-be-done/hyperdb";
 import {
   SqlDriver,
   type SqlValue,
-} from "@will-be-done/hyperdb-lib/drivers/sqlite";
+} from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqliteDB = new Database("app.sqlite", { strict: true });
 sqliteDB.run("PRAGMA journal_mode=WAL;");
@@ -283,8 +286,8 @@ For durable browser storage, open an `IdbDriver` by name. It is asynchronous, so
 load tables and dispatch through the async helpers.
 
 ```ts
-import { DB, execAsync, asyncDispatch } from "@will-be-done/hyperdb-lib";
-import { openIndexedDBDriver } from "@will-be-done/hyperdb-lib/drivers/idb";
+import { DB, execAsync, asyncDispatch } from "@will-be-done/hyperdb";
+import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 
 const idbDriver = await openIndexedDBDriver("my-app-db");
 const idbDb = new DB(idbDriver);

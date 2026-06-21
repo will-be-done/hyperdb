@@ -27,7 +27,7 @@ logical clock at which it last changed** — that per-field timestamp is what ma
 field-level last-write-wins possible.
 
 ```ts
-import { defineTable, type ExtractSchema, v } from "@will-be-done/hyperdb-lib";
+import { defineTable, type ExtractSchema, v } from "@will-be-done/hyperdb";
 
 export const changesTable = defineTable("changes", {
   id: v.string(),
@@ -69,7 +69,7 @@ Instead of asking every action to also write a change row, register
 never be lost or get out of step with the data.
 
 ```ts
-import { noop, syncDispatch } from "@will-be-done/hyperdb-lib";
+import { noop, syncDispatch } from "@will-be-done/hyperdb";
 
 syncSubDb.afterInsert(function* (db, table, traits, ops) {
   if (table === changesTable) return; // don't track the tracker
@@ -246,13 +246,13 @@ and the `clientId` (e.g. `"server-<dbName>"`).
 
 ```ts
 import { Database } from "bun:sqlite";
-import { SqlDriver } from "@will-be-done/hyperdb-lib/drivers/sqlite";
+import { SqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
 import {
   DB,
   SubscribableDB,
   syncDispatch,
   noop,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 import {
   changesTable,
   insertChangeFromInsert,

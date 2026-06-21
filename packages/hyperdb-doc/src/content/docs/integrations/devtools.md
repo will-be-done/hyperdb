@@ -13,13 +13,13 @@ also configure it independently.
 
 ## The devtool panel
 
-The devtool is exported from `@will-be-done/hyperdb-lib/devtool`. Render
+The devtool is exported from `@will-be-done/hyperdb-devtool/react`. Render
 `HyperDBDevtools` anywhere in your tree; it can read the database from
 [`DBProvider`](/integrations/react/) context, or take an explicit `db` prop.
 
 ```tsx
-import { DBProvider } from "@will-be-done/hyperdb-lib/react";
-import { HyperDBDevtools } from "@will-be-done/hyperdb-lib/devtool";
+import { DBProvider } from "@will-be-done/hyperdb/react";
+import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
 import { db } from "./db";
 
 export function App() {
@@ -59,7 +59,7 @@ Set a tracer when constructing a [`DB`](/runtime/db/). Pass the shared store, th
 string `"default"`, or `"disabled"`.
 
 ```ts
-import { DB, hyperDBTraceStore } from "@will-be-done/hyperdb-lib";
+import { DB, hyperDBTraceStore } from "@will-be-done/hyperdb";
 
 const db = new DB(driver, { tracer: hyperDBTraceStore });
 ```
@@ -73,7 +73,7 @@ default:
 import {
   setDefaultHyperDBTracer,
   hyperDBTraceStore,
-} from "@will-be-done/hyperdb-lib/tracing";
+} from "@will-be-done/hyperdb/tracing";
 
 setDefaultHyperDBTracer(hyperDBTraceStore);
 ```
@@ -83,7 +83,7 @@ setDefaultHyperDBTracer(hyperDBTraceStore);
 Selector and action factories accept a `trace` option (`{ enabled, startOn }`):
 
 ```ts
-import { createSelector } from "@will-be-done/hyperdb-lib";
+import { createSelector } from "@will-be-done/hyperdb";
 
 const selector = createSelector({
   trace: { enabled: true, startOn: "devtoolOpen" },

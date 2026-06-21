@@ -41,7 +41,7 @@ a **hash** index — it can only look up a single id, not scan a whole table. So
 a **btree** index over `id` (here `byIds`) to every table you persist:
 
 ```ts
-import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb-lib";
+import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -68,9 +68,9 @@ tier is a plain [`DB`](/runtime/db/) over the
 `loadTables` runs through `execAsync`.
 
 ```ts
-import { BptreeInmemDriver } from "@will-be-done/hyperdb-lib/drivers/inmemory";
-import { openIndexedDBDriver } from "@will-be-done/hyperdb-lib/drivers/idb";
-import { DB, SubscribableDB, execAsync } from "@will-be-done/hyperdb-lib";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
+import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
+import { DB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
 import { tasksTable, projectsTable } from "./tables";
 
 const persistedTables = [tasksTable, projectsTable];
@@ -106,7 +106,7 @@ import {
   type HyperDB,
   type SubscribableDB,
   type TableDefinition,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 async function hydrate(
   persistentDB: HyperDB,
@@ -167,7 +167,7 @@ import {
   type HyperDB,
   type Op,
   type SubscribableDB,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
   const pending: Op[][] = [];

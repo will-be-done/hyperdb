@@ -15,7 +15,7 @@ Every table has a name and a set of fields. A table **must** have a string `id`
 field. HyperDB automatically creates a built-in hash index named `byId` on `id`.
 
 ```ts
-import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb-lib";
+import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -85,7 +85,7 @@ arguments or intermediate data. Use `Infer` to get the TypeScript type of any
 validator.
 
 ```ts
-import { v, type Infer } from "@will-be-done/hyperdb-lib";
+import { v, type Infer } from "@will-be-done/hyperdb";
 
 const filterSchema = v.object({
   projectId: v.string(),

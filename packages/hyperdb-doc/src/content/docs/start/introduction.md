@@ -74,7 +74,7 @@ same change-tracking code running on the browser and a Bun/SQLite server.
 ## Installation
 
 ```bash
-npm install @will-be-done/hyperdb-lib
+npm install @will-be-done/hyperdb
 ```
 
 React is a peer dependency, required only if you use the React integration:
@@ -83,17 +83,19 @@ React is a peer dependency, required only if you use the React integration:
 npm install react react-dom
 ```
 
-The package ships several entry points:
+The core package ships several entry points:
 
-| Import path                                  | Contents                                                                                  |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `@will-be-done/hyperdb-lib`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
-| `@will-be-done/hyperdb-lib/react`            | React hooks and `DBProvider`                                                              |
-| `@will-be-done/hyperdb-lib/devtool`          | `HyperDBDevtools` panel                                                                   |
-| `@will-be-done/hyperdb-lib/tracing`          | Tracing store and tracer configuration                                                    |
-| `@will-be-done/hyperdb-lib/drivers/inmemory` | `BptreeInmemDriver`                                                                       |
-| `@will-be-done/hyperdb-lib/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                             |
-| `@will-be-done/hyperdb-lib/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                        |
+| Import path                              | Contents                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                               |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                     |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                         |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                               |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                         |
+
+The React devtool ships as a separate package, `@will-be-done/hyperdb-devtool`,
+exposing `HyperDBDevtools` from `@will-be-done/hyperdb-devtool/react`.
 
 ## Next steps
 

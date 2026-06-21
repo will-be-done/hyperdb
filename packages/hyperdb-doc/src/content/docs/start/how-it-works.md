@@ -2,7 +2,7 @@
 title: How HyperDB Works
 description: The three layers of HyperDB — tables, generator commands, and the DB runtime.
 sidebar:
-  order: 2
+  order: 3
 ---
 
 HyperDB is built from three layers. Understanding how they fit together explains
@@ -18,7 +18,7 @@ description — it holds no data and is not tied to any database instance, so yo
 can share the same table definitions across many `DB`s.
 
 ```ts
-import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb-lib";
+import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -44,9 +44,9 @@ a command; you never call the storage driver yourself.
   `deleteRows` commands.
 
 ```ts
-import { selectFrom } from "@will-be-done/hyperdb-lib";
+import { selectFrom } from "@will-be-done/hyperdb";
 import { selector, action } from "./builders"; // createSelector()/createAction()
-import { insert } from "@will-be-done/hyperdb-lib";
+import { insert } from "@will-be-done/hyperdb";
 
 export const projectTasks = selector({
   name: "projectTasks",
@@ -80,8 +80,8 @@ A `DB` ties a set of tables to a **storage driver** and executes commands. The
 driver provides the actual backend: in-memory B+trees, SQLite, or IndexedDB.
 
 ```ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb-lib";
-import { BptreeInmemDriver } from "@will-be-done/hyperdb-lib/drivers/inmemory";
+import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
 db.loadTables([tasksTable]);
@@ -97,7 +97,7 @@ instead:
 
 ```ts
 import { Database } from "bun:sqlite";
-import { SqlDriver } from "@will-be-done/hyperdb-lib/drivers/sqlite";
+import { SqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqlite = new Database("app.sqlite", { strict: true });
 const serverDb = new DB(makeSqlDriver(sqlite)); // same tasksTable, same selectors

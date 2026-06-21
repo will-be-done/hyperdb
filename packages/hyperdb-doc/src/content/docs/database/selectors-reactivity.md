@@ -27,7 +27,7 @@ This means a selector that reads `projectId = "p1"` is unaffected by a write to
 outside of React. (The React hooks are built on it.)
 
 ```ts
-import { initCachedSelector } from "@will-be-done/hyperdb-lib";
+import { initCachedSelector } from "@will-be-done/hyperdb";
 
 const store = initCachedSelector(db, projectTasks, { projectId: "p1" });
 
