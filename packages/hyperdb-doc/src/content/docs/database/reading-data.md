@@ -1,11 +1,11 @@
 ---
 title: Reading Data
-description: Query data with selectors and the selectFrom builder — filters, ordering, limits, and first results.
+description: Query data with selectors and the selectFrom builder, covering filters, ordering, limits, and first results.
 sidebar:
   order: 3
 ---
 
-You read data through **selectors** — generator functions that describe what to
+You read data through selectors, generator functions that describe what to
 read. Inside a selector you build queries with `selectFrom` and `yield*` them.
 Selectors can call other selectors but can never write; the runtime rejects any
 mutation emitted from a read.
@@ -36,14 +36,14 @@ Object-form selectors accept:
 | `args`        | Validator map for the single args object                                                               |
 | `handler`     | Generator function that does the reading                                                               |
 | `skipTrace`   | `true`, or `{ rootTrace, childTrace }` to skip tracing                                                 |
-| `memoization` | `{ root?, selfChild? }` cache controls — see [Selectors & Reactivity](/database/selectors-reactivity/) |
+| `memoization` | `{ root?, selfChild? }` cache controls (see [Selectors & Reactivity](/database/selectors-reactivity/)) |
 
 You can also wrap a bare generator function instead of using the object form.
 
 ## The query builder
 
-`selectFrom(table, indexName)` returns a builder. You always query **through an
-index** — there are no table scans. The builder is immutable: each method returns
+`selectFrom(table, indexName)` returns a builder. You always query through an
+index, so there are no table scans. The builder is immutable: each method returns
 a new builder.
 
 ```ts
@@ -73,13 +73,13 @@ Available comparisons:
 | `q.lt(col, val)`  | less than             |
 | `q.lte(col, val)` | less than or equal    |
 
-Comparisons apply to **index columns**, and which combinations are legal depends
+Comparisons apply to index columns, and which combinations are legal depends
 on the column order of the index. The rules (equality prefix + one trailing
 range) are explained in detail in [Indexes](/database/indexes/).
 
 ### OR queries
 
-To express an OR, return an **array** of query branches from `where`, or use the
+To express an OR, return an array of query branches from `where`, or use the
 `or(...)` helper. Each branch is scanned and the results are combined.
 
 ```ts
@@ -96,7 +96,7 @@ selectFrom(tasksTable, "byProjectState").where((q) => [
 ]);
 ```
 
-This is the idiom for batched lookups — for example fetching many rows by id in
+This is the idiom for batched lookups, for example fetching many rows by id in
 one query:
 
 ```ts
@@ -106,7 +106,7 @@ selectFrom(tasksTable, "byId").where((q) => ids.map((id) => q.eq("id", id)));
 ### `order` and `limit`
 
 ```ts
-.order("asc")   // or "desc" — follows the index's key order
+.order("asc")   // or "desc"; follows the index's key order
 .limit(50)      // cap the number of returned rows
 ```
 
@@ -117,7 +117,7 @@ reverse. Hash indexes are for equality lookups and do not provide ordering.
 
 ### Many rows
 
-`yield*`-ing a query returns an **array** of rows:
+`yield*`-ing a query returns an array of rows:
 
 ```ts
 const tasks =

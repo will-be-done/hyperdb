@@ -1,22 +1,22 @@
 ---
 title: In-Memory Store with Persistence
-description: Run a synchronous in-memory HyperDB for the UI and mirror every change to a persistent IndexedDB tier — instant reads and writes that are still durable.
+description: Run a synchronous in-memory HyperDB for the UI and mirror every change to a persistent IndexedDB tier for instant reads and writes that are still durable.
 sidebar:
   order: 1
   label: In-Memory + Persistence
 ---
 
-The fastest local-first setup HyperDB enables is a **two-tier** one: the UI reads
-and writes a synchronous **in-memory** database, and every change is mirrored to a
-**persistent** database (IndexedDB) in the background. On startup you load the
+The fastest local-first setup HyperDB enables is a two-tier one: the UI reads
+and writes a synchronous in-memory database, and every change is mirrored to a
+persistent database (IndexedDB) in the background. On startup you load the
 persisted rows back into memory.
 
-The result is the best of both worlds — selectors and actions stay
+The result is the best of both worlds: selectors and actions stay
 [synchronous and instant](/start/why/#synchronous-on-the-frontend) because they
 run against the in-memory tier, while your data survives reloads because it's
 continuously flushed to disk. This guide builds that setup from scratch.
 
-This is **persistence**, not multi-client sync. If you also need change tracking,
+This is persistence, not multi-client sync. If you also need change tracking,
 merge, and a server peer, the [Sync Engine guide](/guides/sync-engine/) layers
 all of that on top of exactly this foundation.
 
@@ -31,14 +31,14 @@ all of that on top of exactly this foundation.
                                    (load on startup)
 ```
 
-Three moving parts: **hydrate** on startup, **subscribe** to in-memory commits,
-and **persist** each batch of changes to IndexedDB.
+Three moving parts: hydrate on startup, subscribe to in-memory commits,
+and persist each batch of changes to IndexedDB.
 
 ## 1. Give each persisted table a full-scan index
 
 To hydrate you need to read _every_ row of a table. The built-in `byId` index is
-a **hash** index — it can only look up a single id, not scan a whole table. So add
-a **btree** index over `id` (here `byIds`) to every table you persist:
+a hash index, so it can only look up a single id, not scan a whole table. So add
+a btree index over `id` (here `byIds`) to every table you persist:
 
 ```ts
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
@@ -57,7 +57,7 @@ export type Task = ExtractSchema<typeof tasksTable>;
 ```
 
 With a btree index, `selectFrom(table, "byIds")` with no `where` returns the whole
-table — that's what hydration reads.
+table, and that's what hydration reads.
 
 ## 2. Create both databases
 
@@ -76,11 +76,11 @@ import { tasksTable, projectsTable } from "./tables";
 const persistedTables = [tasksTable, projectsTable];
 
 export async function createStores(dbName: string) {
-  // Persistent tier — IndexedDB, async
+  // Persistent tier: IndexedDB, async
   const persistentDB = new DB(await openIndexedDBDriver(dbName));
   await execAsync(persistentDB.loadTables(persistedTables));
 
-  // In-memory tier — synchronous; this is what the UI reads and writes
+  // In-memory tier: synchronous; this is what the UI reads and writes
   const memDB = new SubscribableDB(new DB(new BptreeInmemDriver()));
   memDB.loadTables(persistedTables);
 
@@ -88,7 +88,7 @@ export async function createStores(dbName: string) {
 }
 ```
 
-Both tiers load the **same table definitions** — the only difference is the
+Both tiers load the same table definitions; the only difference is the
 driver underneath.
 
 ## 3. Hydrate the in-memory tier
@@ -129,22 +129,22 @@ After `hydrate` returns, the in-memory tier holds a complete copy of your data a
 the UI can read it synchronously.
 
 :::caution
-Hydration loads the **whole dataset into memory**. That's exactly right for a
+Hydration loads the whole dataset into memory. That's exactly right for a
 local-first client (one user's data), but it's the opposite of the
 [server pattern](/start/why/#the-backend-problem), where the runtime pulls in only
 the rows a selector touches. Don't hydrate an unbounded server table this way.
 :::
 
 :::note[Load on demand: a hybrid mode (in development)]
-Eager hydration is the simplest model, but not the only one. A **hybrid** mode —
-in development — flips it around: instead of loading everything up front, a read
+Eager hydration is the simplest model, but not the only one. A hybrid mode,
+currently in development, flips it around: instead of loading everything up front, a read
 checks the in-memory tier first and, on a miss, runs the _same_ query against the
 persistent tier and caches the result back into memory for next time.
 
-The trade-off is that selectors and dispatch become **async** (a read may need to
+The trade-off is that selectors and dispatch become async (a read may need to
 fall through to disk), but startup is near-instant and memory stays low, because
-data is pulled in **lazily, on demand**. Writes still commit instantly for any
-rows already cached — so if you preload the working set, actions stay synchronous
+data is pulled in lazily, on demand. Writes still commit instantly for any
+rows already cached, so if you preload the working set, actions stay synchronous
 while everything else loads on first access. This guide uses the eager model;
 reach for hybrid mode when the dataset is too large to hold fully in memory or
 when startup time matters more than synchronous reads.
@@ -158,7 +158,7 @@ the list of [`Op`s](/database/selectors-reactivity/#subscriptions-and-revisions)
 apply them to the persistent tier.
 
 Because IndexedDB is async while commits arrive synchronously, a small queue
-**serializes** the writes so batches are persisted in commit order, one
+serializes the writes so batches are persisted in commit order, one
 transaction at a time.
 
 ```ts
@@ -244,7 +244,7 @@ export async function initStore(dbName: string) {
   await hydrate(persistentDB, memDB, persistedTables);
   startPersisting(persistentDB, memDB);
 
-  // Hand the in-memory tier to the app — pass it to <DBProvider value={memDB}>
+  // Hand the in-memory tier to the app; pass it to <DBProvider value={memDB}>
   return memDB;
 }
 ```
@@ -256,24 +256,24 @@ persistence loop keeps disk in step behind the scenes.
 
 ## What to keep in mind
 
-- **Eventual durability.** A write hits memory instantly and disk a moment later.
+- Eventual durability. A write hits memory instantly and disk a moment later.
   A crash in that gap loses only the last unflushed commit; the `pagehide` /
   `beforeunload` flush shrinks the window, but it is best-effort. If you need
   hard durability per write, write to the persistent tier directly and accept the
   async latency.
-- **One writer.** This assumes a single tab owns the IndexedDB database. Multiple
-  tabs writing the same store need cross-tab coordination — see the
+- One writer. This assumes a single tab owns the IndexedDB database. Multiple
+  tabs writing the same store need cross-tab coordination; see the
   [Sync Engine guide](/guides/sync-engine/).
-- **Tag re-applied writes.** If you later replay persisted or remote changes back
+- Tag re-applied writes. If you later replay persisted or remote changes back
   into the in-memory tier, tag those transactions with a
   [trait](/runtime/db/#traits) and skip them in the subscriber, so a write isn't
   persisted in a loop. The sync engine uses a `skip-sync` trait for exactly this.
-- **Batch large hydrations.** For very large tables, chunk the insert in step 3
+- Batch large hydrations. For very large tables, chunk the insert in step 3
   (e.g. 1,000 rows per `insert`) to keep a single transaction bounded.
 
 ## Next steps
 
 This setup gives you instant, persistent local storage. To make multiple clients
-(and a server) converge on the same data, add change tracking and merge on top —
-the [Sync Engine guide](/guides/sync-engine/) does precisely that, reusing the two
+(and a server) converge on the same data, add change tracking and merge on top.
+The [Sync Engine guide](/guides/sync-engine/) does precisely that, reusing the two
 tiers you built here.

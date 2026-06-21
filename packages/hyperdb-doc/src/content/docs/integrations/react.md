@@ -9,12 +9,12 @@ The React integration lives at `@will-be-done/hyperdb/react`. It provides a
 context provider plus hooks for reactive reads, dispatching actions, and one-off
 reads. React 19 is a peer dependency.
 
-Unlike MobX, HyperDB hands your components **plain, immutable rows** — frozen
-data, never proxies — so there is **no `observer()` wrapper** to remember and
+Unlike MobX, HyperDB hands your components plain, immutable rows: frozen
+data, never proxies. There is no `observer()` wrapper to remember and
 nothing leaking into your view layer. The hooks subscribe through HyperDB's
 [range-tracked selector cache](/database/selectors-reactivity/), so a component
-re-renders only when a mutation touches a range its selector actually scanned —
-fine-grained updates that compose with React's rendering model directly.
+re-renders only when a mutation touches a range its selector actually scanned,
+giving fine-grained updates that compose with React's rendering model directly.
 
 ## Providing the database
 
@@ -34,8 +34,8 @@ export function App() {
 }
 ```
 
-`useDB()` returns the database from context (and throws if there's no provider) —
-useful for passing the DB to non-hook utilities.
+`useDB()` returns the database from context (and throws if there's no provider).
+It is useful for passing the DB to non-hook utilities.
 
 ## Reactive reads
 
@@ -114,13 +114,13 @@ function AddButton({ projectId }: { projectId: string }) {
 }
 ```
 
-`useAsyncDispatch` returns a function that yields a `Promise` — use it with async
+`useAsyncDispatch` returns a function that yields a `Promise`; use it with async
 drivers.
 
 ## One-off reads
 
-`useSelect` and `useAsyncSelect` return a function for imperative, **non-reactive**
-reads — for example reading inside an event handler. They don't subscribe.
+`useSelect` and `useAsyncSelect` return a function for imperative, non-reactive
+reads, for example reading inside an event handler. They don't subscribe.
 
 ```tsx
 import { useSelect } from "@will-be-done/hyperdb/react";

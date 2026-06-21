@@ -1,29 +1,29 @@
 ---
 title: Building a Sync Engine
-description: A worked example — change tracking, CRDT-style merge, and a two-tier persistent setup built on HyperDB primitives.
+description: A worked example covering change tracking, CRDT-style merge, and a two-tier persistent setup built on HyperDB primitives.
 sidebar:
   order: 2
 ---
 
 HyperDB has no built-in network layer, but it gives you exactly the primitives a
-sync engine needs: **transactional actions**, **lifecycle hooks** that run inside
-the committing transaction, **traits** to tag the origin of a write, and
-**multiple databases** wired together. This guide walks through a real local-first
+sync engine needs: transactional actions, lifecycle hooks that run inside
+the committing transaction, traits to tag the origin of a write, and
+multiple databases wired together. This guide walks through a real local-first
 sync design built entirely on those primitives.
 
 The pieces are:
 
-1. A **change-tracking table** that records what changed and when.
-2. **Lifecycle hooks** that append change records on every mutation.
-3. **Merge actions** that apply remote changesets with last-write-wins semantics.
-4. A **two-tier runtime** — an in-memory tier for the UI, a persistent tier for
-   durability — plus the glue that hydrates, persists, and syncs.
+1. A change-tracking table that records what changed and when.
+2. Lifecycle hooks that append change records on every mutation.
+3. Merge actions that apply remote changesets with last-write-wins semantics.
+4. A two-tier runtime: an in-memory tier for the UI, a persistent tier for
+   durability, plus the glue that hydrates, persists, and syncs.
 
 ## 1. The change-tracking table
 
 Every syncable entity gets a companion row in a `changes` table. Crucially, the
-`changes` field is a `record(string, string)` mapping **each column name to the
-logical clock at which it last changed** — that per-field timestamp is what makes
+`changes` field is a `record(string, string)` mapping each column name to the
+logical clock at which it last changed; that per-field timestamp is what makes
 field-level last-write-wins possible.
 
 ```ts
@@ -47,7 +47,7 @@ export type Change = ExtractSchema<typeof changesTable>;
 ```
 
 The `byUpdatedAt` B-tree index makes "everything that changed after clock _X_" a
-single range query — the basis of outgoing sync:
+single range query, the basis of outgoing sync:
 
 ```ts
 const allChangesAfter = selector({
@@ -65,7 +65,7 @@ const allChangesAfter = selector({
 
 Instead of asking every action to also write a change row, register
 [lifecycle hooks](/runtime/db/#lifecycle-hooks) on the `SubscribableDB`. They run
-**inside the same transaction** as the originating write, so a change record can
+inside the same transaction as the originating write, so a change record can
 never be lost or get out of step with the data.
 
 ```ts
@@ -92,11 +92,11 @@ syncSubDb.afterInsert(function* (db, table, traits, ops) {
 
 Two HyperDB features make this clean:
 
-- **`op.oldValue` / `op.newValue`** on upsert ops let the update hook diff old vs.
+- `op.oldValue` / `op.newValue` on upsert ops let the update hook diff old vs.
   new and stamp only the columns that actually changed.
-- **Traits** let a write opt out of tracking. When the engine applies remote
+- Traits let a write opt out of tracking. When the engine applies remote
   changes it tags the transaction with a `skip-sync` trait, and the hook sees it
-  via its `traits` argument and returns early — so applying a remote change
+  via its `traits` argument and returns early, so applying a remote change
   doesn't generate a new outgoing change and loop forever.
 
 `noop()` is a do-nothing command; hooks are generators, so yielding it satisfies
@@ -129,18 +129,18 @@ export const insertChangeFromUpdate = action({
 
 ## 3. Merging remote changesets
 
-Applying changes from another client is itself just an **action**. For each
+Applying changes from another client is itself just an action. For each
 incoming entity the engine reads the local change row and local data row (batched
 with array-form `where` queries), then merges:
 
-- **Field-level last-write-wins.** For every column, compare the local clock with
+- Field-level last-write-wins. For every column, compare the local clock with
   the incoming clock; the higher clock's value wins.
-- **First-creator-wins on conflicting creates.** If both sides created the same
+- First-creator-wins on conflicting creates. If both sides created the same
   id independently, the earlier `createdAt` wins as the base.
-- **Delete-wins.** A tombstone (`deletedAt` set) beats a concurrent edit.
+- Delete-wins. A tombstone (`deletedAt` set) beats a concurrent edit.
 
 The merged rows are written back with bulk `insert` / `upsert` / `deleteRows`, and
-the recomputed change rows with `upsert` — all in one transaction:
+the recomputed change rows with `upsert`, all in one transaction:
 
 ```ts
 export const mergeChanges = action({
@@ -162,17 +162,17 @@ export const mergeChanges = action({
 });
 ```
 
-To keep individual index scans bounded, large batches are **chunked** (e.g. 400
-ids per `where` array) — a good habit for any bulk read/write.
+To keep individual index scans bounded, large batches are chunked (e.g. 400
+ids per `where` array), a good habit for any bulk read/write.
 
 ## 4. The two-tier runtime
 
-For responsiveness, the UI reads and writes an **in-memory** database, while a
-**persistent** database (IndexedDB or async SQLite) provides durability. On
+For responsiveness, the UI reads and writes an in-memory database, while a
+persistent database (IndexedDB or async SQLite) provides durability. On
 startup the in-memory tier is hydrated from the persistent one; afterwards writes
 flow back out asynchronously. The
 [In-Memory + Persistence guide](/guides/in-memory-persistence/) builds this
-two-tier setup on its own, without the sync machinery — start there if you only
+two-tier setup on its own, without the sync machinery. Start there if you only
 need durable local storage; the change tracking below layers on top of it.
 
 This is what wiring it all together looks like (condensed from a real app):
@@ -238,9 +238,9 @@ The flow at runtime:
 
 ## The server is just another peer
 
-Because HyperDB runs the same code everywhere, the **server** uses the exact same
+Because HyperDB runs the same code everywhere, the server uses the exact same
 `changesTable`, `insertChangeFrom*` actions, and `afterInsert`/`afterUpsert`/
-`afterDelete` hooks as every browser client — imported from the same shared
+`afterDelete` hooks as every browser client, imported from the same shared
 slice. The only differences are the driver ([native SQLite](/runtime/drivers/#backend-native-sqlite))
 and the `clientId` (e.g. `"server-<dbName>"`).
 
@@ -287,12 +287,12 @@ hyperDB.afterInsert(function* (db, table, traits, ops) {
 
 The server merges incoming changesets with the same `mergeChanges` action and
 ships its own changes back with the same `getChangesetAfter` selector. There is no
-separate "server schema" or "server query language" — the data layer is written
+separate "server schema" or "server query language"; the data layer is written
 once and shared.
 
 ## What HyperDB provided
 
-Everything above is application code — but it leans entirely on built-in
+Everything above is application code, but it leans entirely on built-in
 primitives:
 
 | Need                            | HyperDB feature                                                                         |

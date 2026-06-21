@@ -5,13 +5,13 @@ sidebar:
   order: 1
 ---
 
-A schema describes the **shape of your rows** and the **indexes** you can query
+A schema describes the shape of your rows and the indexes you can query
 by. Schemas are defined with `defineTable` and the `v` validator library, and
 they double as the source of truth for TypeScript types.
 
 ## Defining a table
 
-Every table has a name and a set of fields. A table **must** have a string `id`
+Every table has a name and a set of fields. A table must have a string `id`
 field. HyperDB automatically creates a built-in hash index named `byId` on `id`.
 
 ```ts
@@ -31,7 +31,7 @@ export const tasksTable = defineTable("tasks", {
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
 
-`ExtractSchema<typeof table>` gives you the row type — here, `Task` is:
+`ExtractSchema<typeof table>` gives you the row type. Here, `Task` is:
 
 ```ts
 type Task = {
@@ -72,15 +72,15 @@ v.any();
 
 There are also helpers for deriving object validators:
 
-- `v.partial(objectValidator)` — make every field optional.
-- `v.required(objectValidator, ["a", "b"])` — make the listed optional fields
+- `v.partial(objectValidator)`: make every field optional.
+- `v.required(objectValidator, ["a", "b"])`: make the listed optional fields
   required again.
-- `v.lazy(() => validator)` — defer evaluation, for recursive shapes.
-- `v.pass<T>()` — accept any value as type `T` without normalizing it.
+- `v.lazy(() => validator)`: defer evaluation, for recursive shapes.
+- `v.pass<T>()`: accept any value as type `T` without normalizing it.
 
 ## Standalone validators and types
 
-Validators are useful beyond tables — for example to type selector/action
+Validators are useful beyond tables, for example to type selector/action
 arguments or intermediate data. Use `Infer` to get the TypeScript type of any
 validator.
 
@@ -99,7 +99,7 @@ type Filter = Infer<typeof filterSchema>;
 ## Tagged unions
 
 `defineTable` also accepts a standalone object or union validator instead of a
-field map. This is how you model a table whose rows are a **tagged union** of
+field map. This is how you model a table whose rows are a tagged union of
 several shapes:
 
 ```ts
@@ -129,14 +129,14 @@ defineTable("tasks", {
   .index("byTitle", ["title"], { type: "hash" }); // hash
 ```
 
-- **`btree`** (the default) supports equality _and_ range queries, ordering, and
+- `btree` (the default) supports equality _and_ range queries, ordering, and
   composite (multi-column) keys.
-- **`hash`** supports equality lookups only and must have **exactly one column**.
+- `hash` supports equality lookups only and must have exactly one column.
 
 Index columns must:
 
 - exist in the table schema, and
-- be **indexable** value types (`string`, finite `number`, `bigint`, `boolean`,
+- be indexable value types (`string`, finite `number`, `bigint`, `boolean`,
   `null`, `ArrayBuffer`/typed-array, and compatible literals, unions, and
   optionals of those).
 
@@ -146,7 +146,7 @@ immediately. For how composite indexes are queried, see
 
 ## The `undefined` rule
 
-Stored values can never contain `undefined`. Optional **object fields** may be
+Stored values can never contain `undefined`. Optional object fields may be
 omitted entirely, and `{ field: undefined }` is normalized to "missing". But
 `undefined` is not allowed inside arrays or as a record value. See
 [Data Types](/database/data-types/#working-with-undefined) for the details.

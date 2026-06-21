@@ -5,9 +5,9 @@ sidebar:
   order: 5
 ---
 
-You change data through **actions** — generator functions that may both read and
+You change data through actions, generator functions that may both read and
 write. Writes are expressed as the mutation commands `insert`, `upsert`, and
-`deleteRows`. An action is executed by **dispatching** it, which runs the whole
+`deleteRows`. An action is executed by dispatching it, which runs the whole
 action inside a single transaction.
 
 ## Defining an action
@@ -31,14 +31,14 @@ export const createTask = action({
 Object-form actions accept `name`, `args`, `handler`, and `skipTrace`. As with
 selectors, you can also wrap a bare generator function.
 
-Actions may read with `selectFrom` (or by calling selectors) before they write —
-read-modify-write within the same transaction is the common pattern.
+Actions may read with `selectFrom` (or by calling selectors) before they write.
+Read-modify-write within the same transaction is the common pattern.
 
 ## The mutations
 
 ### `insert`
 
-Adds new rows. **Fails if any `id` already exists.**
+Adds new rows. Fails if any `id` already exists.
 
 ```ts
 yield *
@@ -50,7 +50,7 @@ yield *
 
 ### `upsert`
 
-Inserts or **replaces the whole row** by `id`. There is no partial update — pass
+Inserts or replaces the whole row by `id`. There is no partial update, so pass
 the complete row. To change one field, read the current row first and spread it:
 
 ```ts
@@ -64,12 +64,12 @@ if (current) {
 }
 ```
 
-If the same `id` appears more than once in a single `upsert` batch, the **last**
+If the same `id` appears more than once in a single `upsert` batch, the last
 occurrence wins.
 
 ### `deleteRows`
 
-Deletes rows by `id`. **Ids that don't exist are ignored** — deleting is
+Deletes rows by `id`. Ids that don't exist are ignored, so deleting is
 idempotent.
 
 ```ts
@@ -126,13 +126,13 @@ export const moveTask = action({
 ```
 
 When you dispatch against a [`SubscribableDB`](/runtime/db/), the commit bumps a
-revision and notifies subscribers with the exact rows that changed — this is what
+revision and notifies subscribers with the exact rows that changed. This is what
 drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` /
 `afterChange` hooks.
 
 ## Bulk writes
 
-`insert`, `upsert`, and `deleteRows` all take **arrays**, so batch your writes
+`insert`, `upsert`, and `deleteRows` all take arrays, so batch your writes
 into a single command rather than looping. Combined with array-form `where`
 queries for bulk reads, this keeps large operations efficient. The
 [sync-engine guide](/guides/sync-engine/) chunks large batches to keep individual

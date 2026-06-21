@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-HyperDB can record a **trace** of every selector run and mutation, and ships an
+HyperDB can record a trace of every selector run and mutation, and ships an
 in-app devtool to browse them. Tracing is what powers the devtool, but you can
 also configure it independently.
 
@@ -48,7 +48,7 @@ the floating toggle), with an `embedded` flag and an `onClose` callback.
 
 ## Tracing
 
-Each selector and action run produces a **root trace** containing the nested
+Each selector and action run produces a root trace containing the nested
 selector frames, the index ranges scanned, and the mutations performed. Cache
 hits are recorded too, so you can see when a selector was reused instead of
 recomputed.

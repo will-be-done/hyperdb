@@ -41,7 +41,7 @@ export type Task = ExtractSchema<typeof tasksTable>;
 ## 3. Create shared builders
 
 The library exports the factories `createSelector` and `createAction`. Create a
-`selector` and an `action` once and reuse them across your app — this is where
+`selector` and an `action` once and reuse them across your app. This is where
 you set defaults like argument validation.
 
 ```ts
@@ -176,8 +176,8 @@ touching the queried range) commits.
 
 ## Where to next
 
-- [Schemas](/database/schemas/) — tables, validators, tagged unions.
-- [Reading Data](/database/reading-data/) and [Indexes](/database/indexes/) —
+- [Schemas](/database/schemas/): tables, validators, tagged unions.
+- [Reading Data](/database/reading-data/) and [Indexes](/database/indexes/):
   the full query builder.
-- [Writing Data](/database/writing-data/) — actions, mutations, transactions.
-- [Storage Drivers](/runtime/drivers/) — persist to SQLite or IndexedDB.
+- [Writing Data](/database/writing-data/): actions, mutations, transactions.
+- [Storage Drivers](/runtime/drivers/): persist to SQLite or IndexedDB.

@@ -18,14 +18,14 @@ differs.
 
 It was built to fix the things that hurt when you reach for Redux or MobX or other state management libs in a local-first app:
 
-- **Cheap inserts into sorted data.** Every table is backed by a real B+tree, so
+- **Cheap inserts into sorted data.** Every table index is backed by a real B-tree, so
   inserting into a sorted collection stays `O(log n)` instead of the `O(n)` you
   pay rebuilding (Redux) or shifting (MobX) an array. Ideal for fractional
-  indexing.
+  indexing for local-first apps.
 - **Fine-grained reactivity.** Selectors record exactly which index ranges they
   scanned, so a mutation only re-runs the selectors that overlap it, without
   proxies or `observer()`.
-- **Run the same logic on the backend.** Because a table is just a B-tree, the
+- **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today). The runtime reads only the rows a selector touches; it
   never loads the whole dataset into memory.
@@ -123,8 +123,6 @@ db.loadTables([tasksTable]);
 ```
 
 ```tsx
-// 5. Use it in React. The list re-renders only when a mutation
-//    touches the range it read.
 import {
   DBProvider,
   useSyncSelector,

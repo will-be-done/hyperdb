@@ -1,6 +1,6 @@
 ---
 title: How HyperDB Works
-description: The three layers of HyperDB — tables, generator commands, and the DB runtime.
+description: The three layers of HyperDB: tables, generator commands, and the DB runtime.
 sidebar:
   order: 3
 ---
@@ -12,9 +12,9 @@ almost everything else in these docs.
 
 ### 1. Tables
 
-Tables describe the **shape of a stored row** and its **named indexes**. You
+Tables describe the shape of a stored row and its named indexes. You
 declare them with `defineTable` and the `v` validator library. A table is just a
-description — it holds no data and is not tied to any database instance, so you
+description: it holds no data and is not tied to any database instance, so you
 can share the same table definitions across many `DB`s.
 
 ```ts
@@ -35,12 +35,12 @@ See [Schemas](/database/schemas/) and [Data Types](/database/data-types/).
 
 ### 2. Commands: selectors and actions
 
-Reads and writes are **generator functions** that _describe_ work instead of
+Reads and writes are generator functions that _describe_ work instead of
 performing it directly. When you `yield*` a query or a mutation, you are emitting
 a command; you never call the storage driver yourself.
 
-- **Selectors** read data. They can compose other selectors but cannot write.
-- **Actions** read and write data. They emit `insert`, `upsert`, and
+- Selectors read data. They can compose other selectors but cannot write.
+- Actions read and write data. They emit `insert`, `upsert`, and
   `deleteRows` commands.
 
 ```ts
@@ -70,13 +70,13 @@ export const createTask = action({
 ```
 
 Because commands are _descriptions_, the same selector or action can be executed
-synchronously against an in-memory driver, or asynchronously against IndexedDB —
-the code does not change. See [Reading Data](/database/reading-data/) and
+synchronously against an in-memory driver, or asynchronously against IndexedDB,
+and the code does not change. See [Reading Data](/database/reading-data/) and
 [Writing Data](/database/writing-data/).
 
 ### 3. The DB runtime
 
-A `DB` ties a set of tables to a **storage driver** and executes commands. The
+A `DB` ties a set of tables to a storage driver and executes commands. The
 driver provides the actual backend: in-memory B+trees, SQLite, or IndexedDB.
 
 ```ts
@@ -88,10 +88,10 @@ db.loadTables([tasksTable]);
 ```
 
 You typically wrap the core `DB` in a [`SubscribableDB`](/runtime/db/), which
-adds revisions, subscriptions, and lifecycle hooks — the machinery that makes
+adds revisions, subscriptions, and lifecycle hooks, the machinery that makes
 selectors reactive.
 
-**The driver is the only thing that changes between environments.** The exact
+The driver is the only thing that changes between environments. The exact
 same tables and commands run on a server by handing `DB` a native SQLite driver
 instead:
 
@@ -112,13 +112,13 @@ adapter.
 This is the loop that powers HyperDB's reactivity:
 
 1. You run a selector through the runtime (or a React hook).
-2. As the selector scans indexes, the runtime records **which index ranges it
-   touched**.
+2. As the selector scans indexes, the runtime records which index ranges it
+   touched.
 3. The result is cached, keyed by the selector and a stable serialization of its
    arguments.
 4. When an action commits a mutation, the `SubscribableDB` notifies subscribers
    with the list of changed rows.
-5. A cached selector re-runs **only if** a changed row falls inside a range it
+5. A cached selector re-runs only if a changed row falls inside a range it
    previously scanned. Otherwise the cached value is reused.
 
 The result: precise, automatic invalidation without you writing any

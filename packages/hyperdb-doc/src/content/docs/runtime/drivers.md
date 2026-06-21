@@ -1,13 +1,13 @@
 ---
 title: Storage Drivers
-description: In-memory, SQLite, and IndexedDB drivers — and the sync vs. async distinction.
+description: In-memory, SQLite, and IndexedDB drivers, and the sync vs. async distinction.
 sidebar:
   order: 2
 ---
 
 A driver is the actual storage backend behind a `DB`. The same selectors and
-actions run unchanged against any driver — and in any environment. **The driver
-is the single thing you swap between the browser and the server.** You also choose
+actions run unchanged against any driver, and in any environment. The driver
+is the single thing you swap between the browser and the server. You also choose
 whether to use the sync or async runtime helpers, which depends on the driver.
 
 ## Choosing a driver
@@ -23,12 +23,12 @@ Sync drivers work with `syncDispatch` / `select` / `execSync`. Async drivers
 require `asyncDispatch` / `runSelectorAsync` / `execAsync`.
 
 A typical full-stack setup uses an in-memory or IndexedDB driver in the browser
-and a native `SqlDriver` on the server — running the _same_ schema, selectors,
+and a native `SqlDriver` on the server, running the _same_ schema, selectors,
 and actions on both sides.
 
 ## In-memory
 
-The simplest driver — a set of in-memory B+trees. Construct it with no arguments.
+The simplest driver: a set of in-memory B+trees. Construct it with no arguments.
 
 ```ts
 import { DB } from "@will-be-done/hyperdb";
@@ -43,8 +43,8 @@ and as the in-memory working tier of a [local-first sync setup](/guides/sync-eng
 
 ## SQLite
 
-`SqlDriver` (synchronous) and `AsyncSqlDriver` (asynchronous) are **not tied to
-any one SQLite build**. HyperDB does not initialize SQLite for you; create the
+`SqlDriver` (synchronous) and `AsyncSqlDriver` (asynchronous) are not tied to
+any one SQLite build. HyperDB does not initialize SQLite for you; create the
 SQLite database with the package/runtime you prefer, then adapt it to the driver
 interface.
 
@@ -224,7 +224,7 @@ await execAsync(db.loadTables([tasksTable]));
 
 ### Backend: native SQLite
 
-On the server, point `SqlDriver` at a native SQLite binding — here Bun's built-in
+On the server, point `SqlDriver` at a native SQLite binding, here Bun's built-in
 `bun:sqlite`:
 
 ```ts
@@ -263,7 +263,7 @@ db.loadTables([tasksTable]); // the very same tables used in the browser
 ```
 
 The same sync shape adapts other native bindings (`better-sqlite3`, Node's
-built-in `node:sqlite`, etc.) — implement `exec` and
+built-in `node:sqlite`, etc.); implement `exec` and
 `prepare(...).values()` against the binding's API. Because the server `DB` runs
 the identical schema, selectors, and actions as the client, you can import a
 shared "slice" of data logic into both:
@@ -299,16 +299,16 @@ await asyncDispatch(
 );
 ```
 
-The IndexedDB driver uses the **same storage encoding and sort-key ordering as
-the SQLite driver**, so data and index semantics are consistent across the two
+The IndexedDB driver uses the same storage encoding and sort-key ordering as
+the SQLite driver, so data and index semantics are consistent across the two
 persistent backends.
 
 ## Sync vs. async, in practice
 
-A common local-first architecture runs **two databases**: an in-memory `DB` for
+A common local-first architecture runs two databases: an in-memory `DB` for
 instant reads/writes, and a persistent (IndexedDB or async SQLite) `DB` that the
 in-memory tier is hydrated from and flushed to in the background. That is exactly
-the shape of the [sync-engine guide](/guides/sync-engine/) — the in-memory tier
+the shape of the [sync-engine guide](/guides/sync-engine/): the in-memory tier
 serves the UI synchronously while persistence and cross-tab/server sync happen
 asynchronously.
 

@@ -5,7 +5,7 @@ sidebar:
   order: 4
 ---
 
-Every query runs **through an index** — HyperDB never does a full table scan.
+Every query runs through an index, so HyperDB never does a full table scan.
 Indexes are declared on the table and determine which filters and orderings are
 possible.
 
@@ -22,7 +22,7 @@ defineTable("tasks", {
   .index("byState", ["state"], { type: "hash" }); // single-column hash
 ```
 
-The built-in `byId` hash index on `id` is always present — you never declare it.
+The built-in `byId` hash index on `id` is always present, so you never declare it.
 
 ### B-tree vs. hash
 
@@ -33,8 +33,8 @@ The built-in `byId` hash index on `id` is always present — you never declare i
 | `order("asc" \| "desc")`      | ✅               | ❌                      |
 | Composite (multi-column)      | ✅               | ❌ (exactly one column) |
 
-Reach for a **hash** index when you only ever look up a column by exact value;
-use a **btree** index when you need ranges, ordering, or multi-column keys.
+Reach for a hash index when you only ever look up a column by exact value;
+use a btree index when you need ranges, ordering, or multi-column keys.
 
 ### What can be indexed
 
@@ -48,9 +48,9 @@ A composite B-tree index stores rows ordered by its columns left to right, like 
 phone book ordered by `(lastName, firstName)`. That ordering dictates which
 filters are valid. Two rules:
 
-1. **Equality prefix.** You may constrain a column only if **every** column
+1. Equality prefix. You may constrain a column only if every column
    before it in the index is constrained by equality (`eq`).
-2. **One trailing range.** After the equality prefix, you may apply a single
+2. One trailing range. After the equality prefix, you may apply a single
    range (`gt`/`gte`/`lt`/`lte`) on the next column. You cannot range on a column
    and then constrain a later one.
 
@@ -75,19 +75,19 @@ For `byProjectOrder` = `["projectId", "orderToken"]`:
 The query builder validates bounds when the query is constructed and will throw
 for:
 
-- **A non-prefix column** — using a column without `eq` on all preceding columns
+- A non-prefix column, using a column without `eq` on all preceding columns
   (`Cannot use column 'X' without specifying eq conditions for all preceding
 columns`).
-- **`eq` mixed with a range on the same column** — e.g. `eq("c", 1).gt("c", 0)`
+- `eq` mixed with a range on the same column, e.g. `eq("c", 1).gt("c", 0)`
   (`Conflicting conditions for column 'c'`).
-- **Two equality conditions on one column** (`Multiple equality conditions`).
-- **A column that isn't in the index** (`Column 'X' not found in index`).
-- **No usable conditions** at all.
+- Two equality conditions on one column (`Multiple equality conditions`).
+- A column that isn't in the index (`Column 'X' not found in index`).
+- No usable conditions at all.
 
 ## Ordering with indexes
 
 Because a B-tree index is physically ordered, `order("asc")` returns rows in the
-index's key order and `order("desc")` returns them reversed — no separate sort
+index's key order and `order("desc")` returns them reversed, with no separate sort
 step. Choose your index column order to match how you want to read the data. For
 the `byProjectOrder` index, tasks come back ordered by `orderToken` within a
 project for free.

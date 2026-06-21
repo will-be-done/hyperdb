@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-Selectors aren't just queries — they're the unit of **reactivity**. HyperDB caches
+Selectors aren't just queries; they're the unit of reactivity. HyperDB caches
 selector results and re-runs them precisely: only when a mutation touches a range
 the selector actually read. This page explains the model and the knobs you can
 turn.
@@ -15,11 +15,11 @@ turn.
 When a selector runs, the runtime records every index range it scans. The result
 is cached together with those ranges. When an action commits, the
 [`SubscribableDB`](/runtime/db/) notifies subscribers with the rows that changed.
-A cached selector re-runs **only if** a changed row falls inside one of the
+A cached selector re-runs only if a changed row falls inside one of the
 ranges it previously scanned; otherwise the cached value is reused untouched.
 
 This means a selector that reads `projectId = "p1"` is unaffected by a write to
-`projectId = "p2"`, automatically — you never write invalidation logic.
+`projectId = "p2"`, automatically. You never write invalidation logic.
 
 ## Caching a selector
 
@@ -39,15 +39,15 @@ const unsub = store.subscribe(() => {
 unsub();
 ```
 
-The cache is keyed by **the database, the selector identity, and a stable
-serialization of the args**. Argument key order doesn't matter:
+The cache is keyed by the database, the selector identity, and a stable
+serialization of the args. Argument key order doesn't matter:
 `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` resolve to the same cache entry.
 
 ## Garbage collection
 
 When the last subscriber of a cache entry unsubscribes, the entry is retained for
-`gcTime` milliseconds (default **3000**) before being dropped. This lets a value
-survive brief gaps — for instance a component unmounting and remounting — without
+`gcTime` milliseconds (default 3000) before being dropped. This lets a value
+survive brief gaps, such as a component unmounting and remounting, without
 recomputing.
 
 ```ts
@@ -79,7 +79,7 @@ const projectTasks = selector({
 
 Root memoization is the top-level cache described above. With `root: true`, calls
 to `initCachedSelector` (and the React hooks) share a cached, subscribed entry
-per args. Set `root: false` to opt out — each use gets an **uncached** store that
+per args. Set `root: false` to opt out, so each use gets an uncached store that
 still tracks ranges and stays reactive, but isn't shared or retained between uses.
 
 ```ts
@@ -90,7 +90,7 @@ memoization: {
 
 ### `selfChild` (default `false`)
 
-When a selector is used **as a child** of another selector, `selfChild: true`
+When a selector is used as a child of another selector, `selfChild: true`
 memoizes that nested selector's own subtree across the parent's reruns. If a
 mutation forces the parent to re-run but doesn't affect this child's ranges, the
 child's previous result and ranges are reused instead of recomputed. Turn it on
@@ -104,7 +104,7 @@ memoization: {
 
 ## Subscriptions and revisions
 
-Under the hood, a `SubscribableDB` keeps a monotonically increasing **revision**
+Under the hood, a `SubscribableDB` keeps a monotonically increasing revision
 number and a list of subscribers. Each committed transaction increments the
 revision and calls subscribers with `(ops, traits, revision)`, where `ops` are
 the `insert` / `upsert` / `delete` operations (including old and new row values).
@@ -119,11 +119,11 @@ const unsub = db.subscribe((ops, traits, revision) => {
 
 ## Practical guidance
 
-- **Default to the defaults.** Root memoization on, `selfChild` off, `gcTime`
-  3000 — this is right for most selectors.
-- **Keep args minimal and serializable.** They form the cache key. Avoid passing
+- Default to the defaults. Root memoization on, `selfChild` off, `gcTime`
+  3000. This is right for most selectors.
+- Keep args minimal and serializable. They form the cache key. Avoid passing
   large or unstable objects.
-- **Reach for `selfChild`** only when profiling (or the [devtool](/integrations/devtools/))
+- Reach for `selfChild` only when profiling (or the [devtool](/integrations/devtools/))
   shows an expensive nested selector recomputing needlessly.
-- **Reach for `root: false`** for one-off selectors you don't want sharing a
+- Reach for `root: false` for one-off selectors you don't want sharing a
   cache entry.
