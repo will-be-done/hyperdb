@@ -1,5 +1,13 @@
 # @will-be-done/hyperdb-devtool
 
+## 0.0.4
+
+### Patch Changes
+
+- 609ca09: bump version
+- Updated dependencies [609ca09]
+  - @will-be-done/hyperdb@0.0.4
+
 ## 0.0.3
 
 ### Patch Changes
