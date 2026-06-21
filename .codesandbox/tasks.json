@@ -1,0 +1,20 @@
+{
+  "$schema": "https://codesandbox.io/schemas/tasks.json",
+  "setupTasks": [
+    {
+      "name": "Install Dependencies",
+      "command": "bun install"
+    }
+  ],
+  "tasks": {
+    "demo": {
+      "name": "HyperDB Demo",
+      "command": "bun run --filter='@will-be-done/hyperdb-demo-app' dev --host 0.0.0.0",
+      "runAtStart": true,
+      "preview": {
+        "port": 5173,
+        "prLink": "direct"
+      }
+    }
+  }
+}

@@ -8,13 +8,13 @@ import {
   EMPTY_TASK_STATS,
   type ProjectTaskStats,
   TASK_STATS_ID,
+  type Task,
   type TaskStats,
   projectTaskStatsTable,
   projectsTable,
   taskStatsTable,
   tasksTable,
 } from "./db";
-import type { Task } from "./workload";
 
 function applyTaskStatusDelta(
   stats: TaskStats,
