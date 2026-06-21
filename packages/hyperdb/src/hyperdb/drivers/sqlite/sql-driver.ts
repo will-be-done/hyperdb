@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Row, SelectOptions, WhereClause } from "../../core/primitives";
 import type { DBDriver, DBDriverTX } from "../../core/driver";
-import { cloneDeep } from "es-toolkit";
 import type { TableDefinition } from "../../schema/table";
 import type { DBCmd } from "../../commands/async";
+import { cloneDeep } from "../../utils/toolkit";
 import {
   buildSortKeyWhereClause,
   buildOrderClause,

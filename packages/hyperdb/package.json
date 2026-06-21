@@ -60,8 +60,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "goober": "^2.1.18",
-    "es-toolkit": "^1.42.0"
+    "goober": "^2.1.18"
   },
   "peerDependencies": {
     "react": ">=18.0.0",

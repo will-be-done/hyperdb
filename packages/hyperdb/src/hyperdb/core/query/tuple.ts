@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { sortBy, omitBy } from "es-toolkit";
 import {
   MAX,
   MIN,
@@ -9,6 +8,7 @@ import {
   type TupleScanOptions,
 } from "../primitives";
 import { UnreachableError } from "../../utils";
+import { omitBy, sortBy } from "../../utils/toolkit";
 import type { TableDefinition } from "../../schema/table";
 
 const encodingByte = {

@@ -17,3 +17,5 @@ TODO:
 1. Create new repo and setup release flow with changeset
 1. Beatiful design
 1. Release and record codesandbox video to put it to landing page
+1. adopt styling of trpc
+1. move devtool to separate package
