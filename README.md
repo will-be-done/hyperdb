@@ -6,7 +6,7 @@ browser _and_ on the server.
 
 <img width="2920" height="1736" alt="image" src="https://github.com/user-attachments/assets/023a5f91-bdea-4208-b2fc-1f445c958916" />
 
-[![Open demo in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/will-be-done/hyperdb?title=HyperDB%20Demo)
+[![Open demo in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/edit/github-knqvrapn?file=packages%2Fhyperdb-demo%2Fsrc%2Fdb.ts)
 
 📖 **[Full documentation → hyperdb.will-be-done.app](https://hyperdb.will-be-done.app)**
 
