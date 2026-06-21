@@ -5,14 +5,26 @@ import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
 import { DBProvider } from "@will-be-done/hyperdb/react";
 import App from "./App.tsx";
 import {
-  hyperdbDemoDbOptions,
-  hyperdbDemoTables,
-  installTaskStatsHooks,
+  projectsTable,
+  projectTaskStatsTable,
+  tasksTable,
+  taskStatsTable,
 } from "./db.ts";
 import "./index.css";
+import { installTaskStatsHooks } from "./count-hook.ts";
 
-const baseDb = new DB(new BptreeInmemDriver(), hyperdbDemoDbOptions);
-execSync(baseDb.loadTables(hyperdbDemoTables));
+const baseDb = new DB(new BptreeInmemDriver(), {
+  freezeArgs: false,
+  freezeRows: false,
+});
+execSync(
+  baseDb.loadTables([
+    projectsTable,
+    tasksTable,
+    taskStatsTable,
+    projectTaskStatsTable,
+  ]),
+);
 const db = new SubscribableDB(baseDb);
 installTaskStatsHooks(db);
 

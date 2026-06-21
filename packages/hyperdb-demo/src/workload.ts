@@ -1,3 +1,5 @@
+import type { Project, Task, TaskStatus } from "./db";
+
 export const projectColors = [
   "#0f8b8d",
   "#e4572e",
@@ -16,26 +18,6 @@ const taskTitles = [
   "Compact task payload",
   "Trace range scan",
 ];
-
-export type TaskStatus = "todo" | "doing" | "done";
-
-export type Project = {
-  id: string;
-  name: string;
-  color: string;
-  createdAt: number;
-};
-
-export type Task = {
-  id: string;
-  projectId: string;
-  title: string;
-  status: TaskStatus;
-  priority: number;
-  position: number;
-  createdAt: number;
-  estimate: number;
-};
 
 export type DashboardSnapshot = {
   projects: Project[];
