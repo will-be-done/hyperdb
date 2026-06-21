@@ -23,7 +23,7 @@ import {
   v,
   type ExtractSchema,
   type Infer,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -94,7 +94,7 @@ import {
   selectFrom,
   selector,
   syncDispatch,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 export const projectTasks = selector({
   name: "projectTasks",
@@ -158,7 +158,7 @@ import {
   DB,
   hyperDBTraceStore,
   SubscribableDB,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 const baseDb = new DB(new BptreeInmemDriver(), {
   runtimeValidation: true,
@@ -204,7 +204,7 @@ import {
   BptreeInmemDriver,
   execAsync,
   openIndexedDBDriver,
-} from "@will-be-done/hyperdb-lib";
+} from "@will-be-done/hyperdb";
 
 const memoryDb = new DB(new BptreeInmemDriver());
 
@@ -229,15 +229,15 @@ SQLite driver; the in-memory driver stores normalized JS values directly.
 ## React And Devtools
 
 The only framework integration today is React, exported from
-`@will-be-done/hyperdb-lib/react`.
+`@will-be-done/hyperdb/react`.
 
 ```tsx
 import {
   DBProvider,
   useDispatch,
   useSyncSelector,
-} from "@will-be-done/hyperdb-lib/react";
-import { HyperDBDevtools } from "@will-be-done/hyperdb-lib/devtool";
+} from "@will-be-done/hyperdb/react";
+import { HyperDBDevtools } from "@will-be-done/hyperdb/devtool";
 
 function Tasks({ projectId }: { projectId: string }) {
   const tasks = useSyncSelector({

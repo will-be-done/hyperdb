@@ -8,4 +8,3 @@ export * from "./runtime/subscribable-db";
 export * from "./schema/table";
 export * from "./schema/values";
 export * from "./tracing";
-export * from "../react";

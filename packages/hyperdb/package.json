@@ -1,36 +1,71 @@
 {
   "name": "@will-be-done/hyperdb",
-  "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "src/index.ts",
-  "module": "src/index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./react": "./src/react.ts",
-    "./devtool": "./src/devtool/index.ts",
-    "./tracing": "./src/hyperdb/tracing/index.ts",
-    "./drivers/inmemory": "./src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",
-    "./drivers/sqlite": "./src/hyperdb/drivers/sqlite/index.ts",
-    "./drivers/idb": "./src/hyperdb/drivers/idb/idb-driver.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.mjs",
+      "require": "./dist/react.cjs"
+    },
+    "./devtool": {
+      "types": "./dist/devtool/index.d.ts",
+      "import": "./dist/devtool.mjs",
+      "require": "./dist/devtool.cjs"
+    },
+    "./tracing": {
+      "types": "./dist/hyperdb/tracing/index.d.ts",
+      "import": "./dist/tracing.mjs",
+      "require": "./dist/tracing.cjs"
+    },
+    "./drivers/inmemory": {
+      "types": "./dist/hyperdb/drivers/inmemory/bptree-inmem-driver.d.ts",
+      "import": "./dist/drivers/inmemory.mjs",
+      "require": "./dist/drivers/inmemory.cjs"
+    },
+    "./drivers/sqlite": {
+      "types": "./dist/hyperdb/drivers/sqlite/index.d.ts",
+      "import": "./dist/drivers/sqlite.mjs",
+      "require": "./dist/drivers/sqlite.cjs"
+    },
+    "./drivers/idb": {
+      "types": "./dist/hyperdb/drivers/idb/idb-driver.d.ts",
+      "import": "./dist/drivers/idb.mjs",
+      "require": "./dist/drivers/idb.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "analyze": "ANALYZE=true vite build && tsc",
     "build": "vite build && tsc",
     "lint": "eslint .",
     "lint:cycles": "depcruise src --config .dependency-cruiser.cjs",
     "bench": "vitest bench",
+    "prepack": "bun run build",
     "ts": "tsc",
     "test": "vitest run"
   },
   "dependencies": {
-    "await-lock": "^3.0.0",
-    "es": "^0.8.0",
     "goober": "^2.1.18",
     "es-toolkit": "^1.42.0"
   },
   "peerDependencies": {
-    "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
@@ -48,6 +83,7 @@
     "playwright": "^1.61.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "rollup-plugin-visualizer": "^7.0.1",
     "sql.js": "^1.13.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",

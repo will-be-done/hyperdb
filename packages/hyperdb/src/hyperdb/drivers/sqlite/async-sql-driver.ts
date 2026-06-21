@@ -1,9 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type {
-  Row,
-  SelectOptions,
-  WhereClause,
-} from "../../core/primitives";
+import type { Row, SelectOptions, WhereClause } from "../../core/primitives";
 import type { DBDriver, DBDriverTX } from "../../core/driver";
 import { cloneDeep } from "es-toolkit";
 import type { TableDefinition } from "../../schema/table";
@@ -32,7 +28,7 @@ import {
   type BindParams,
   type SqlValue,
 } from "./sqlite-common";
-import AwaitLock from "await-lock";
+import AwaitLock from "../../utils/await-lock";
 
 export interface AsyncSQLStatement {
   values(values: SqlValue[]): Promise<SqlValue[][]>;
@@ -259,12 +255,7 @@ function* performAsyncScanOperation(
       tableDefinitions,
       selectOptions.order === "desc",
     );
-    const sql = buildSelectSQL(
-      table,
-      where,
-      orderClause,
-      selectOptions,
-    );
+    const sql = buildSelectSQL(table, where, orderClause, selectOptions);
 
     const result: unknown[] = [];
     const startedAt = nowMs();
@@ -360,11 +351,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
       }
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncInsertOperation(
-        this.db,
-        tableDef,
-        values as Row[],
-      );
+      yield* performAsyncInsertOperation(this.db, tableDef, values as Row[]);
     } finally {
       this.queryLock.release();
     }
@@ -381,11 +368,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
       }
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncUpsertOperation(
-        this.db,
-        tableDef,
-        values,
-      );
+      yield* performAsyncUpsertOperation(this.db, tableDef, values);
     } finally {
       this.queryLock.release();
     }
@@ -402,11 +385,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
       }
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncDeleteOperation(
-        this.db,
-        tableDef,
-        values,
-      );
+      yield* performAsyncDeleteOperation(this.db, tableDef, values);
     } finally {
       this.queryLock.release();
     }
@@ -459,13 +438,9 @@ export class AsyncSqlDriver implements DBDriver {
       await runAsyncSQL(this.db, "BEGIN TRANSACTION");
     });
 
-    return new AsyncSqlDriverTx(
-      this.db,
-      this.tableDefinitions,
-      () => {
-        this.txAndQueryLock.release();
-      },
-    );
+    return new AsyncSqlDriverTx(this.db, this.tableDefinitions, () => {
+      this.txAndQueryLock.release();
+    });
   }
 
   *insert(
@@ -726,7 +701,9 @@ export class AsyncSqlDriver implements DBDriver {
     return indexes;
   }
 
-  private getExpectedSortKeyColumns(tableDef: TableDefinition<any>): Set<string> {
+  private getExpectedSortKeyColumns(
+    tableDef: TableDefinition<any>,
+  ): Set<string> {
     return new Set(
       Object.keys(tableDef.indexes).map((indexName) =>
         sqliteIndexSortKeyColumn(indexName),
@@ -769,7 +746,10 @@ export class AsyncSqlDriver implements DBDriver {
       if (!isSqliteSortKeyColumn(columnName)) continue;
       if (expectedColumns.has(columnName)) continue;
 
-      await runAsyncSQL(this.db, dropSortKeyColumnSQL(tableDef.tableName, columnName));
+      await runAsyncSQL(
+        this.db,
+        dropSortKeyColumnSQL(tableDef.tableName, columnName),
+      );
     }
   }
 

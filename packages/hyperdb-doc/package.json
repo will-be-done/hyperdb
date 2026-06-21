@@ -1,5 +1,6 @@
 {
   "name": "@will-be-done/hyperdb-doc",
+  "private": true,
   "type": "module",
   "version": "0.0.1",
   "scripts": {
@@ -15,4 +16,3 @@
     "sharp": "^0.34.5"
   }
 }
-
