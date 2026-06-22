@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { DB, execSync, SubscribableDB } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
@@ -38,6 +40,17 @@ const createDB = (dbName?: string): SubscribableDB => {
   return db;
 };
 
+type HyperDBRegistryGlobal = typeof globalThis & {
+  __hyperdb?: unknown;
+};
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
+  .IS_REACT_ACT_ENVIRONMENT = true;
+
+const resetRegistry = (): void => {
+  delete (globalThis as HyperDBRegistryGlobal).__hyperdb;
+};
+
 const restoreGlobalFns: (() => void)[] = [];
 
 const stubGlobal = (name: string, value: unknown) => {
@@ -75,6 +88,7 @@ afterEach(() => {
   for (const restore of restoreGlobalFns.splice(0).reverse()) {
     restore();
   }
+  resetRegistry();
   hyperDBTraceStore.clear();
   deactivateActivatedTraceStore();
 });
@@ -231,6 +245,64 @@ describe("HyperDBDevtools", () => {
     expect(html).toMatch(/DB \d+/);
     expect(html).toContain("namedDBAction");
     expect(html).not.toContain("fallbackDBSelector");
+  });
+
+  it("renders discovered DB labels when no db prop is provided", () => {
+    createDB("Local todos");
+    createDB("Remote archive");
+
+    const html = renderToString(<HyperDBDevtoolsPanel />);
+
+    expect(html).toContain("<select");
+    expect(html).toContain("Local todos");
+    expect(html).toContain("Remote archive");
+  });
+
+  it("updates discovered DB options after registry notifications", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(<HyperDBDevtoolsPanel />);
+    });
+
+    expect(host.innerHTML).not.toContain("Late local");
+
+    await act(async () => {
+      createDB("Late local");
+      createDB("Late remote");
+      await Promise.resolve();
+    });
+
+    expect(host.innerHTML).toContain("Late local");
+    expect(host.innerHTML).toContain("Late remote");
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  });
+
+  it("keeps an explicit db prop as the active database when others are discovered", () => {
+    activateTraceStore();
+    const explicitDB = createDB("Explicit DB");
+    const discoveredDB = createDB("Discovered DB");
+    const discoveredContext = startRootTrace(
+      createTraceFrameMeta("selector", "discoveredSelector", undefined),
+      hyperDBTraceStore,
+      discoveredDB,
+    )!;
+    endTraceSuccess(discoveredContext);
+    hyperDBTraceStore.flushTraceCommits();
+    deactivateActivatedTraceStore();
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={explicitDB} />);
+
+    expect(html).toContain("Explicit DB");
+    expect(html).toContain("Discovered DB");
+    expect(html).toContain("No traces");
+    expect(html).not.toContain("discoveredSelector");
   });
 
   it("respects localStorage open state", () => {

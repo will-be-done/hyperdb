@@ -6,6 +6,7 @@ import { SyncDB } from "../runtime/sync-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable, type ExtractSchema } from "../schema/table";
 import { v } from "../schema/values";
+import { getTraceDBInfo, nextTraceId } from "./db-info";
 import {
   defaultTraceOptions,
   getTracerForDB,
@@ -29,6 +30,7 @@ export {
   createTraceFrameMeta,
   defaultTraceOptions,
 } from "../core/tracer";
+export { getTraceDBInfo } from "./db-info";
 export type {
   CommandEventKind,
   HyperDBTracer,
@@ -46,6 +48,7 @@ export type {
   TraceOptions,
   TraceStatus,
 } from "../core/tracer";
+export type { TraceDBInfo } from "./db-info";
 
 export type SerializedValue = {
   text: string;
@@ -115,21 +118,6 @@ export const tracePayloadsRuntimeTable = tracePayloadsTable;
 
 export const hydrateTracePayload = (trace: RootTrace): RootTrace => trace;
 
-let idCounter = 0;
-let dbCounter = 0;
-const dbIds = new WeakMap<object, string>();
-const dbLabels = new Map<string, string>();
-
-type TraceDBIdentified = {
-  getId?: () => string;
-  getDBName?: () => string | undefined;
-};
-
-const nextId = (prefix: string): string => {
-  idCounter += 1;
-  return `${prefix}-${idCounter}`;
-};
-
 const wallClockNow = (): number => Date.now();
 
 export const summarizeError = (error: unknown): TraceError => {
@@ -143,46 +131,6 @@ export const summarizeError = (error: unknown): TraceError => {
 
   return {
     message: typeof error === "string" ? error : safeSerialize(error).text,
-  };
-};
-
-export type TraceDBInfo = {
-  id: string;
-  label: string;
-};
-
-export const getTraceDBInfo = (db: object): TraceDBInfo => {
-  const explicitId = (db as TraceDBIdentified).getId?.();
-  const explicitName = (db as TraceDBIdentified).getDBName?.();
-
-  if (explicitId) {
-    if (explicitName) {
-      dbLabels.set(explicitId, explicitName);
-    }
-
-    if (!dbLabels.has(explicitId)) {
-      dbCounter += 1;
-      dbLabels.set(explicitId, `DB ${dbCounter}`);
-    }
-
-    return {
-      id: explicitId,
-      label: dbLabels.get(explicitId) ?? explicitId,
-    };
-  }
-
-  let id = dbIds.get(db);
-
-  if (!id) {
-    dbCounter += 1;
-    id = `db-${dbCounter}`;
-    dbIds.set(db, id);
-    dbLabels.set(id, `DB ${dbCounter}`);
-  }
-
-  return {
-    id,
-    label: dbLabels.get(id) ?? id,
   };
 };
 
@@ -271,6 +219,7 @@ const getTraceMutatedRowCount = (trace: RootTrace): number =>
 export class HyperDBTraceStore implements HyperDBTracer {
   private subDb = new SubscribableDB(
     new DB(new BptreeInmemDriver(), {
+      register: false,
       tracer: "disabled",
     }),
   );
@@ -606,7 +555,7 @@ const createFrame = (
   startedAt: number,
   parentId?: string,
 ): TraceFrame => ({
-  id: nextId("frame"),
+  id: nextTraceId("frame"),
   parentId,
   kind: meta.kind,
   name: meta.name,
@@ -656,7 +605,7 @@ export const startRootTrace = (
   const rootFrame = createFrame(meta, startedAt);
   const dbInfo = db ? getTraceDBInfo(db) : undefined;
   const trace: RootTrace = {
-    id: nextId("trace"),
+    id: nextTraceId("trace"),
     dbId: dbInfo?.id,
     dbLabel: dbInfo?.label,
     kind: meta.kind,
@@ -794,7 +743,7 @@ export const beginSelectEvent = (
   },
 ): SelectCommandEvent => {
   const event: SelectCommandEvent = {
-    id: nextId("cmd"),
+    id: nextTraceId("cmd"),
     frameId: frame.id,
     kind: "select",
     tableName: input.tableName,
@@ -847,7 +796,7 @@ export const beginMutationEvent = (
   },
 ): MutationEvent => {
   const event: MutationEvent = {
-    id: nextId("mutation"),
+    id: nextTraceId("mutation"),
     frameId: frame.id,
     kind: input.kind,
     tableName: input.tableName,

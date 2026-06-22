@@ -22,10 +22,12 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
+import { registerHyperDB } from "../tracing/registry";
 import { DBTx } from "./db-tx";
 
 export type DBOptions = Partial<CodecOptions> & {
   dbName?: string;
+  register?: boolean;
   traits?: Trait[];
   tracer?: HyperDBTracerOption;
 };
@@ -150,12 +152,15 @@ export class DB implements HyperDB {
     this.driver = driver;
     this.traits = options.traits ?? [];
     this.state = createDBState(options);
+    if (options.register !== false) {
+      registerHyperDB(this);
+    }
   }
 
   withTraits(...traits: Trait[]): HyperDB {
-    const db = new DB(this.driver, {
-      traits: [...this.traits, ...traits],
-    });
+    const db = Object.create(DB.prototype) as DB;
+    db.driver = this.driver;
+    db.traits = [...this.traits, ...traits];
     db.state = this.state;
     return db;
   }

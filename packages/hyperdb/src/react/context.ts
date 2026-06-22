@@ -5,8 +5,11 @@ const dbContext = React.createContext<SubscribableDB | null>(null);
 
 export const DBProvider = dbContext.Provider;
 
+export const useOptionalDB = (): SubscribableDB | null =>
+  React.useContext(dbContext);
+
 export const useDB = () => {
-  const store = React.useContext(dbContext);
+  const store = useOptionalDB();
   if (!store) {
     throw new Error("DB not provided");
   }

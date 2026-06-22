@@ -28,7 +28,7 @@ Architecture:
 Public React API:
 
 - HyperDBDevtools props:
-  - db?: SubscribableDB; if omitted, read db from existing DBProvider/useDB
+  - db?: SubscribableDB; if omitted, prefer DBProvider context and then discover registered DBs from globalThis.__hyperdb
   - initialIsOpen?: boolean
   - position?: "top" | "bottom" | "left" | "right", default "bottom"
   - buttonPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right", default "bottom-right"
@@ -42,6 +42,12 @@ Public React API:
   - clear traces button
 - Persist open/closed state in localStorage.
 - HyperDBDevtoolsPanel should render the panel without the floating button, for embedded use.
+
+Database discovery:
+
+- Raw DB construction registers app DB metadata in globalThis.__hyperdb for no-prop devtool discovery.
+- SubscribableDB does not register separately; it shares the wrapped DB id for trace filtering.
+- Internal devtool/trace-store DBs must opt out of registration so they do not appear in the app DB selector.
 
 Tracing activation:
 
@@ -190,6 +196,9 @@ Tests:
   - root trace lifecycle success/error
   - nested frame attachment
   - no stored traces when inactive
+  - raw DB registration and registry subscriptions
+  - withTraits does not create phantom registry entries
+  - internal trace store DB does not register itself
 - Add command/runtime tests:
   - action with select records one root action trace and select event
   - action calling action records one root with child frame
@@ -204,6 +213,8 @@ Tests:
   - selecting a trace displays details
   - clear button clears traces
   - localStorage open state is respected
+  - no-prop panel discovers registered DB labels and updates after later registrations
+  - explicit db prop remains the active/default DB when other DBs are discovered
 - If component smoke tests require too much setup, keep UI tests minimal and prioritize tracing/runtime coverage.
 
 Validation:

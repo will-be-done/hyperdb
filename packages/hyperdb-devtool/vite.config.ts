@@ -40,6 +40,9 @@ export default defineConfig({
     : [],
   test: {
     name: "browser",
+    optimizeDeps: {
+      include: ["react-dom/client"],
+    },
     alias: [
       {
         find: "@will-be-done/hyperdb/drivers/inmemory",

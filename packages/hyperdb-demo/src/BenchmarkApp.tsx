@@ -10,6 +10,8 @@ import {
 } from "./db";
 import { LIST_PAGE_SIZE, useBenchmarkState } from "./useBenchmarkState";
 import type { ClearWorkloadResult, WorkloadResult } from "./workload";
+import { getStoredMode, setStoredMode, type StoreMode } from "./store-mode";
+import { usePersistence } from "./persistence-context";
 
 const numberFormatter = new Intl.NumberFormat("en-US");
 const durationFormatter = new Intl.NumberFormat("en-US", {
@@ -65,6 +67,19 @@ export function BenchmarkApp() {
       selectedProjectId: benchmarkState.selectedProjectId,
     },
   });
+
+  const storeMode = getStoredMode();
+  const persistence = usePersistence();
+  const handleStoreModeChange = (
+    event: React.ChangeEvent<HTMLSelectElement>,
+  ) => {
+    const nextMode = event.currentTarget.value as StoreMode;
+    if (nextMode === storeMode) return;
+    // The store is created once at startup, so swapping tiers means a reload.
+    // The choice is remembered in localStorage and applied on the next boot.
+    setStoredMode(nextMode);
+    window.location.reload();
+  };
 
   const queuedTasks = projectCount * tasksPerProject;
   const visibleTaskCount = dashboard.selectedProject
@@ -128,6 +143,42 @@ export function BenchmarkApp() {
           <h1 className="font-display text-3xl font-bold leading-none tracking-tight text-ink sm:text-4xl">
             Project / task demo example
           </h1>
+        </div>
+
+        <div className="flex min-w-[200px] flex-col justify-center gap-2 border-t border-line bg-base/60 p-6 text-left sm:border-l sm:border-t-0">
+          <span className={LABEL}>Storage</span>
+          <select
+            value={storeMode}
+            onChange={handleStoreModeChange}
+            className="h-10 w-full cursor-pointer rounded-md border border-line bg-base px-3 font-mono text-sm text-ink outline-none transition focus-visible:border-signal/60 focus-visible:ring-2 focus-visible:ring-signal/20"
+          >
+            <option value="memory">In-memory</option>
+            <option value="persistent">Persistent (IndexedDB)</option>
+          </select>
+          {storeMode === "persistent" && persistence ? (
+            <div className="flex items-center gap-2">
+              <span
+                className={`size-2 shrink-0 rounded-full ${
+                  persistence.draining || persistence.pendingBatches > 0
+                    ? "animate-blip bg-amber"
+                    : "bg-green"
+                }`}
+              />
+              <p className="text-xs text-faint">
+                {persistence.draining || persistence.pendingBatches > 0
+                  ? `Saving… ${formatNumber(persistence.pendingOps)} ops queued`
+                  : persistence.lastDurationMs != null
+                    ? `Saved ${formatNumber(
+                        persistence.lastOpCount ?? 0,
+                      )} ops in ${formatDuration(persistence.lastDurationMs)} ms`
+                    : "Idle · changes survive reloads"}
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-faint">
+              Data lives in memory only and resets on reload.
+            </p>
+          )}
         </div>
 
         <div className="relative flex min-w-[220px] flex-col justify-center gap-2 border-t border-line bg-base/60 p-6 text-left sm:border-l sm:border-t-0 sm:text-right">
