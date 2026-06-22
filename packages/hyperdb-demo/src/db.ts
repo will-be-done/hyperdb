@@ -141,6 +141,20 @@ export const EMPTY_TASK_STATS: TaskStats = {
   done: 0,
 };
 
+export const EMPTY_DASHBOARD_SNAPSHOT: DashboardSnapshot = {
+  projects: [],
+  selectedProject: null,
+  selectedTasks: [],
+  selectedTaskCount: 0,
+  projectTaskCountsById: {},
+  projectNamesById: {},
+  totalProjects: 0,
+  totalTasks: 0,
+  todoTasks: 0,
+  doingTasks: 0,
+  doneTasks: 0,
+};
+
 export const getDashboardSnapshot = selector({
   name: "getDashboardSnapshot",
   args: {

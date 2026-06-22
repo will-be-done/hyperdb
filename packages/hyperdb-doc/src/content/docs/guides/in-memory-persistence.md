@@ -94,18 +94,51 @@ driver underneath.
 
 On startup, read every row from the persistent tier and insert it into memory.
 Reads from IndexedDB are async (`selectAsync`); the insert into memory is sync
-(`syncDispatch`).
+(`syncDispatch`). Wrap both sides in named actions/selectors so they show up in
+the devtool trace — the scan is where you can see what reading a table back from
+IndexedDB actually costs.
 
 ```ts
 import {
+  createAction,
+  createSelector,
   insert,
   selectAsync,
   selectFrom,
   syncDispatch,
+  v,
   type HyperDB,
   type SubscribableDB,
   type TableDefinition,
 } from "@will-be-done/hyperdb";
+
+// Name the persistence operations so they show up in the devtool trace
+// alongside your app's own actions and selectors. Reuse the same builders your
+// app already uses if you have them.
+const action = createAction({ trace: { enabled: true, startOn: "load" } });
+const selector = createSelector({ trace: { enabled: true, startOn: "load" } });
+
+// Full-table scan over the `byIds` btree index — the read you can watch in the
+// trace to see what hydrating a table from IndexedDB costs.
+const scanTable = selector({
+  name: "hydrate:scan",
+  args: { table: v.pass<TableDefinition>() },
+  handler: function* scanTable({ table }) {
+    return yield* selectFrom(table, "byIds").order("asc");
+  },
+});
+
+// Load the scanned rows into the in-memory tier (fires the afterChange hooks).
+const loadRows = action({
+  name: "hydrate:load",
+  args: {
+    table: v.pass<TableDefinition>(),
+    rows: v.pass<Record<string, unknown>[]>(),
+  },
+  handler: function* loadRows({ table, rows }) {
+    if (rows.length > 0) yield* insert(table, rows);
+  },
+});
 
 async function hydrate(
   persistentDB: HyperDB,
@@ -113,16 +146,8 @@ async function hydrate(
   tables: TableDefinition[],
 ) {
   for (const table of tables) {
-    // Full-table scan over the `byIds` btree index (no `where`)
-    const rows = await selectAsync(
-      persistentDB,
-      (function* () {
-        return yield* selectFrom(table, "byIds").order("asc");
-      })(),
-    );
-
-    // Load them into the in-memory tier in a single transaction
-    syncDispatch(memDB, insert(table, rows));
+    const rows = await selectAsync(persistentDB, scanTable({ table }));
+    syncDispatch(memDB, loadRows({ table, rows }));
   }
 }
 ```
@@ -164,16 +189,20 @@ serializes the writes so batches are persisted in commit order, one
 transaction at a time.
 
 A single commit arrives as one `Op` per row — a bulk insert of 10,000 rows is
-10,000 `insert` ops. Don't apply them one at a time: `tx.insert` /
-`tx.upsert` / `tx.delete` each accept an _array_, and the driver issues all of
-a call's IndexedDB requests as one pipelined burst inside the transaction.
-Awaiting each op separately throws that away — it serializes 10,000 round-trips
-instead of pipelining them. So coalesce consecutive ops of the same type and
-table into a single call:
+10,000 `insert` ops. Don't apply them one at a time: `insert` / `upsert` /
+`deleteRows` each accept an _array_, and the driver issues all of a call's
+IndexedDB requests as one pipelined burst inside the transaction. Awaiting each
+op separately throws that away — it serializes 10,000 round-trips instead of
+pipelining them. So coalesce consecutive ops of the same type and table into a
+single call, inside a named `persist:batch` action you can watch in the trace:
 
 ```ts
 import {
-  execAsync,
+  asyncDispatch,
+  deleteRows,
+  insert,
+  upsert,
+  v,
   type HyperDB,
   type Op,
   type InsertOp,
@@ -198,32 +227,44 @@ function groupConsecutiveOps(ops: Op[]): Op[][] {
   return runs;
 }
 
+// Apply one commit's worth of ops to the persistent tier. Coalesced into one
+// call per run, so a bulk insert is a single `insert` span the driver can
+// pipeline — the write you can watch in the trace to see how fast it lands.
+// (reuses the `action` builder from step 3)
+const persistOps = action({
+  name: "persist:batch",
+  args: { ops: v.pass<Op[]>() },
+  handler: function* persistOps({ ops }) {
+    for (const run of groupConsecutiveOps(ops)) {
+      const { type, table } = run[0];
+      if (type === "insert") {
+        yield* insert(
+          table,
+          run.map((op) => (op as InsertOp).newValue),
+        );
+      } else if (type === "upsert") {
+        yield* upsert(
+          table,
+          run.map((op) => (op as UpsertOp).newValue),
+        );
+      } else {
+        yield* deleteRows(
+          table,
+          run.map((op) => (op as DeleteOp).oldValue.id),
+        );
+      }
+    }
+  },
+});
+
 export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
   const pending: Op[][] = [];
   let draining = false;
 
   async function persistBatch(ops: Op[]) {
-    const tx = await execAsync(persistentDB.beginTx());
-    let committed = false;
-    try {
-      // One call per run, so a bulk insert becomes a single
-      // `tx.insert(table, rows)` the driver can pipeline — instead of one
-      // awaited round-trip per row.
-      for (const run of groupConsecutiveOps(ops)) {
-        const { type, table } = run[0];
-        if (type === "insert" || type === "upsert") {
-          const rows = run.map((op) => (op as InsertOp | UpsertOp).newValue);
-          await execAsync(tx[type](table, rows));
-        } else {
-          const ids = run.map((op) => (op as DeleteOp).oldValue.id);
-          await execAsync(tx.delete(table, ids));
-        }
-      }
-      await execAsync(tx.commit());
-      committed = true;
-    } finally {
-      if (!committed) await execAsync(tx.rollback());
-    }
+    // asyncDispatch opens a tx, runs the (traced) persist:batch action, and
+    // commits — or rolls back on failure. The op coalescing lives in the action.
+    await asyncDispatch(persistentDB, persistOps({ ops }));
   }
 
   async function drain() {
@@ -274,11 +315,13 @@ export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
 }
 ```
 
-The `tx.insert` / `tx.upsert` / `tx.delete` methods apply their rows to the open
-transaction; committing flushes the whole batch atomically, and any failure rolls
-it back. Coalescing only merges _consecutive_ same-type, same-table ops, so it
-preserves order when a batch interleaves (e.g. an insert and a later delete of the
-same id).
+`asyncDispatch` opens the transaction, runs the `persist:batch` action, and
+commits — or rolls back on any failure — so the whole batch lands atomically.
+Coalescing only merges _consecutive_ same-type, same-table ops, so it preserves
+order when a batch interleaves (e.g. an insert and a later delete of the same
+id). Because both reads and writes go through named actions/selectors, the
+`hydrate:scan`, `hydrate:load`, and `persist:batch` operations each show up as
+spans in the devtool trace.
 
 ## 5. Wire it together
 

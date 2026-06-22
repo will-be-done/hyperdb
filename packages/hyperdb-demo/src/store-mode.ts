@@ -1,15 +1,25 @@
-export type StoreMode = "memory" | "persistent";
+export type StoreMode = "idb" | "idb-inmem" | "wa-sqlite" | "wa-sqlite-inmem";
 
 const STORAGE_KEY = "hyperdb-demo-mode";
+const modes = new Set<StoreMode>([
+  "idb",
+  "idb-inmem",
+  "wa-sqlite",
+  "wa-sqlite-inmem",
+]);
 
-/** Read the persisted storage mode. Defaults to the synchronous in-memory tier. */
+/** Read the persisted storage mode. Defaults to the IDB + in-memory tier. */
 export function getStoredMode(): StoreMode {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "persistent"
-      ? "persistent"
-      : "memory";
+    const storedMode = localStorage.getItem(STORAGE_KEY);
+    if (storedMode === "persistent") return "idb-inmem";
+    if (storedMode === "indexeddb") return "idb";
+    if (storedMode === "wa-sqlite-opfs") return "wa-sqlite";
+    return modes.has(storedMode as StoreMode)
+      ? (storedMode as StoreMode)
+      : "idb-inmem";
   } catch {
-    return "memory";
+    return "idb-inmem";
   }
 }
 

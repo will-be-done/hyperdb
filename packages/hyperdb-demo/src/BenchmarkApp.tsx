@@ -1,9 +1,10 @@
 import {
-  useDispatch as useHyperdbDispatch,
-  useSyncSelector,
+  useAsyncDispatch as useHyperdbDispatch,
+  useAsyncSelector,
 } from "@will-be-done/hyperdb/react";
 import {
   clearWorkload,
+  EMPTY_DASHBOARD_SNAPSHOT,
   generateWorkload,
   getDashboardSnapshot,
   toggleTaskDone,
@@ -59,14 +60,15 @@ export function BenchmarkApp() {
     isWorking,
     setIsWorking,
   } = benchmarkState;
-  const dashboard = useSyncSelector({
-    selector: getDashboardSnapshot,
-    args: {
-      taskLimit,
-      projectLimit,
-      selectedProjectId: benchmarkState.selectedProjectId,
-    },
-  });
+  const dashboard =
+    useAsyncSelector({
+      selector: getDashboardSnapshot,
+      args: {
+        taskLimit,
+        projectLimit,
+        selectedProjectId: benchmarkState.selectedProjectId,
+      },
+    }) ?? EMPTY_DASHBOARD_SNAPSHOT;
 
   const storeMode = getStoredMode();
   const persistence = usePersistence();
@@ -86,20 +88,51 @@ export function BenchmarkApp() {
     ? Math.min(taskLimit, dashboard.selectedTaskCount)
     : 0;
   const visibleProjectCount = Math.min(projectLimit, dashboard.totalProjects);
+  const directDriver =
+    storeMode === "idb" || storeMode === "idb-inmem"
+      ? "IndexedDB"
+      : "WA-SQLite OPFS";
+  const hybrid = storeMode === "idb-inmem" || storeMode === "wa-sqlite-inmem";
+  const storageStatus = hybrid
+    ? {
+        dot:
+          persistence?.draining || persistence?.pendingBatches
+            ? "animate-blip bg-amber"
+            : "bg-green",
+        text:
+          persistence?.draining || persistence?.pendingBatches
+            ? `Saving... ${formatNumber(persistence.pendingOps)} ops queued`
+            : persistence?.lastDurationMs != null
+              ? `Saved ${formatNumber(
+                  persistence.lastOpCount ?? 0,
+                )} ops in ${formatDuration(persistence.lastDurationMs)} ms`
+              : `${directDriver} mirrored behind in-memory reads/writes.`,
+      }
+    : {
+        dot: "bg-green",
+        text: `Direct async ${directDriver} driver; changes survive reloads.`,
+      };
 
   const runMeasured = (
     label: string,
-    workload: () => WorkloadResult | ClearWorkloadResult,
+    workload: () => Promise<WorkloadResult | ClearWorkloadResult>,
   ) => {
     setIsWorking(true);
 
     requestAnimationFrame(() => {
-      const startedAt = performance.now();
-      const result = workload();
-      const durationMs = performance.now() - startedAt;
+      void (async () => {
+        const startedAt = performance.now();
+        try {
+          const result = await workload();
+          const durationMs = performance.now() - startedAt;
 
-      setLastRun({ label, durationMs, result });
-      setIsWorking(false);
+          setLastRun({ label, durationMs, result });
+        } catch (error) {
+          console.error(`Failed to run ${label}`, error);
+        } finally {
+          setIsWorking(false);
+        }
+      })();
     });
   };
 
@@ -146,39 +179,23 @@ export function BenchmarkApp() {
         </div>
 
         <div className="flex min-w-[200px] flex-col justify-center gap-2 border-t border-line bg-base/60 p-6 text-left sm:border-l sm:border-t-0">
-          <span className={LABEL}>Storage</span>
+          <span className={LABEL}>Driver</span>
           <select
             value={storeMode}
             onChange={handleStoreModeChange}
             className="h-10 w-full cursor-pointer rounded-md border border-line bg-base px-3 font-mono text-sm text-ink outline-none transition focus-visible:border-signal/60 focus-visible:ring-2 focus-visible:ring-signal/20"
           >
-            <option value="memory">In-memory</option>
-            <option value="persistent">Persistent (IndexedDB)</option>
+            <option value="idb">IndexedDB</option>
+            <option value="idb-inmem">IndexedDB + in-memory</option>
+            <option value="wa-sqlite">WA-SQLite OPFS</option>
+            <option value="wa-sqlite-inmem">WA-SQLite OPFS + in-memory</option>
           </select>
-          {storeMode === "persistent" && persistence ? (
-            <div className="flex items-center gap-2">
-              <span
-                className={`size-2 shrink-0 rounded-full ${
-                  persistence.draining || persistence.pendingBatches > 0
-                    ? "animate-blip bg-amber"
-                    : "bg-green"
-                }`}
-              />
-              <p className="text-xs text-faint">
-                {persistence.draining || persistence.pendingBatches > 0
-                  ? `Saving… ${formatNumber(persistence.pendingOps)} ops queued`
-                  : persistence.lastDurationMs != null
-                    ? `Saved ${formatNumber(
-                        persistence.lastOpCount ?? 0,
-                      )} ops in ${formatDuration(persistence.lastDurationMs)} ms`
-                    : "Idle · changes survive reloads"}
-              </p>
-            </div>
-          ) : (
-            <p className="text-xs text-faint">
-              Data lives in memory only and resets on reload.
-            </p>
-          )}
+          <div className="flex items-center gap-2">
+            <span
+              className={`size-2 shrink-0 rounded-full ${storageStatus.dot}`}
+            />
+            <p className="text-xs text-faint">{storageStatus.text}</p>
+          </div>
         </div>
 
         <div className="relative flex min-w-[220px] flex-col justify-center gap-2 border-t border-line bg-base/60 p-6 text-left sm:border-l sm:border-t-0 sm:text-right">
@@ -362,7 +379,7 @@ export function BenchmarkApp() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => dispatch(toggleTaskDone({ task }))}
+                    onClick={() => void dispatch(toggleTaskDone({ task }))}
                     className={`cursor-pointer rounded-full border px-3 py-0.5 font-display text-[10px] font-semibold uppercase tracking-wider transition hover:brightness-125 ${
                       STATUS_STYLES[task.status] ?? STATUS_STYLES.todo
                     }`}

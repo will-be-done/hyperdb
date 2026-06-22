@@ -1,6 +1,11 @@
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 import {
+  AsyncSqlDriver,
+  type AsyncSQLiteDB,
+  type SqlValue,
+} from "@will-be-done/hyperdb/drivers/sqlite";
+import {
   DB,
   SubscribableDB,
   asyncDispatch,
@@ -15,11 +20,11 @@ import {
   syncDispatch,
   upsert,
   v,
-  type HyperDB,
-  type Op,
-  type InsertOp,
-  type UpsertOp,
   type DeleteOp,
+  type HyperDB,
+  type InsertOp,
+  type Op,
+  type UpsertOp,
 } from "@will-be-done/hyperdb";
 import {
   projectTaskStatsTable,
@@ -33,9 +38,11 @@ import { installTaskStatsHooks } from "./count-hook";
 import type { StoreMode } from "./store-mode";
 import { PersistenceMonitor } from "./persistence-monitor";
 
-const IDB_NAME = "hyperdb-demo";
+const IDB_DIRECT_NAME = "hyperdb-demo-idb-direct";
+const IDB_HYBRID_NAME = "hyperdb-demo";
+const OPFS_DIRECT_DB_NAME = "hyperdb-demo-wa-sqlite-direct.sqlite";
+const OPFS_HYBRID_DB_NAME = "hyperdb-demo-wa-sqlite-inmem.sqlite";
 
-// All tables live in the in-memory tier the UI talks to.
 const ALL_TABLES = [
   projectsTable,
   tasksTable,
@@ -43,17 +50,151 @@ const ALL_TABLES = [
   projectTaskStatsTable,
 ];
 
-// Only the base data is persisted; the stats tables are derived and rebuilt by
-// the afterChange hooks when rows hydrate back into memory.
 const PERSISTED_TABLES = [projectsTable, tasksTable];
 const PERSISTED_TABLE_NAMES = new Set(
   PERSISTED_TABLES.map((table) => table.tableName),
 );
 
-/**
- * Build the synchronous in-memory tier the UI reads and writes, with the
- * derived-stats hooks installed.
- */
+type PersistentBackend = "idb" | "wa-sqlite";
+
+type WaSQLiteResponse =
+  | { id: number; ok: true; rows?: SqlValue[][] }
+  | { id: number; ok: false; error: string };
+
+type WaSQLiteRequestInput =
+  | {
+      type: "exec";
+      sql: string;
+      params?: SqlValue[] | null;
+    }
+  | {
+      type: "values";
+      sql: string;
+      values: SqlValue[];
+    };
+
+class WaSQLiteWorkerDB implements AsyncSQLiteDB {
+  private worker = new Worker(
+    new URL("./wa-sqlite-worker.ts", import.meta.url),
+    {
+      type: "module",
+    },
+  );
+  private nextRequestId = 0;
+  private databaseName: string;
+  private pending = new Map<
+    number,
+    {
+      resolve: (rows?: SqlValue[][]) => void;
+      reject: (error: Error) => void;
+    }
+  >();
+
+  constructor(databaseName: string) {
+    this.databaseName = databaseName;
+    this.worker.addEventListener("message", this.handleMessage);
+    this.worker.addEventListener("error", this.handleError);
+    this.worker.addEventListener("messageerror", this.handleError);
+  }
+
+  async exec(sql: string, params?: SqlValue[] | null): Promise<void> {
+    await this.request({ type: "exec", sql, params });
+  }
+
+  async prepare(sql: string) {
+    return {
+      values: (values: SqlValue[]) =>
+        this.request({ type: "values", sql, values }).then(
+          (rows) => rows ?? [],
+        ),
+      finalize: () => {},
+    };
+  }
+
+  close(): void {
+    this.worker.removeEventListener("message", this.handleMessage);
+    this.worker.removeEventListener("error", this.handleError);
+    this.worker.removeEventListener("messageerror", this.handleError);
+    this.worker.terminate();
+
+    for (const { reject } of this.pending.values()) {
+      reject(new Error("WA-SQLite worker was closed"));
+    }
+    this.pending.clear();
+  }
+
+  private request(
+    input: WaSQLiteRequestInput,
+  ): Promise<SqlValue[][] | undefined> {
+    const id = ++this.nextRequestId;
+
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.worker.postMessage({
+        id,
+        databaseName: this.databaseName,
+        ...input,
+      });
+    });
+  }
+
+  private handleMessage = (event: MessageEvent<WaSQLiteResponse>) => {
+    const response = event.data;
+    const pending = this.pending.get(response.id);
+    if (!pending) return;
+
+    this.pending.delete(response.id);
+
+    if (response.ok) {
+      pending.resolve(response.rows);
+    } else {
+      pending.reject(new Error(response.error));
+    }
+  };
+
+  private handleError = (event: ErrorEvent | MessageEvent) => {
+    const error =
+      "error" in event && event.error instanceof Error
+        ? event.error
+        : new Error("WA-SQLite worker failed");
+
+    for (const { reject } of this.pending.values()) {
+      reject(error);
+    }
+    this.pending.clear();
+  };
+}
+
+function getBackend(mode: StoreMode): PersistentBackend {
+  return mode === "idb" || mode === "idb-inmem" ? "idb" : "wa-sqlite";
+}
+
+function isHybridMode(mode: StoreMode): boolean {
+  return mode === "idb-inmem" || mode === "wa-sqlite-inmem";
+}
+
+async function createPersistentDriver(mode: StoreMode) {
+  const backend = getBackend(mode);
+  const hybrid = isHybridMode(mode);
+
+  if (backend === "idb") {
+    return {
+      driver: await openIndexedDBDriver(
+        hybrid ? IDB_HYBRID_NAME : IDB_DIRECT_NAME,
+      ),
+      dbName: hybrid ? "demo-idb-inmem:persistent" : "demo-idb",
+    };
+  }
+
+  const sqliteDb = new WaSQLiteWorkerDB(
+    hybrid ? OPFS_HYBRID_DB_NAME : OPFS_DIRECT_DB_NAME,
+  );
+  return {
+    driver: new AsyncSqlDriver(sqliteDb),
+    dbName: hybrid ? "demo-wa-sqlite-inmem:persistent" : "demo-wa-sqlite",
+  };
+}
+
 function createMemDb(mode: StoreMode): SubscribableDB {
   const baseDb = new DB(new BptreeInmemDriver(), {
     freezeArgs: false,
@@ -66,7 +207,6 @@ function createMemDb(mode: StoreMode): SubscribableDB {
   return db;
 }
 
-/** Read every persisted row from IndexedDB and load it into the in-memory tier. */
 async function hydrate(persistentDB: HyperDB, memDB: SubscribableDB) {
   const { projects, tasks } = await selectAsync(
     persistentDB,
@@ -78,11 +218,6 @@ async function hydrate(persistentDB: HyperDB, memDB: SubscribableDB) {
   }
 }
 
-/**
- * Split ops into runs of the same type + table, keeping their original order.
- * One bulk insert collapses into a single run the driver can pipeline, while an
- * interleaved insert/delete of the same row stays in two ordered runs.
- */
 function groupConsecutiveOps(ops: Op[]): Op[][] {
   const runs: Op[][] = [];
   for (const op of ops) {
@@ -96,13 +231,9 @@ function groupConsecutiveOps(ops: Op[]): Op[][] {
   return runs;
 }
 
-// Traced builders, so the persistence reads/writes show up in the devtool
-// timeline alongside the app's own actions and selectors.
 const action = createAction({ trace: { enabled: true, startOn: "load" } });
 const selector = createSelector({ trace: { enabled: true, startOn: "load" } });
 
-// Full-table scan over each table's `byIds` btree index — this is the read you
-// can watch in the trace to see what hydrating from IndexedDB actually costs.
 const scanPersistedTables = selector({
   name: "hydrate:scan",
   args: {},
@@ -113,8 +244,6 @@ const scanPersistedTables = selector({
   },
 });
 
-// Load the scanned rows into the in-memory tier (fires the afterChange hooks,
-// which rebuild the derived stats tables from scratch).
 const loadIntoMemory = action({
   name: "hydrate:load",
   args: { projects: v.pass<Project[]>(), tasks: v.pass<Task[]>() },
@@ -124,9 +253,6 @@ const loadIntoMemory = action({
   },
 });
 
-// Apply one commit's worth of ops to the persistent tier. Coalesced into one
-// call per run, so a bulk insert is a single `insert` span the driver can
-// pipeline — the write you can watch to see how fast it lands on disk.
 const persistOps = action({
   name: "persist:batch",
   args: { ops: v.pass<Op[]>() },
@@ -153,7 +279,6 @@ const persistOps = action({
   },
 });
 
-/** Mirror each in-memory commit to the persistent tier, one batch at a time. */
 function startPersisting(
   persistentDB: HyperDB,
   memDB: SubscribableDB,
@@ -170,8 +295,6 @@ function startPersisting(
 
   async function persistBatch(ops: Op[]) {
     const startedAt = performance.now();
-    // asyncDispatch opens a tx, runs the (traced) action, and commits — or rolls
-    // back on failure. The op coalescing lives inside the `persistOps` action.
     await asyncDispatch(persistentDB, persistOps({ ops }));
 
     const durationMs = performance.now() - startedAt;
@@ -203,8 +326,6 @@ function startPersisting(
   }
 
   const unsubscribe = memDB.subscribe((ops) => {
-    // Only the base tables go to disk; the derived-stats ops are recomputed on
-    // hydrate, so skip them here.
     const persistable = ops.filter((op) =>
       PERSISTED_TABLE_NAMES.has(op.table.tableName),
     );
@@ -216,13 +337,11 @@ function startPersisting(
   });
 
   const flush = () => void drain();
-  // Warn before the tab is closed/reloaded if there is still unpersisted work.
   const beforeUnload = (event: BeforeUnloadEvent) => {
-    flush(); // best-effort flush; can't be awaited here
+    flush();
     if (monitor.hasPendingWork()) {
       event.preventDefault();
-      // Modern browsers ignore the text but require a value to show the prompt.
-      event.returnValue = "Saving to IndexedDB is still in progress.";
+      event.returnValue = "Saving persistent writes is still in progress.";
       return event.returnValue;
     }
   };
@@ -238,27 +357,34 @@ function startPersisting(
 
 export type InitResult = {
   db: SubscribableDB;
-  /** Present only in persistent mode. */
   persistence: PersistenceMonitor | null;
 };
 
-/**
- * Build the database the app talks to for the given mode. In "memory" mode this
- * is a plain in-memory tier; in "persistent" mode the same tier is hydrated from
- * IndexedDB and every change is mirrored back to disk.
- */
 export async function initStore(mode: StoreMode): Promise<InitResult> {
-  const memDB = createMemDb(mode);
-  if (mode === "memory") return { db: memDB, persistence: null };
+  if (isHybridMode(mode)) {
+    const memDB = createMemDb(mode);
+    const { driver, dbName } = await createPersistentDriver(mode);
+    const persistentDB = new DB(driver, { dbName });
 
-  const persistentDB = new DB(await openIndexedDBDriver(IDB_NAME), {
-    dbName: "demo-indexeddb-" + mode,
+    await execAsync(persistentDB.loadTables(PERSISTED_TABLES));
+    await hydrate(persistentDB, memDB);
+
+    const persistence = new PersistenceMonitor();
+    startPersisting(persistentDB, memDB, persistence);
+
+    return { db: memDB, persistence };
+  }
+
+  const { driver, dbName } = await createPersistentDriver(mode);
+  const baseDb = new DB(driver, {
+    freezeArgs: false,
+    freezeRows: false,
+    dbName,
   });
-  await execAsync(persistentDB.loadTables(PERSISTED_TABLES));
+  const db = new SubscribableDB(baseDb);
 
-  await hydrate(persistentDB, memDB);
-  const persistence = new PersistenceMonitor();
-  startPersisting(persistentDB, memDB, persistence);
+  await execAsync(db.loadTables(ALL_TABLES));
+  installTaskStatsHooks(db);
 
-  return { db: memDB, persistence };
+  return { db, persistence: null };
 }

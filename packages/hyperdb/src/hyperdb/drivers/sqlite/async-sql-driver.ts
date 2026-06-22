@@ -615,7 +615,6 @@ export class AsyncSqlDriver implements DBDriver {
           await this.dropStaleSortKeyIndexes(tableDef);
           await this.dropStaleSortKeyColumns(tableDef);
           await this.addMissingSortKeyColumns(tableDef);
-          await this.backfillSortKeyColumns(tableDef);
           await this.createIndexes(tableDef);
           this.tableDefinitions.set(tableDef.tableName, tableDef);
         }
@@ -764,62 +763,6 @@ export class AsyncSqlDriver implements DBDriver {
       const sql = addSortKeyColumnSQL(tableDef.tableName, sortKeyColumn);
       await runAsyncSQL(this.db, sql);
       existingColumns.add(sortKeyColumn);
-    }
-  }
-
-  private async backfillSortKeyColumns(
-    tableDef: TableDefinition<any>,
-  ): Promise<void> {
-    for (const indexName of Object.keys(tableDef.indexes)) {
-      const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
-      const sql = `SELECT data FROM ${tableDef.tableName} WHERE ${sortKeyColumn} IS NULL`;
-      const startedAt = nowMs();
-      let rowCount = 0;
-      let batch: Row[] = [];
-      const insertChunkSize = getSqliteInsertChunkSize(tableDef);
-
-      const flushBatch = async (): Promise<void> => {
-        if (batch.length === 0) return;
-
-        await runAsyncSQL(
-          this.db,
-          buildInsertSQL(tableDef, batch.length, { replace: true }),
-          batch.flatMap((row) => buildRowInsertParams(tableDef, row)),
-        );
-        batch = [];
-      };
-
-      const stmt = await this.db.prepare(sql);
-      try {
-        for (const [data] of await stmt.values([])) {
-          rowCount++;
-          batch.push(parseSqliteStoredRow(String(data)));
-
-          if (batch.length >= insertChunkSize) {
-            await flushBatch();
-          }
-        }
-        await flushBatch();
-        logAsyncSQL(sql, startedAt, {
-          tableName: tableDef.tableName,
-          indexName,
-          rowCount,
-        });
-      } catch (error) {
-        logAsyncSQL(
-          sql,
-          startedAt,
-          {
-            tableName: tableDef.tableName,
-            indexName,
-            rowCount,
-          },
-          error,
-        );
-        throw error;
-      } finally {
-        await stmt.finalize();
-      }
     }
   }
 
