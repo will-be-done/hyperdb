@@ -102,7 +102,7 @@ const writeStoredOpenState = (isOpen: boolean): void => {
 };
 
 const listWidthKey = "hyperdb-devtools-list-width";
-const defaultListWidth = 290;
+const defaultListWidth = 400;
 const minListWidth = 400;
 const maxListWidth = 700;
 
