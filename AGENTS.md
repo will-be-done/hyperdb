@@ -11,4 +11,4 @@ Before substantial work:
 <!-- intent-skills:end -->
 
 When you do any changes to packages/hyperdb or packages/hyperdb-devtool,
-make sure that you covered it at packages/hyperdb-doc.
+make sure that you covered it at packages/hyperdb-doc and root README.md.

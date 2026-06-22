@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { DB } from "../runtime/db";
 import { SubscribableDB } from "../runtime/subscribable-db";
@@ -85,5 +85,27 @@ describe("HyperDB runtime registry", () => {
     new DB(new BptreeInmemDriver(), { dbName: "Second DB" });
 
     expect(snapshots).toEqual([["First DB"]]);
+  });
+
+  it("keeps notifying subscribers when one listener throws", () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const snapshots: string[][] = [];
+
+    subscribeToRegisteredHyperDBs(() => {
+      throw new Error("listener failed");
+    });
+    subscribeToRegisteredHyperDBs((dbs) => {
+      snapshots.push(dbs.map((db) => db.label));
+    });
+
+    expect(
+      () => new DB(new BptreeInmemDriver(), { dbName: "Resilient DB" }),
+    ).not.toThrow();
+    expect(snapshots).toEqual([["Resilient DB"]]);
+    expect(consoleError).toHaveBeenCalledOnce();
+
+    consoleError.mockRestore();
   });
 });

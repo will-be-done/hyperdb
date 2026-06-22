@@ -311,11 +311,13 @@ function startPersisting(
     syncQueue();
     try {
       while (pending.length > 0) {
-        const batch = pending.shift()!;
+        const batch = pending[0]!;
         try {
           await persistBatch(batch);
+          pending.shift();
         } catch (err) {
           console.error("Failed to persist batch", err);
+          break;
         }
         syncQueue();
       }

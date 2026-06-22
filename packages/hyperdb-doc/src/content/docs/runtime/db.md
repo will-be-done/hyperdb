@@ -34,6 +34,7 @@ execSync(baseDb.loadTables([tasksTable]));
 | `runtimeRowsValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                  |
 | `freezeArgs`            | `false`        | Deep-freeze selector args used by cached selectors/runs                                                      |
 | `freezeRows`            | `false`        | Deep-freeze rows after write normalization                                                                   |
+| `register`              | `true`         | Automatically register the DB with the runtime registry for tracing/devtools discovery                       |
 | `traits`                | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                        |
 | `tracer`                | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
 | `dbName`                | none           | A name used by tracing/devtools to label this database                                                       |

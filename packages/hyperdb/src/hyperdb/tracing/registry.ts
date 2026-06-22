@@ -77,7 +77,11 @@ export const registerHyperDB = (db: object): RegisteredHyperDBInfo => {
   const snapshot = snapshotRegisteredDBs(registry);
 
   for (const listener of [...registry.listeners]) {
-    listener(snapshot);
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.error("Failed to notify HyperDB registry listener", error);
+    }
   }
 
   emitRegisteredDBEvent(next);
