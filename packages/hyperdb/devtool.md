@@ -28,7 +28,7 @@ Architecture:
 Public React API:
 
 - HyperDBDevtools props:
-  - db?: SubscribableDB; if omitted, prefer DBProvider context and then discover registered DBs from globalThis.__hyperdb
+  - db?: SubscribableDB; if omitted, prefer DBProvider context and then discover registered DBs from globalThis.\_\_hyperdb
   - initialIsOpen?: boolean
   - position?: "top" | "bottom" | "left" | "right", default "bottom"
   - buttonPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right", default "bottom-right"
@@ -45,7 +45,7 @@ Public React API:
 
 Database discovery:
 
-- Raw DB construction registers app DB metadata in globalThis.__hyperdb for no-prop devtool discovery.
+- Raw DB construction registers app DB metadata in globalThis.\_\_hyperdb for no-prop devtool discovery.
 - SubscribableDB does not register separately; it shares the wrapped DB id for trace filtering.
 - Internal devtool/trace-store DBs must opt out of registration so they do not appear in the app DB selector.
 

@@ -44,8 +44,9 @@ type HyperDBRegistryGlobal = typeof globalThis & {
   __hyperdb?: unknown;
 };
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
-  .IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const resetRegistry = (): void => {
   delete (globalThis as HyperDBRegistryGlobal).__hyperdb;
