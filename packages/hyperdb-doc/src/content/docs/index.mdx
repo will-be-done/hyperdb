@@ -1,9 +1,9 @@
 ---
 title: HyperDB
-description: A local-first, reactive database for TypeScript with typed schemas, indexed queries, generator-based selectors and actions, and pluggable storage drivers.
+description: Reactive database for local-first apps with typed schemas, indexed queries, generator-based selectors and actions, and pluggable storage drivers.
 template: splash
 hero:
-  tagline: The reactive database for local-first apps. Write your schema, queries, selectors, and actions once, then run the exact same code in the browser and on the server.
+  tagline: The reactive database for local-first apps. Define schemas, queries, selectors, and actions once, then use that data layer in the browser and on the server.
   actions:
     - text: Star
       link: https://github.com/will-be-done/hyperdb
@@ -26,13 +26,12 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
 ## Why HyperDB
 
-HyperDB brings the developer experience of a backend like
-[Convex](https://www.convex.dev/) to a database that runs everywhere your
-TypeScript runs: the browser _and_ the server. You describe your data with
-typed schemas, read it through reactive selectors, and change it through
-transactional actions, without writing SQL and without thinking about the
-storage engine underneath. The same slice of schema, selectors, and actions runs
-unchanged on the client and the backend; only the storage driver differs. [Why HyperDB?](/start/why/) tells the full story.
+HyperDB brings the developer experience of a backend like Convex to a database
+that can run in the browser and on the server. You describe your data with typed
+schemas, read it through reactive selectors, and change it through
+transactional actions. The same slice of schema, selectors, and actions can be
+shared by the client and backend; only the storage driver differs. [Why
+HyperDB?](/start/why/) gives the technical background.
 
 ## Top Features
 
@@ -44,7 +43,7 @@ unchanged on the client and the backend; only the storage driver differs. [Why H
   <Card title="Indexed queries" icon="magnifier">
     Query through B-tree and hash indexes with a fluent, type-safe builder.
     Every table index is a B-tree, so sorted inserts and range scans stay `O(log
-    n)`, ideal for local-first fractional ordering, where reordering an item
+    n)`. This fits local-first fractional ordering, where reordering an item
     touches a single token instead of rebuilding the list.
   </Card>
   <Card title="Reactive by default" icon="random">
@@ -54,17 +53,17 @@ unchanged on the client and the backend; only the storage driver differs. [Why H
   <Card title="Runs everywhere" icon="laptop">
     The same schema, selectors, and actions run in the browser (in-memory,
     IndexedDB, WebAssembly SQLite) and on the server (native SQLite). On the
-    backend the runtime reads only the rows a selector touches; it never loads
-    the whole dataset into memory.
+    backend the runtime reads only the rows a selector touches instead of
+    hydrating the whole dataset into memory.
   </Card>
-  <Card title="Just JavaScript, no SQL" icon="seti:javascript">
+  <Card title="JavaScript selectors and actions" icon="seti:javascript">
     Write selectors and actions as ordinary JS (loops, conditionals, function
     calls) on both client and server. HyperDB gives you fast indexed lookups
     underneath, not a query language to learn.
   </Card>
   <Card title="Plain immutable data" icon="approve-check">
     Components get plain, frozen rows, with no proxies and no `observer()`
-    wrapper, so it composes with React's rendering model perfectly.
+    wrapper, so it composes with React's rendering model directly.
   </Card>
   <Card title="React & devtools" icon="list-format">
     First-class React hooks plus an in-app devtool that traces every selector

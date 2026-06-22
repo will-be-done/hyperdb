@@ -19,8 +19,8 @@ whether to use the sync or async runtime helpers, which depends on the driver.
 | `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Asynchronous SQLite (e.g. wa-sqlite)                          |
 | `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence via IndexedDB                             |
 
-Sync drivers work with `syncDispatch` / `select` / `execSync`. Async drivers
-require `asyncDispatch` / `runSelectorAsync` / `execAsync`.
+Sync drivers work with `execSync` / `syncDispatch` / `select`. Async drivers
+require `execAsync` / `asyncDispatch` / `selectAsync`.
 
 A typical full-stack setup uses an in-memory or IndexedDB driver in the browser
 and a native `SqlDriver` on the server, running the _same_ schema, selectors,
@@ -31,11 +31,11 @@ and actions on both sides.
 The simplest driver: a set of in-memory B+trees. Construct it with no arguments.
 
 ```ts
-import { DB } from "@will-be-done/hyperdb";
+import { DB, execSync } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const memoryDb = new DB(new BptreeInmemDriver());
-memoryDb.loadTables([tasksTable]);
+execSync(memoryDb.loadTables([tasksTable]));
 ```
 
 It stores normalized JS values directly and is the backend you'll use in tests
@@ -94,7 +94,7 @@ typed-array/data-view values around JSON storage so they round-trip exactly.
 ```ts
 import initSqlJs from "sql.js";
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
-import { DB } from "@will-be-done/hyperdb";
+import { DB, execSync } from "@will-be-done/hyperdb";
 import {
   SqlDriver,
   type SQLStatement,
@@ -130,7 +130,7 @@ const driver = new SqlDriver({
 });
 
 const db = new DB(driver);
-db.loadTables([tasksTable]);
+execSync(db.loadTables([tasksTable]));
 ```
 
 `SqlDriver` is synchronous. Even if sql.js initialization is async, use the
@@ -217,7 +217,7 @@ await execAsync(db.loadTables([tasksTable]));
 ```
 
 `AsyncSqlDriver` is asynchronous, so use it with `execAsync`,
-`asyncDispatch`, and `runSelectorAsync`.
+`asyncDispatch`, and `selectAsync`.
 
 ### Backend: native SQLite
 
@@ -226,7 +226,7 @@ On the server, point `SqlDriver` at a native SQLite binding, here Bun's built-in
 
 ```ts
 import { Database } from "bun:sqlite";
-import { DB } from "@will-be-done/hyperdb";
+import { DB, execSync } from "@will-be-done/hyperdb";
 import { SqlDriver, type SqlValue } from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqliteDB = new Database("app.sqlite", { strict: true });
@@ -253,7 +253,7 @@ const driver = new SqlDriver({
 });
 
 const db = new DB(driver);
-db.loadTables([tasksTable]); // the very same tables used in the browser
+execSync(db.loadTables([tasksTable])); // the very same tables used in the browser
 ```
 
 The same sync shape adapts other native bindings (`better-sqlite3`, Node's
@@ -271,8 +271,8 @@ syncDispatch(serverDb, createTask({ id, projectId, title }));
 const tasks = select(serverDb, projectTasks({ projectId }));
 ```
 
-This is the foundation of the [sync engine](/guides/sync-engine/): the server is
-just another peer running the same change-tracking actions as every client.
+This is the foundation of the [sync engine](/guides/sync-engine/): the server
+can run the same change-tracking actions as clients.
 
 ## IndexedDB
 
@@ -300,12 +300,12 @@ persistent backends.
 ## Sync vs. async, in practice
 
 A common local-first architecture runs two databases: an in-memory `DB` for
-instant reads/writes, and a persistent (IndexedDB or async SQLite) `DB` that the
-in-memory tier is hydrated from and flushed to in the background. That is exactly
-the shape of the [sync-engine guide](/guides/sync-engine/): the in-memory tier
+synchronous UI reads/writes, and a persistent (IndexedDB or async SQLite) `DB`
+that the in-memory tier is hydrated from and flushed to in the background. That
+is the shape of the [sync-engine guide](/guides/sync-engine/): the in-memory tier
 serves the UI synchronously while persistence and cross-tab/server sync happen
 asynchronously.
 
 When mixing tiers, remember the rule: a generator that touches an async driver
-must be run with `execAsync` / `asyncDispatch` / `runSelectorAsync`; sync drivers
-may use either, but the sync helpers are simpler.
+must be run with `execAsync` / `asyncDispatch` / `selectAsync`; sync drivers may
+use `execSync` / `syncDispatch` / `select`.

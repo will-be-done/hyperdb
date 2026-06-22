@@ -54,7 +54,7 @@ const createDBState = (options: DBOptions): DBState => {
     tables: [],
     options: {
       ...DEFAULT_CODEC_OPTIONS,
-      runtimeValidation: options.runtimeValidation ?? false,
+      runtimeRowsValidation: options.runtimeRowsValidation ?? false,
       freezeArgs: options.freezeArgs ?? false,
       freezeRows: options.freezeRows ?? false,
     },

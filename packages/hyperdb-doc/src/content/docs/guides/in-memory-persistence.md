@@ -1,24 +1,23 @@
 ---
 title: In-Memory Store with Persistence
-description: Run a synchronous in-memory HyperDB for the UI and mirror every change to a persistent IndexedDB tier for instant reads and writes that are still durable.
+description: Run a synchronous in-memory HyperDB for the UI and mirror each change to a persistent IndexedDB tier.
 sidebar:
   order: 1
   label: In-Memory + Persistence
 ---
 
-The fastest local-first setup HyperDB enables is a two-tier one: the UI reads
-and writes a synchronous in-memory database, and every change is mirrored to a
-persistent database (IndexedDB) in the background. On startup you load the
-persisted rows back into memory.
+One common local-first setup uses two tiers: the UI reads and writes a
+synchronous in-memory database, and each change is mirrored to a persistent
+database (IndexedDB) in the background. On startup you load the persisted rows
+back into memory.
 
-The result is the best of both worlds: selectors and actions stay
-[synchronous and instant](/start/why/#synchronous-on-the-frontend) because they
-run against the in-memory tier, while your data survives reloads because it's
-continuously flushed to disk. This guide builds that setup from scratch.
+This keeps selectors and actions synchronous in the UI while still persisting
+data between reloads. This guide builds that setup from scratch.
 
 This is persistence, not multi-client sync. If you also need change tracking,
-merge, and a server peer, the [Sync Engine guide](/guides/sync-engine/) layers
-all of that on top of exactly this foundation.
+cross-tab sync, merge, and a server peer, the [Sync Engine
+guide](/guides/sync-engine/) layers those concerns on top of the same two-tier
+shape.
 
 ## The shape
 
@@ -70,7 +69,7 @@ tier is a plain [`DB`](/runtime/db/) over the
 ```ts
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
-import { DB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, execAsync, execSync } from "@will-be-done/hyperdb";
 import { tasksTable, projectsTable } from "./tables";
 
 const persistedTables = [tasksTable, projectsTable];
@@ -82,7 +81,7 @@ export async function createStores(dbName: string) {
 
   // In-memory tier: synchronous; this is what the UI reads and writes
   const memDB = new SubscribableDB(new DB(new BptreeInmemDriver()));
-  memDB.loadTables(persistedTables);
+  execSync(memDB.loadTables(persistedTables));
 
   return { persistentDB, memDB };
 }
@@ -94,13 +93,13 @@ driver underneath.
 ## 3. Hydrate the in-memory tier
 
 On startup, read every row from the persistent tier and insert it into memory.
-Reads from IndexedDB are async (`runSelectorAsync`); the insert into memory is sync
+Reads from IndexedDB are async (`selectAsync`); the insert into memory is sync
 (`syncDispatch`).
 
 ```ts
 import {
   insert,
-  runSelectorAsync,
+  selectAsync,
   selectFrom,
   syncDispatch,
   type HyperDB,
@@ -115,9 +114,12 @@ async function hydrate(
 ) {
   for (const table of tables) {
     // Full-table scan over the `byIds` btree index (no `where`)
-    const rows = await runSelectorAsync(persistentDB, function* () {
-      return yield* selectFrom(table, "byIds").order("asc");
-    });
+    const rows = await selectAsync(
+      persistentDB,
+      (function* () {
+        return yield* selectFrom(table, "byIds").order("asc");
+      })(),
+    );
 
     // Load them into the in-memory tier in a single transaction
     syncDispatch(memDB, insert(table, rows));
@@ -129,7 +131,7 @@ After `hydrate` returns, the in-memory tier holds a complete copy of your data a
 the UI can read it synchronously.
 
 :::caution
-Hydration loads the whole dataset into memory. That's exactly right for a
+Hydration loads the whole dataset into memory. That can work well for a
 local-first client (one user's data), but it's the opposite of the
 [server pattern](/start/why/#the-backend-problem), where the runtime pulls in only
 the rows a selector touches. Don't hydrate an unbounded server table this way.
@@ -142,10 +144,10 @@ checks the in-memory tier first and, on a miss, runs the _same_ query against th
 persistent tier and caches the result back into memory for next time.
 
 The trade-off is that selectors and dispatch become async (a read may need to
-fall through to disk), but startup is near-instant and memory stays low, because
-data is pulled in lazily, on demand. Writes still commit instantly for any
+fall through to disk), but startup stays quick and memory stays low, because
+data is pulled in lazily, on demand. Writes still commit synchronously for any
 rows already cached, so if you preload the working set, actions stay synchronous
-while everything else loads on first access. This guide uses the eager model;
+while other rows load on first access. This guide uses the eager model;
 reach for hybrid mode when the dataset is too large to hold fully in memory or
 when startup time matters more than synchronous reads.
 :::
@@ -161,13 +163,40 @@ Because IndexedDB is async while commits arrive synchronously, a small queue
 serializes the writes so batches are persisted in commit order, one
 transaction at a time.
 
+A single commit arrives as one `Op` per row — a bulk insert of 10,000 rows is
+10,000 `insert` ops. Don't apply them one at a time: `tx.insert` /
+`tx.upsert` / `tx.delete` each accept an _array_, and the driver issues all of
+a call's IndexedDB requests as one pipelined burst inside the transaction.
+Awaiting each op separately throws that away — it serializes 10,000 round-trips
+instead of pipelining them. So coalesce consecutive ops of the same type and
+table into a single call:
+
 ```ts
 import {
   execAsync,
   type HyperDB,
   type Op,
+  type InsertOp,
+  type UpsertOp,
+  type DeleteOp,
   type SubscribableDB,
 } from "@will-be-done/hyperdb";
+
+// Split ops into runs of the same type + table, keeping their original order.
+// A bulk insert collapses into one run the driver can pipeline; an interleaved
+// insert/delete of the same row stays in two ordered runs.
+function groupConsecutiveOps(ops: Op[]): Op[][] {
+  const runs: Op[][] = [];
+  for (const op of ops) {
+    const last = runs.at(-1);
+    if (last && last[0].type === op.type && last[0].table === op.table) {
+      last.push(op);
+    } else {
+      runs.push([op]);
+    }
+  }
+  return runs;
+}
 
 export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
   const pending: Op[][] = [];
@@ -177,13 +206,17 @@ export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
     const tx = await execAsync(persistentDB.beginTx());
     let committed = false;
     try {
-      for (const op of ops) {
-        if (op.type === "insert") {
-          await execAsync(tx.insert(op.table, [op.newValue]));
-        } else if (op.type === "upsert") {
-          await execAsync(tx.upsert(op.table, [op.newValue]));
+      // One call per run, so a bulk insert becomes a single
+      // `tx.insert(table, rows)` the driver can pipeline — instead of one
+      // awaited round-trip per row.
+      for (const run of groupConsecutiveOps(ops)) {
+        const { type, table } = run[0];
+        if (type === "insert" || type === "upsert") {
+          const rows = run.map((op) => (op as InsertOp | UpsertOp).newValue);
+          await execAsync(tx[type](table, rows));
         } else {
-          await execAsync(tx.delete(op.table, [op.oldValue.id]));
+          const ids = run.map((op) => (op as DeleteOp).oldValue.id);
+          await execAsync(tx.delete(table, ids));
         }
       }
       await execAsync(tx.commit());
@@ -219,19 +252,33 @@ export function startPersisting(persistentDB: HyperDB, memDB: SubscribableDB) {
   // Best-effort flush of anything still queued when the tab goes away
   const flush = () => void drain();
   window.addEventListener("pagehide", flush, { capture: true });
-  window.addEventListener("beforeunload", flush, { capture: true });
+
+  // If a batch is still in flight or queued, kick off a flush and warn the
+  // user before the tab closes — that last commit hasn't reached disk yet.
+  const beforeUnload = (event: BeforeUnloadEvent) => {
+    flush(); // can't be awaited here; fire it off best-effort
+    if (draining || pending.length > 0) {
+      event.preventDefault();
+      // Modern browsers ignore the text but need a value to show the prompt.
+      event.returnValue = "Saving to IndexedDB is still in progress.";
+      return event.returnValue;
+    }
+  };
+  window.addEventListener("beforeunload", beforeUnload, { capture: true });
 
   return () => {
     unsubscribe();
     window.removeEventListener("pagehide", flush, { capture: true });
-    window.removeEventListener("beforeunload", flush, { capture: true });
+    window.removeEventListener("beforeunload", beforeUnload, { capture: true });
   };
 }
 ```
 
-The `tx.insert` / `tx.upsert` / `tx.delete` methods apply each op to the open
+The `tx.insert` / `tx.upsert` / `tx.delete` methods apply their rows to the open
 transaction; committing flushes the whole batch atomically, and any failure rolls
-it back.
+it back. Coalescing only merges _consecutive_ same-type, same-table ops, so it
+preserves order when a batch interleaves (e.g. an insert and a later delete of the
+same id).
 
 ## 5. Wire it together
 
@@ -251,29 +298,31 @@ export async function initStore(dbName: string) {
 
 From here, the app only ever talks to `memDB`: reads via
 [`useSyncSelector`](/integrations/react/), writes via
-[`useDispatch`](/integrations/react/). Both are synchronous and instant; the
+[`useDispatch`](/integrations/react/). Both run synchronously; the
 persistence loop keeps disk in step behind the scenes.
 
 ## What to keep in mind
 
-- Eventual durability. A write hits memory instantly and disk a moment later.
+- Eventual durability. A write hits memory first and disk a moment later.
   A crash in that gap loses only the last unflushed commit; the `pagehide` /
-  `beforeunload` flush shrinks the window, but it is best-effort. If you need
-  hard durability per write, write to the persistent tier directly and accept the
-  async latency.
+  `beforeunload` flush shrinks the window, and the `beforeunload` prompt warns
+  before a close while a batch is still queued. (Browsers ignore the prompt's
+  custom text and only show it after the user has interacted with the page.) If
+  you need hard durability per write, write to the persistent tier directly and
+  accept the async latency.
 - One writer. This assumes a single tab owns the IndexedDB database. Multiple
   tabs writing the same store need cross-tab coordination; see the
   [Sync Engine guide](/guides/sync-engine/).
 - Tag re-applied writes. If you later replay persisted or remote changes back
   into the in-memory tier, tag those transactions with a
   [trait](/runtime/db/#traits) and skip them in the subscriber, so a write isn't
-  persisted in a loop. The sync engine uses a `skip-sync` trait for exactly this.
+  persisted in a loop. The sync engine uses a `skip-sync` trait for this.
 - Batch large hydrations. For very large tables, chunk the insert in step 3
   (e.g. 1,000 rows per `insert`) to keep a single transaction bounded.
 
 ## Next steps
 
-This setup gives you instant, persistent local storage. To make multiple clients
+This setup gives you synchronous UI reads/writes with persistent local storage. To make multiple clients
 (and a server) converge on the same data, add change tracking and merge on top.
-The [Sync Engine guide](/guides/sync-engine/) does precisely that, reusing the two
-tiers you built here.
+The [Sync Engine guide](/guides/sync-engine/) describes that next layer, reusing
+the two tiers you built here.

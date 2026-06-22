@@ -6,8 +6,7 @@ sidebar:
 ---
 
 HyperDB stores a fixed set of value types. Every value you write is normalized
-against its validator before it reaches the storage driver, which guarantees that
-what comes back out matches your schema.
+against its validator before it reaches the storage driver.
 
 ## Supported values
 

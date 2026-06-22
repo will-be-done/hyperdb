@@ -65,7 +65,7 @@ const scanAll = [
 describe("DB runtime validation and codec boundary", () => {
   it("validates writes before the driver sees them when runtime validation is enabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     expect(() =>
       execSync(
@@ -84,7 +84,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("rejects unknown table fields when runtime validation is enabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     expect(() =>
       execSync(
@@ -140,7 +140,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("skips schema validation when disabled while preserving codec normalization", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: false });
+    const db = new DB(driver, { runtimeRowsValidation: false });
 
     execSync(
       db.insert(docsTable, [
@@ -170,7 +170,7 @@ describe("DB runtime validation and codec boundary", () => {
       payload: v.pass<{ fn: () => string }>(),
     });
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: false });
+    const db = new DB(driver, { runtimeRowsValidation: false });
     const payload = { fn: () => "ok" };
 
     execSync(db.insert(passTable, [{ id: "doc-1", payload }]));
@@ -180,7 +180,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("strips unknown table fields when runtime validation is disabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: false });
+    const db = new DB(driver, { runtimeRowsValidation: false });
 
     execSync(
       db.insert(docsTable, [
@@ -217,7 +217,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("rejects invalid codec values even when schema validation is disabled", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: false });
+    const db = new DB(driver, { runtimeRowsValidation: false });
 
     expect(() =>
       execSync(
@@ -237,7 +237,7 @@ describe("DB runtime validation and codec boundary", () => {
   it("validates records after driver reads when runtime validation is enabled", () => {
     const driver = new RecordingDriver();
     driver.scanRows = [{ id: "doc-1", title: 123, payload: null }];
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     expect(() =>
       execSync(db.intervalScan(docsTable, "byTitle", scanAll)),
@@ -248,7 +248,7 @@ describe("DB runtime validation and codec boundary", () => {
     const driver = new RecordingDriver();
     const bytes = new Uint8Array([1, 2, 3]);
     const buffer = new Uint8Array([4, 5]).buffer;
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     execSync(
       db.insert(docsTable, [
@@ -282,7 +282,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("applies write validation through transactions", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
     const tx = execSync(db.beginTx());
 
     expect(() =>
@@ -304,7 +304,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("applies write validation through action dispatch", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     function* writeInvalidDoc() {
       yield* actionInsert(docsTable, [
@@ -324,7 +324,7 @@ describe("DB runtime validation and codec boundary", () => {
 
   it("treats empty write batches as no-ops", () => {
     const driver = new RecordingDriver();
-    const db = new DB(driver, { runtimeValidation: true });
+    const db = new DB(driver, { runtimeRowsValidation: true });
 
     execSync(db.insert(docsTable, []));
     execSync(db.upsert(docsTable, []));
@@ -336,7 +336,7 @@ describe("DB runtime validation and codec boundary", () => {
   for (const [name, driverFactory] of createDriverFactories()) {
     it(`round-trips rich document values through ${name}`, async () => {
       const driver = await driverFactory();
-      const db = new AsyncDB(new DB(driver, { runtimeValidation: true }));
+      const db = new AsyncDB(new DB(driver, { runtimeRowsValidation: true }));
       await db.loadTables([docsTable]);
 
       const bytes = new Uint8Array([8, 9, 10]);

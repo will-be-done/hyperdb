@@ -43,8 +43,7 @@ You can also wrap a bare generator function instead of using the object form.
 ## The query builder
 
 `selectFrom(table, indexName)` returns a builder. You always query through an
-index, so there are no table scans. The builder is immutable: each method returns
-a new builder.
+index. The builder is immutable: each method returns a new builder.
 
 ```ts
 selectFrom(tasksTable, "byProjectOrder")
@@ -155,6 +154,20 @@ from smaller ones. The runtime tracks the index ranges scanned across the whole
 tree, so a composed selector stays just as precisely reactive as its parts.
 
 ```ts
+import { selectFrom, v } from "@will-be-done/hyperdb";
+import { selector } from "./builders"; // createSelector()
+import { tasksTable } from "./schema";
+
+export const projectTasks = selector({
+  name: "projectTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectOrder")
+      .where((q) => q.eq("projectId", projectId))
+      .order("asc");
+  },
+});
+
 const projectSummary = selector({
   name: "projectSummary",
   args: { projectId: v.string() },
@@ -174,15 +187,13 @@ Inside React, use [`useSyncSelector` / `useAsyncSelector`](/integrations/react/)
 Outside React, run them directly:
 
 ```ts
-import { select, runSelectorAsync } from "@will-be-done/hyperdb";
+import { select, selectAsync } from "@will-be-done/hyperdb";
 
 // synchronous drivers (in-memory, sync SQLite)
 const tasks = select(db, projectTasks({ projectId: "p1" }));
 
 // asynchronous drivers (IndexedDB, async SQLite)
-const tasksAsync = await runSelectorAsync(db, () =>
-  projectTasks({ projectId: "p1" }),
-);
+const tasksAsync = await selectAsync(db, projectTasks({ projectId: "p1" }));
 ```
 
 For cached, subscribed reads outside React, see

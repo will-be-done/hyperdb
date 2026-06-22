@@ -5,9 +5,7 @@ sidebar:
   order: 4
 ---
 
-Every query runs through an index, so HyperDB never does a full table scan.
-Indexes are declared on the table and determine which filters and orderings are
-possible.
+Every query runs through an index. Indexes are declared on the table and determine which filters and orderings are possible.
 
 ## Declaring indexes
 

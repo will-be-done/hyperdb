@@ -9,6 +9,7 @@ Codesandbox:
 Devtool:
 
 1. resetcss
+1. fix tabl selection (like call tree) not persisted to local storage
 
 Doc:
 
@@ -36,4 +37,5 @@ Doc:
 1. how to isolate devtool styling?
 
 Others:
+1. Understand when normalisation happen. Does it happened in-mem? Indexeddb? When validation happen?
 1. intent skills css tanstack support

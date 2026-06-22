@@ -19,13 +19,13 @@ import {
 } from "../schema/validation-utils";
 
 export type CodecOptions = {
-  runtimeValidation: boolean;
+  runtimeRowsValidation: boolean;
   freezeArgs: boolean;
   freezeRows: boolean;
 };
 
 export const DEFAULT_CODEC_OPTIONS: CodecOptions = {
-  runtimeValidation: false,
+  runtimeRowsValidation: false,
   freezeArgs: false,
   freezeRows: false,
 };
@@ -292,7 +292,7 @@ export function normalizeRecordForDriver<TTable extends TableDefinition>(
   options: CodecOptions,
 ): Row {
   const normalized = table.schemaValidator
-    ? options.runtimeValidation
+    ? options.runtimeRowsValidation
       ? assertRecordResult(
           table,
           record,
@@ -325,7 +325,7 @@ export function validateRecordFromDriver<T>(
   record: unknown,
   options: CodecOptions,
 ): T {
-  if (!options.runtimeValidation || !table.schemaValidator) {
+  if (!options.runtimeRowsValidation || !table.schemaValidator) {
     return record as T;
   }
 

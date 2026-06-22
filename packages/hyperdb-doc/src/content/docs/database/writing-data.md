@@ -133,7 +133,4 @@ drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` 
 ## Bulk writes
 
 `insert`, `upsert`, and `deleteRows` all take arrays, so batch your writes
-into a single command rather than looping. Combined with array-form `where`
-queries for bulk reads, this keeps large operations efficient. The
-[sync-engine guide](/guides/sync-engine/) chunks large batches to keep individual
-queries bounded.
+into a single command rather than looping. 

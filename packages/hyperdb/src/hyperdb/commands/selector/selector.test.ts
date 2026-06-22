@@ -5,6 +5,7 @@ import {
   initSelector,
   initCachedSelector,
   select,
+  selectAsync,
 } from "./selector";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
@@ -174,6 +175,38 @@ describe("selector", () => {
         state: "done",
         projectId: "project-1",
       },
+    ]);
+  });
+
+  test("selectAsync runs a selector once", async () => {
+    const asyncSelectTasksTable = defineTable("asyncSelectTasks", {
+      id: v.string(),
+      title: v.string(),
+      projectId: v.string(),
+    }).index("projectId", ["projectId"]);
+    const testDb = createTestDB(asyncSelectTasksTable);
+
+    execSync(
+      testDb.insert(asyncSelectTasksTable, [
+        { id: "task-1", title: "Task 1", projectId: "project-1" },
+        { id: "task-2", title: "Task 2", projectId: "project-2" },
+      ]),
+    );
+
+    const projectTasks = selector({
+      name: "asyncProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* ({ projectId }) {
+        return yield* selectFrom(asyncSelectTasksTable, "projectId").where(
+          (q) => q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    await expect(
+      selectAsync(testDb, projectTasks({ projectId: "project-1" })),
+    ).resolves.toEqual([
+      { id: "task-1", title: "Task 1", projectId: "project-1" },
     ]);
   });
 

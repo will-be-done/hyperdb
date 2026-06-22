@@ -48,8 +48,12 @@ you set defaults like argument validation.
 // builders.ts
 import { createSelector, createAction } from "@will-be-done/hyperdb";
 
-export const selector = createSelector({ validateArgs: false });
-export const action = createAction({ validateArgs: false });
+export const selector = createSelector({
+  validateArgs: process.env.NODE_ENV === "development",
+});
+export const action = createAction({
+  validateArgs: process.env.NODE_ENV === "development",
+});
 ```
 
 ## 4. Write a selector and an action
@@ -88,14 +92,19 @@ core `DB` in a `SubscribableDB` so selectors can react to changes.
 
 ```ts
 // db.ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
-const baseDb = new DB(new BptreeInmemDriver());
+const baseDb = new DB(new BptreeInmemDriver(), {
+  runtimeRowsValidation: process.env.NODE_ENV === "development",
+  freezeArgs: process.env.NODE_ENV === "development",
+  freezeRows: process.env.NODE_ENV === "development",
+});
 export const db = new SubscribableDB(baseDb);
 
-db.loadTables([tasksTable]);
+// Or execAsync() for async driver
+execSync(db.loadTables([tasksTable]));
 ```
 
 ## 6. Read and write outside React

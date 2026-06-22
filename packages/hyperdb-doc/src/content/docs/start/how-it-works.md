@@ -1,14 +1,14 @@
 ---
 title: How HyperDB Works
-description: "The three layers of HyperDB: tables, generator commands, and the DB runtime."
+description: "The three core pieces of HyperDB: tables, generator commands, and the DB runtime."
 sidebar:
   order: 3
 ---
 
-HyperDB is built from three layers. Understanding how they fit together explains
+HyperDB is built from three core pieces. Understanding how they fit together explains
 almost everything else in these docs.
 
-## The three layers
+## The core pieces
 
 ### 1. Tables
 
@@ -80,20 +80,19 @@ A `DB` ties a set of tables to a storage driver and executes commands. The
 driver provides the actual backend: in-memory B+trees, SQLite, or IndexedDB.
 
 ```ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
-db.loadTables([tasksTable]);
+execSync(db.loadTables([tasksTable]));
 ```
 
 You typically wrap the core `DB` in a [`SubscribableDB`](/runtime/db/), which
 adds revisions, subscriptions, and lifecycle hooks, the machinery that makes
 selectors reactive.
 
-The driver is the only thing that changes between environments. The exact
-same tables and commands run on a server by handing `DB` a native SQLite driver
-instead:
+The driver is the main thing that changes between environments. The same tables
+and commands can run on a server by handing `DB` a native SQLite driver instead:
 
 ```ts
 import { Database } from "bun:sqlite";
@@ -101,7 +100,7 @@ import { SqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqlite = new Database("app.sqlite", { strict: true });
 const serverDb = new DB(makeSqlDriver(sqlite)); // same tasksTable, same selectors
-serverDb.loadTables([tasksTable]);
+execSync(serverDb.loadTables([tasksTable]));
 ```
 
 See [Storage Drivers](/runtime/drivers/#backend-native-sqlite) for the full
@@ -121,9 +120,7 @@ This is the loop that powers HyperDB's reactivity:
 5. A cached selector re-runs only if a changed row falls inside a range it
    previously scanned. Otherwise the cached value is reused.
 
-The result: precise, automatic invalidation without you writing any
-subscription bookkeeping. The details live in
-[Selectors & Reactivity](/database/selectors-reactivity/).
+More details in [Selectors & Reactivity](/database/selectors-reactivity/).
 
 ## Sync vs. async execution
 
@@ -134,7 +131,7 @@ for almost everything:
 | Sync                              | Async                                   |
 | --------------------------------- | --------------------------------------- |
 | `syncDispatch(db, action(args))`  | `asyncDispatch(db, action(args))`       |
-| `select(db, gen)`                 | `runSelectorAsync(db, () => gen)`       |
+| `select(db, gen)`                 | `selectAsync(db, gen)`                  |
 | `execSync(generator)`             | `execAsync(generator)`                  |
 | `useSyncSelector` / `useDispatch` | `useAsyncSelector` / `useAsyncDispatch` |
 

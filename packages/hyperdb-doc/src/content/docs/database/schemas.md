@@ -7,7 +7,7 @@ sidebar:
 
 A schema describes the shape of your rows and the indexes you can query
 by. Schemas are defined with `defineTable` and the `v` validator library, and
-they double as the source of truth for TypeScript types.
+they also act as the source of truth for TypeScript types.
 
 ## Defining a table
 

@@ -6,8 +6,7 @@ sidebar:
 ---
 
 The runtime ties tables to a [storage driver](/runtime/drivers/) and executes
-commands. There are three runtime classes; you almost always use the first two
-together.
+commands.
 
 ## `DB`
 
@@ -15,45 +14,45 @@ together.
 then load your tables.
 
 ```ts
-import { DB, hyperDBTraceStore } from "@will-be-done/hyperdb";
+import { DB, execSync, hyperDBTraceStore } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 
 const baseDb = new DB(new BptreeInmemDriver(), {
-  runtimeValidation: true,
-  freezeArgs: true,
-  freezeRows: false,
+  runtimeRowsValidation: process.env.NODE_ENV === "development",
+  freezeArgs: process.env.NODE_ENV === "development",
+  freezeRows: process.env.NODE_ENV === "development",
   tracer: hyperDBTraceStore,
 });
 
-baseDb.loadTables([tasksTable]);
+execSync(baseDb.loadTables([tasksTable]));
 ```
 
 ### Options
 
 | Option              | Default        | Description                                                                                                  |
 | ------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
-| `runtimeValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                  |
+| `runtimeRowsValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                  |
 | `freezeArgs`        | `false`        | Deep-freeze selector args used by cached selectors/runs                                                      |
 | `freezeRows`        | `false`        | Deep-freeze rows after write normalization                                                                   |
 | `traits`            | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                        |
 | `tracer`            | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
 | `dbName`            | none           | A name used by tracing/devtools to label this database                                                       |
 
-`runtimeValidation` is invaluable in development: it catches schema mismatches at
-the boundary instead of letting bad data into storage. `freezeArgs` / `freezeRows`
-help surface accidental mutation of cached data.
+`runtimeRowsValidation` is useful in development because it catches schema
+mismatches at the boundary instead of letting bad data into storage.
+`freezeArgs` / `freezeRows` help surface accidental mutation of cached data.
 
 ## `SubscribableDB`
 
-`SubscribableDB` wraps a `DB` and adds everything reactivity needs:
-revisions, subscriptions, and lifecycle hooks. Wrap your base `DB` in it for any
-app that renders from the data.
+`SubscribableDB` wraps a `DB` and adds the pieces reactivity uses: revisions,
+subscriptions, and lifecycle hooks. Wrap your base `DB` in it for any app that
+renders from the data.
 
 ```ts
-import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
 
 const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
-db.loadTables([tasksTable]);
+execSync(db.loadTables([tasksTable]));
 ```
 
 ### Subscriptions and revisions
@@ -111,13 +110,13 @@ for you, but you can also drive a generator directly:
 | `syncDispatch(db, action(args))`  | Run an action in a transaction (sync drivers)  |
 | `asyncDispatch(db, action(args))` | Run an action in a transaction (async drivers) |
 | `select(db, gen)`                 | Run a selector once (sync drivers)             |
-| `runSelectorAsync(db, () => gen)` | Run a selector once (async drivers)            |
+| `selectAsync(db, gen)`            | Run a selector once (async drivers)            |
 | `execSync(generator)`             | Drive a raw DB-command generator (sync)        |
 | `execAsync(generator)`            | Drive a raw DB-command generator (async)       |
 
 `execSync` throws if the generator yields an async command, which is how the
 sync/async split is enforced. Async drivers must go through `execAsync` /
-`asyncDispatch` / `runSelectorAsync`.
+`asyncDispatch` / `selectAsync`.
 
 ## Traits
 

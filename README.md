@@ -1,8 +1,8 @@
 # HyperDB
 
-**The reactive database for local-first apps.** Write your schema,
-queries, selectors, and actions once, then run the exact same code in the
-browser _and_ on the server.
+**The reactive database for local-first apps.** Define schemas, queries,
+selectors, and actions once, then use that data layer in the browser and on the
+server.
 
 <img width="2920" height="1736" alt="image" src="https://github.com/user-attachments/assets/023a5f91-bdea-4208-b2fc-1f445c958916" />
 
@@ -12,35 +12,34 @@ browser _and_ on the server.
 
 ## What it solves
 
-HyperDB brings the developer experience of a backend like
-Convex to a database that runs **everywhere your
-TypeScript runs**. You describe data with typed schemas, read it through reactive
-selectors, and change it through transactional actions: no SQL, and no thinking
-about the storage engine underneath. The same slice of schema + selectors +
-actions runs unchanged on the client and the backend; only the storage driver
-differs.
+HyperDB brings the developer experience of a backend like Convex to a database
+that can run in the browser and on the server. You describe data with typed
+schemas, read it through reactive selectors, and change it through
+transactional actions. The same slice of schema, selectors, and actions can be
+shared by the client and backend; only the storage driver differs.
 
-It was built to fix the things that hurt when you reach for Redux or MobX or other state management libs in a local-first app:
+It is designed for the parts of local-first apps where Redux, MobX, or plain
+state libraries start to strain:
 
-- **Cheap inserts into sorted data.** Every table index is backed by a real B-tree, so
+- **Efficient inserts into sorted data.** Every table index is backed by a real B-tree, so
   inserting into a sorted collection stays `O(log n)` instead of the `O(n)` you
-  pay rebuilding (Redux) or shifting (MobX) an array. Ideal for fractional
-  indexing for local-first apps.
+  pay rebuilding (Redux) or shifting (MobX) an array. This fits fractional
+  indexing in local-first apps.
 - **Fine-grained reactivity.** Selectors record exactly which index ranges they
   scanned, so a mutation only re-runs the selectors that overlap it, without
   proxies or `observer()`.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
-  server (SQLite today, pg/mongodb in future). The runtime reads only the rows a selector touches; it
-  never loads the whole dataset into memory.
-- **Instant on the frontend.** Against the in-memory driver, selectors and
+  server (SQLite today, pg/mongodb in future). The runtime reads only the rows a
+  selector touches instead of hydrating the whole dataset into memory.
+- **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick.
-- **Just JavaScript, no SQL.** Selectors and actions are ordinary JS: loops,
+- **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
 
-And it has awesome devtool:
+The devtool records selector runs and mutations in a call tree:
 
 <img width="1999" height="745" alt="image" src="https://github.com/user-attachments/assets/428d892b-8982-4bd5-8b62-402c04218690" />
 
@@ -91,8 +90,12 @@ export type Task = ExtractSchema<typeof tasksTable>;
 // 2. Create shared builders
 import { createSelector, createAction } from "@will-be-done/hyperdb";
 
-export const selector = createSelector({ validateArgs: false });
-export const action = createAction({ validateArgs: false });
+export const selector = createSelector({
+  validateArgs: process.env.NODE_ENV === "development",
+});
+export const action = createAction({
+  validateArgs: process.env.NODE_ENV === "development",
+});
 ```
 
 ```ts
@@ -122,12 +125,19 @@ export const createTask = action({
 
 ```ts
 // 4. Create a database (in-memory + reactive)
-import { DB, SubscribableDB } from "@will-be-done/hyperdb";
+import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
-export const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
-db.loadTables([tasksTable]);
+export const db = new SubscribableDB(
+  new DB(new BptreeInmemDriver(), {
+    runtimeRowsValidation: process.env.NODE_ENV === "development",
+    freezeArgs: process.env.NODE_ENV === "development",
+    freezeRows: process.env.NODE_ENV === "development",
+  }),
+);
+// Or execAsync() for async driver
+execSync(db.loadTables([tasksTable]));
 ```
 
 ```tsx

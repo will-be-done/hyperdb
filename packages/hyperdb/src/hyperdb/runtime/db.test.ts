@@ -610,7 +610,7 @@ describe("Database Operations Edge Cases", async () => {
         );
 
         const db = new AsyncDB(
-          new DB(await createDriver(), { runtimeValidation: true }),
+          new DB(await createDriver(), { runtimeRowsValidation: true }),
         );
         await db.loadTables([docsTable]);
 
@@ -697,7 +697,7 @@ describe("Database Operations Edge Cases", async () => {
           .index("byPostTitleSlug", ["title", "slug"]);
 
         const db = new AsyncDB(
-          new DB(await createDriver(), { runtimeValidation: true }),
+          new DB(await createDriver(), { runtimeRowsValidation: true }),
         );
         await db.loadTables([documentsTable]);
 

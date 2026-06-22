@@ -721,3 +721,10 @@ export function select<TReturn>(
 ): TReturn {
   return runSelector(db, () => gen, []);
 }
+
+export async function selectAsync<TReturn>(
+  db: HyperDB,
+  gen: Generator<unknown, TReturn, unknown>,
+): Promise<TReturn> {
+  return runSelectorAsync(db, () => gen, []);
+}

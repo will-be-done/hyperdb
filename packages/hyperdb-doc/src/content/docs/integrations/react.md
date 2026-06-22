@@ -7,9 +7,9 @@ sidebar:
 
 The React integration lives at `@will-be-done/hyperdb/react`. It provides a
 context provider plus hooks for reactive reads, dispatching actions, and one-off
-reads. React 19 is a peer dependency.
+reads. React 18 is a peer dependency.
 
-Unlike MobX, HyperDB hands your components plain, immutable rows: frozen
+HyperDB hands your components plain, immutable rows: frozen
 data, never proxies. There is no `observer()` wrapper to remember and
 nothing leaking into your view layer. The hooks subscribe through HyperDB's
 [range-tracked selector cache](/database/selectors-reactivity/), so a component

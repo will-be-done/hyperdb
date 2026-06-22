@@ -1,27 +1,27 @@
 ---
 title: Why HyperDB?
-description: Why I built another database, and the performance and full-stack problems with Redux and MobX that motivated HyperDB.
+description: The performance and full-stack constraints that HyperDB is designed around.
 sidebar:
   order: 2
 ---
 
-There is no shortage of state libraries for TypeScript, so it is fair to ask why
-the world needs another one. I built HyperDB because the tools I was reaching for,
-Redux and MobX, kept losing on two fronts that matter most for local-first
-apps: performance and the ability to run the same code on the backend.
+There is no shortage of state libraries for TypeScript, so it is fair to ask
+what problem HyperDB is trying to solve. The short version: local-first apps need
+efficient indexed data structures, precise invalidation, and a data layer that
+can also run on the backend.
 
-This page explains the specific problems that pushed me to build it. If you just
-want to get going, skip to [How HyperDB Works](/start/how-it-works/) and the
+This page explains those constraints. If you want to get going, skip to [How
+HyperDB Works](/start/how-it-works/) and the
 [Quickstart](/start/quickstart/).
 
 ## The data-structure problem
 
 Local-first apps lean heavily on sorted collections. With
-[fractional indexing](https://observablehq.com/@dgreensp/implementing-fractional-indexing)
+[fractional indexing](https://liveblocks.io/blog/how-crdts-and-sync-engines-keep-realtime-lists-ordered-with-fractional-indexing)
 you keep items ordered by giving each one an order token between its neighbours,
-so reordering or inserting an item is supposed to be cheap, since you only touch a
-single token. But that promise only holds if the underlying data structure can
-insert into a sorted collection cheaply.
+so reordering or inserting an item should touch a small amount of data. That
+only holds if the underlying data structure can insert into a sorted collection
+efficiently.
 
 Redux and MobX both store collections as plain sorted arrays, and a sorted
 array is the wrong shape for this:
@@ -33,11 +33,11 @@ array is the wrong shape for this:
   splicing a value into the middle of a sorted array still has to shift every
   element after the insertion point, so under the hood it is still `O(n)`.
 
-A B-tree is the textbook solution here: ordered iteration, range scans, and
-`O(log n)` inserts and deletes. Neither Redux nor MobX gives you one. HyperDB is,
-at its core, a B-tree wrapper: every table is backed by a real
+A B-tree is the standard data structure here: ordered iteration, range scans,
+and `O(log n)` inserts and deletes. Neither Redux nor MobX gives you one.
+HyperDB is, at its core, a B-tree wrapper: every table is backed by a
 [B+tree](/runtime/drivers/#in-memory), so inserting one item into a sorted set of
-a hundred thousand stays fast instead of degrading linearly.
+a hundred thousand does logarithmic work instead of linear work.
 
 ## The notification problem
 
@@ -49,31 +49,29 @@ That is `O(n)` in the number of selectors, regardless of how small the change wa
 On a large screen with thousands of live selectors, a single keystroke can mean
 thousands of recomputations.
 
-MobX solves this with fine-grained observation: it knows exactly which observables
+MobX solves this with fine-grained observation: it tracks which observables
 each computed value read, so only the affected ones re-run. HyperDB does the same
 thing, but at the level of data ranges instead of object fields. Because every
 selector reads through indexes, the runtime records exactly which index ranges it
 scanned. When a mutation commits, only the selectors whose ranges actually contain
 the changed rows re-run. See [Selectors & Reactivity](/database/selectors-reactivity/).
-A write to `projectId = "p2"` simply never wakes a selector that read
+A write to `projectId = "p2"` does not wake a selector that read
 `projectId = "p1"`.
 
-So you get MobX-style granularity (with one honest caveat: tracking is at the
+So you get MobX-style granularity (with one caveat: tracking is at the
 range/row level, not per individual field), without MobX's downside. MobX
 relies on mutable, observable objects and asks you to wrap components in
-`observer()`, which I have always felt is a hack against React's grain. HyperDB
-never hands out proxies: every row it gives back is plain, immutable data,
+`observer()`. HyperDB does not hand out proxies: every row it gives back is
+plain, immutable data,
 frozen by the in-memory driver, and [deep-frozen end to end](/runtime/db/) when
-you opt in with `freezeRows`. That means it composes with React's rendering
+you opt in with `freezeRows`. That means it works with React's rendering
 model directly, with no `observer()` and no proxies leaking into your view layer.
 
 ## The backend problem
 
-This is the reason I actually started building HyperDB.
-
 Imagine you have a local-first app and now need a server, to validate writes, to
 run the same business logic authoritatively, or to merge changes from many
-clients. With Redux or MobX you have two bad options:
+clients. With Redux or MobX you usually have two options:
 
 1. Load everything into memory and run your selectors and actions against it.
    This works for one user, but a server holds _many_ users' data at once. Keeping
@@ -82,15 +80,15 @@ clients. With Redux or MobX you have two bad options:
 2. Reimplement the logic in SQL or some other backend stack. Now you maintain
    two copies of the same rules, and every divergence is a bug waiting to happen.
 
-HyperDB removes the choice. Because a table is just a B-tree, and B-trees are what
-real databases are built on, the same schema, selectors, and actions run
+HyperDB avoids that split. Because a table is a B-tree, and B-trees are what
+many databases are built on, the same schema, selectors, and actions can run
 against a persistent store on the server. Today that store is
 [SQLite](/runtime/drivers/#backend-native-sqlite) (MongoDB and PostgreSQL are not
 supported for now). The runtime reads through the database's own
 indexes and pulls in only the rows a given selector or action touches; it
-never loads the whole dataset into memory. You write your data logic once and run
-it on both ends of the wire. The [Sync Engine guide](/guides/sync-engine/) shows a
-server doing exactly this, sharing its change-tracking code with every client.
+does not hydrate the whole dataset into memory. You can share data logic between
+the client and server. The [Sync Engine guide](/guides/sync-engine/) outlines a
+server using the same change-tracking code as clients.
 
 ## Synchronous on the frontend
 
@@ -102,15 +100,13 @@ synchronously or asynchronously, so the _same_ selector or action works against 
 sync in-memory driver and against an async driver like IndexedDB without being
 rewritten.
 
-When the driver is synchronous, the runtime never yields back to the event loop in
+When the driver is synchronous, the runtime does not yield back to the event loop in
 the middle of a read or a write. There's no microtask hop, no promise to schedule,
 no frame where the work is half-done. A dispatch runs to completion and the result
 is available immediately, so a click can update the store and the UI in the same
-tick. That is what makes the frontend feel instant: sync code simply executes far
-faster than the same code broken up by `await`, because nothing pauses to wait for
-the event loop.
+tick. This keeps the interactive path out of the promise/microtask queue.
 
-You keep the async path for what genuinely needs it (persistence, IndexedDB,
+You keep the async path for what needs it (persistence, IndexedDB,
 server SQLite), but the interactive hot path, the in-memory tier that the UI
 reads and writes, stays fully synchronous and responsive.
 
@@ -119,71 +115,68 @@ development: instead of loading everything into memory up front, a read checks t
 in-memory tier first and, on a miss, runs the _same_ query against IndexedDB and
 caches the rows back into memory. Because a selector is just a description, it
 runs unchanged either way: you trade synchronous reads for async ones, but
-startup is near-instant and memory stays low, since data is pulled in lazily, on
-demand. Writes still commit instantly for anything already cached. It's the same
-selectors and actions, executed against two tiers instead of one.
+startup stays quick and memory stays low, since data is pulled in lazily, on
+demand. Writes still commit synchronously for anything already cached. It's the
+same selectors and actions, executed against two tiers instead of one.
 
 ## Why not just run SQLite in the browser?
 
 If the same selectors and actions already run on server SQLite, the natural
 question is why not run SQLite in the browser too, shipping one SQL dialect to both
-ends, the way [PowerSync](https://www.powersync.com/) and similar tools do. I
-went the other way: on the frontend HyperDB persists to IndexedDB instead.
-Here's the reasoning.
+ends, the way [PowerSync](https://www.powersync.com/) and similar tools do.
+HyperDB can persist to IndexedDB instead. Here's the reasoning.
 
 SQLite in the browser is heavy. A browser has no native SQLite, so you ship a
 WebAssembly build, a binary the user downloads and instantiates before the app
 can read a single row. Then every read and write crosses the JS↔WASM boundary,
-encoding and decoding strings each way. And because HyperDB is schemaless at the
+encoding and decoding strings each way(waiting for native wasm string support!). And because HyperDB is schemaless at the
 storage layer (rows are documents, not columns under a fixed SQL schema), values
 are stored as JSON, so each row also pays `JSON.stringify` on the way in and
-`JSON.parse` on the way out. Individually tiny; in aggregate, on a hot path,
-brutal.
+`JSON.parse` on the way out. Each cost is small in isolation, but they add up on
+hot paths.
 
-IndexedDB is already the right shape. It's a native, document-oriented store
-with indexes, exactly what HyperDB wants, with no WASM to ship and no OPFS or
-IndexedDB-VFS layer to route SQLite through. It also starts fast, which is what a
-local-first app needs to feel instant on load. Its raw API is famously awkward,
-but you never see it: the [IndexedDB driver](/runtime/drivers/#indexeddb) hides
-it entirely behind the same schema, selectors, and actions you use everywhere
-else. You genuinely won't know you're on IndexedDB.
+IndexedDB is a good fit for this storage layer. It's a native, document-oriented
+store with indexes, which matches HyperDB's storage model, with no WASM to ship
+and no OPFS or IndexedDB-VFS layer to route SQLite through. Its raw API is
+awkward, but the [IndexedDB driver](/runtime/drivers/#indexeddb) hides it behind
+the same schema, selectors, and actions you use elsewhere.
 
-The setup I'd reach for. Run two HyperDB stores in the browser: an
+One practical setup is to run two HyperDB stores in the browser: an
 [in-memory](/runtime/drivers/#in-memory) one the UI reads and writes
 synchronously, and an IndexedDB one for durability. Load everything from
-IndexedDB into memory on startup, then let every action run instantly against the
+IndexedDB into memory on startup, then let every action run synchronously against the
 in-memory store while a [`SubscribableDB`](/runtime/db/) hook replicates each
 insert, upsert, and delete into the IndexedDB store in the background. Selectors
-and actions stay synchronous and instant, and the data is still persistent. The
-[In-Memory + Persistence guide](/guides/in-memory-persistence/) builds exactly
-this, step by step.
+and actions stay synchronous while the data is still persistent. The
+[In-Memory + Persistence guide](/guides/in-memory-persistence/) builds this
+setup step by step.
 
-And SQLite couldn't match the reactivity anyway. Even setting the bundle and
+SQLite also does not provide the same reactivity signal. Even setting the bundle and
 serialization costs aside, a SQL query carries no record of _which ranges it
-read_. When any row in a table changes, you have no cheap way to know which
+read_. When any row in a table changes, you have no direct way to know which
 subscribed queries it could have touched, so you re-run all of them. That's the
 [notification problem](#the-notification-problem) all over again. HyperDB tracks
 the exact index ranges each selector scanned, so a write wakes only the selectors
-that overlap it. The in-memory HyperDB tier gives you fine-grained reactivity
-that a SQLite-in-the-browser layer fundamentally can't.
+that overlap it. The in-memory HyperDB tier gives you range-tracked reactivity
+without needing to infer dependencies from SQL.
 
 ## Every query is observable
 
 Because reads go through declarative queries rather than ad-hoc property access,
-HyperDB knows exactly what each selector and action did: which indexes were
+HyperDB records what each selector and action did: which indexes were
 scanned, how many rows came back, and how long each step took. It surfaces all of
 that in a built-in [devtool](/integrations/devtools/).
 
 ![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
 
-Every dispatch and selector run becomes a trace you can sort by duration. Open
+Each dispatch and selector run becomes a trace you can sort by duration. Open
 one and you get a full call tree: the selector at the top, every nested
 selector it composed, and at the leaves the actual index reads, like
 `select project_categories.byProjectIdOrderToken → 3 rows`, each annotated with
 its own timing and row count. When a view is slow, you can see precisely which
 sub-query or which index is responsible, instead of guessing.
 
-This kind of insight is only possible _because_ data is read by queries. A state
+This kind of insight comes from reading data through queries. A state
 library where components reach into plain objects has nothing to trace; HyperDB's
 declarative reads give it a complete, structured picture of every computation.
 
