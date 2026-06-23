@@ -29,14 +29,15 @@ execSync(baseDb.loadTables([tasksTable]));
 
 ### Options
 
-| Option              | Default        | Description                                                                                                  |
-| ------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
+| Option                  | Default        | Description                                                                                                  |
+| ----------------------- | -------------- | ------------------------------------------------------------------------------------------------------------ |
 | `runtimeRowsValidation` | `false`        | Validate full records against their table validators on writes and on reads from the driver                  |
-| `freezeArgs`        | `false`        | Deep-freeze selector args used by cached selectors/runs                                                      |
-| `freezeRows`        | `false`        | Deep-freeze rows after write normalization                                                                   |
-| `traits`            | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                        |
-| `tracer`            | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
-| `dbName`            | none           | A name used by tracing/devtools to label this database                                                       |
+| `freezeArgs`            | `false`        | Deep-freeze selector args used by cached selectors/runs                                                      |
+| `freezeRows`            | `false`        | Deep-freeze rows after write normalization                                                                   |
+| `register`              | `true`         | Automatically register the DB with the runtime registry for tracing/devtools discovery                       |
+| `traits`                | `[]`           | Initial [metadata traits](#traits) attached to the DB                                                        |
+| `tracer`                | global default | Per-DB tracer: an instance, `"default"`, or `"disabled"` (see [Devtools & Tracing](/integrations/devtools/)) |
+| `dbName`                | none           | A name used by tracing/devtools to label this database                                                       |
 
 `runtimeRowsValidation` is useful in development because it catches schema
 mismatches at the boundary instead of letting bad data into storage.

@@ -1,8 +1,9 @@
-
 <!-- intent-skills:start -->
+
 ## Skill Loading
 
 Before substantial work:
+
 - Skill check: run `pnpm dlx @tanstack/intent@latest list`, or use skills already listed in context.
 - Skill guidance: if one local skill clearly matches the task, run `pnpm dlx @tanstack/intent@latest load <package>#<skill>` and follow the returned `SKILL.md`.
 - Monorepos: when working across packages, run the skill check from the workspace root and prefer the local skill for the package being changed.
@@ -10,5 +11,4 @@ Before substantial work:
 <!-- intent-skills:end -->
 
 When you do any changes to packages/hyperdb or packages/hyperdb-devtool,
-make sure that you covered it at packages/hyperdb-doc. 
-
+make sure that you covered it at packages/hyperdb-doc and root README.md.

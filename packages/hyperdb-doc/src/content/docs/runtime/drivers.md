@@ -16,7 +16,7 @@ whether to use the sync or async runtime helpers, which depends on the driver.
 | ------------------- | ---------------------- | ----- | ----------- | ------------------------------------------------------------- |
 | `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, ephemeral state, the fast in-memory tier               |
 | `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js) |
-| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Asynchronous SQLite (e.g. wa-sqlite)                          |
+| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Asynchronous SQLite (e.g. wa-sqlite memory or OPFS)           |
 | `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence via IndexedDB                             |
 
 Sync drivers work with `execSync` / `syncDispatch` / `select`. Async drivers
@@ -178,7 +178,7 @@ const module = await SQLiteAsyncESMFactory({
 });
 const sqlite3 = SQLite.Factory(module) as WaSQLiteDB;
 
-const vfs = await MemoryAsyncVFS.create("my-app-db", module);
+const vfs = new MemoryAsyncVFS();
 sqlite3.vfs_register(vfs, true);
 
 const dbHandle = await sqlite3.open_v2("main.sqlite");
@@ -218,6 +218,22 @@ await execAsync(db.loadTables([tasksTable]));
 
 `AsyncSqlDriver` is asynchronous, so use it with `execAsync`,
 `asyncDispatch`, and `selectAsync`.
+
+For persistent browser SQLite, swap the memory VFS for WA-SQLite's OPFS VFS:
+
+```ts
+import { OriginPrivateFileSystemVFS } from "wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js";
+
+const vfs = new OriginPrivateFileSystemVFS();
+sqlite3.vfs_register(vfs, true);
+
+const dbHandle = await sqlite3.open_v2("main.sqlite");
+```
+
+`OriginPrivateFileSystemVFS` uses OPFS access handles, so run this setup in a
+module Worker and expose an `AsyncSQLiteDB`-shaped RPC (`exec` and
+`prepare().values()`) to the main thread. The HyperDB demo uses that pattern for
+its direct and in-memory-fronted WA-SQLite OPFS driver options.
 
 ### Backend: native SQLite
 

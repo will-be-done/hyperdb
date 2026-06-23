@@ -3,6 +3,7 @@ dist/
 .astro/
 playwright-report/
 test-results/
+pnpm-lock.yaml
 
 packages/hyperdb/dist/
 packages/hyperdb-doc/dist/

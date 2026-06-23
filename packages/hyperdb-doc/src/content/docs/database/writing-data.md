@@ -133,4 +133,4 @@ drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` 
 ## Bulk writes
 
 `insert`, `upsert`, and `deleteRows` all take arrays, so batch your writes
-into a single command rather than looping. 
+into a single command rather than looping.

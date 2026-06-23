@@ -15,7 +15,8 @@
     "@will-be-done/hyperdb-devtool": "workspace:*",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "tailwindcss": "^4.3.1"
+    "tailwindcss": "^4.3.1",
+    "wa-sqlite": "^1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -6,12 +6,18 @@ import React, {
   useState,
 } from "react";
 import { css, setup, styled } from "goober";
-import { DBProvider, useSyncSelector } from "@will-be-done/hyperdb/react";
+import {
+  DBProvider,
+  useOptionalDB,
+  useSyncSelector,
+} from "@will-be-done/hyperdb/react";
 import type { SubscribableDB } from "@will-be-done/hyperdb";
 import {
+  getRegisteredHyperDBs,
   getTraceDBInfo,
   hyperDBTraceStore,
   safeSerialize,
+  subscribeToRegisteredHyperDBs,
   unassignedTraceDBKey,
   type MutationEvent,
   type MutationEventKind,
@@ -57,6 +63,10 @@ export type HyperDBDevtoolsPanelProps = {
   onClose?: () => void;
 };
 
+type DevtoolsPanelInnerProps = HyperDBDevtoolsPanelProps & {
+  discoverRegisteredDBs?: boolean;
+};
+
 const storageKey = "hyperdb-devtools-open";
 const unassignedDBId = unassignedTraceDBKey;
 const mutationEventBatchSize = 30;
@@ -92,7 +102,7 @@ const writeStoredOpenState = (isOpen: boolean): void => {
 };
 
 const listWidthKey = "hyperdb-devtools-list-width";
-const defaultListWidth = 290;
+const defaultListWidth = 400;
 const minListWidth = 400;
 const maxListWidth = 700;
 
@@ -278,6 +288,39 @@ const getTraceDBOptions = (traces: TraceSummary[]): TraceDBOption[] => {
   }
 
   return [...optionMap.values()];
+};
+
+const getRegisteredDBOptions = (): TraceDBOption[] =>
+  getRegisteredHyperDBs().map((db) => ({
+    id: db.id,
+    label: db.label,
+    traceCount: 0,
+  }));
+
+const useRegisteredDBOptions = (enabled: boolean): TraceDBOption[] => {
+  const [options, setOptions] = useState<TraceDBOption[]>(() =>
+    enabled ? getRegisteredDBOptions() : [],
+  );
+
+  useEffect(() => {
+    if (!enabled) {
+      setOptions([]);
+      return;
+    }
+
+    setOptions(getRegisteredDBOptions());
+    return subscribeToRegisteredHyperDBs((dbs) => {
+      setOptions(
+        dbs.map((db) => ({
+          id: db.id,
+          label: db.label,
+          traceCount: 0,
+        })),
+      );
+    });
+  }, [enabled]);
+
+  return options;
 };
 
 const addCurrentDBOption = (
@@ -2634,12 +2677,13 @@ TraceDetails.displayName = "TraceDetails";
 
 const DevtoolsPanelInner = ({
   db,
+  discoverRegisteredDBs = false,
   maxTraces = 200,
   theme = "system",
   position = "bottom",
   embedded = false,
   onClose,
-}: HyperDBDevtoolsPanelProps) => {
+}: DevtoolsPanelInnerProps) => {
   const [listWidth, setListWidth] = useState(readStoredListWidth);
   const [panelHeight, setPanelHeight] = useState(readStoredPanelHeight);
   const [skipCached, setSkipCached] = useState(readStoredSkipCached);
@@ -2767,8 +2811,13 @@ const DevtoolsPanelInner = ({
     () => addCurrentDBOption(getTraceDBOptions(traces), currentDBInfo),
     [currentDBInfo, traces],
   );
+  const registeredDBOptions = useRegisteredDBOptions(discoverRegisteredDBs);
+  const latestKnownDBOptions = useMemo(
+    () => mergeDBOptions(registeredDBOptions, observedDBOptions),
+    [observedDBOptions, registeredDBOptions],
+  );
   const [knownDBOptions, setKnownDBOptions] =
-    useState<TraceDBOption[]>(observedDBOptions);
+    useState<TraceDBOption[]>(latestKnownDBOptions);
   const dbOptions = useMemo(
     () => mergeDBOptions(knownDBOptions, observedDBOptions),
     [knownDBOptions, observedDBOptions],
@@ -2806,13 +2855,13 @@ const DevtoolsPanelInner = ({
 
   useEffect(() => {
     setKnownDBOptions((currentOptions) => {
-      const nextOptions = mergeDBOptions(currentOptions, observedDBOptions);
+      const nextOptions = mergeDBOptions(currentOptions, latestKnownDBOptions);
 
       return areDBOptionsEqual(currentOptions, nextOptions)
         ? currentOptions
         : nextOptions;
     });
-  }, [observedDBOptions]);
+  }, [latestKnownDBOptions]);
 
   useEffect(() => {
     if (!hasMultipleDBs) return;
@@ -3040,25 +3089,20 @@ const DevtoolsTraceDBProvider = ({
   return <DBProvider value={hyperDBTraceStore.getDB()}>{children}</DBProvider>;
 };
 
-const ContextPanel = (props: Omit<HyperDBDevtoolsPanelProps, "db">) => {
-  return <DevtoolsPanelInner {...props} />;
-};
+export const HyperDBDevtoolsPanel = (props: HyperDBDevtoolsPanelProps) => {
+  const contextDB = useOptionalDB();
+  const activeDB = props.db ?? contextDB ?? undefined;
 
-export const HyperDBDevtoolsPanel = (props: HyperDBDevtoolsPanelProps) => (
-  <DevtoolsTraceDBProvider>
-    {props.db ? (
-      <DevtoolsPanelInner {...props} />
-    ) : (
-      <ContextPanel
-        maxTraces={props.maxTraces}
-        theme={props.theme}
-        position={props.position}
-        embedded={props.embedded}
-        onClose={props.onClose}
+  return (
+    <DevtoolsTraceDBProvider>
+      <DevtoolsPanelInner
+        {...props}
+        db={activeDB}
+        discoverRegisteredDBs={props.db === undefined}
       />
-    )}
-  </DevtoolsTraceDBProvider>
-);
+    </DevtoolsTraceDBProvider>
+  );
+};
 
 export const HyperDBDevtools = ({
   db,

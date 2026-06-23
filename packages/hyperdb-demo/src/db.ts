@@ -11,8 +11,18 @@ import {
 import { createWorkloadRows, type DashboardSnapshot } from "./workload";
 import type { ExtractSchema } from "@will-be-done/hyperdb";
 
-const action = createAction();
-const selector = createSelector();
+const action = createAction({
+  trace: {
+    enabled: true,
+    startOn: "load",
+  },
+});
+const selector = createSelector({
+  trace: {
+    enabled: true,
+    startOn: "load",
+  },
+});
 
 export const projectsTable = defineTable("projects", {
   id: v.string(),
@@ -21,7 +31,8 @@ export const projectsTable = defineTable("projects", {
   createdAt: v.number(),
 })
   .index("byCreatedAt", ["createdAt"])
-  .index("byName", ["name"]);
+  .index("byName", ["name"])
+  .index("byIds", ["id"]); // btree over id → enables a full-table scan for hydration
 export type Project = ExtractSchema<typeof projectsTable>;
 
 export const tasksTable = defineTable("tasks", {
@@ -36,7 +47,8 @@ export const tasksTable = defineTable("tasks", {
 })
   .index("byCreatedAt", ["createdAt"])
   .index("byProjectPosition", ["projectId", "position"])
-  .index("byStatus", ["status"]);
+  .index("byStatus", ["status"])
+  .index("byIds", ["id"]); // btree over id → enables a full-table scan for hydration
 export type Task = ExtractSchema<typeof tasksTable>;
 export type TaskStatus = Task["status"];
 
@@ -127,6 +139,20 @@ export const EMPTY_TASK_STATS: TaskStats = {
   todo: 0,
   doing: 0,
   done: 0,
+};
+
+export const EMPTY_DASHBOARD_SNAPSHOT: DashboardSnapshot = {
+  projects: [],
+  selectedProject: null,
+  selectedTasks: [],
+  selectedTaskCount: 0,
+  projectTaskCountsById: {},
+  projectNamesById: {},
+  totalProjects: 0,
+  totalTasks: 0,
+  todoTasks: 0,
+  doingTasks: 0,
+  doneTasks: 0,
 };
 
 export const getDashboardSnapshot = selector({
