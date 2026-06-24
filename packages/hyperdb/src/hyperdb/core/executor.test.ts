@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { noop, unwrap, type DBCmd } from "../commands/async";
-import { execAsync, execSync } from "./executor";
+import { execAsync, execMaybeAsync, execSync } from "./executor";
 
 function* unexpectedCommand(): Generator<DBCmd, void> {
   yield { type: "unexpected" } as unknown as DBCmd;
@@ -63,5 +63,32 @@ describe("executor", () => {
     }
 
     await expect(execAsync(command())).resolves.toBe("done");
+  });
+
+  it("returns synchronously from execMaybeAsync when no async command is yielded", () => {
+    function* command(): Generator<DBCmd, string> {
+      yield* noop();
+      return "done";
+    }
+
+    expect(execMaybeAsync(command())).toBe("done");
+  });
+
+  it("continues execMaybeAsync asynchronously from the first async command", async () => {
+    const steps: string[] = [];
+
+    function* command(): Generator<DBCmd, string, string> {
+      steps.push("start");
+      const value = yield* unwrap(Promise.resolve("async"));
+      steps.push(value);
+      return "done";
+    }
+
+    const result = execMaybeAsync(command());
+
+    expect(result).toBeInstanceOf(Promise);
+    expect(steps).toEqual(["start"]);
+    await expect(result).resolves.toBe("done");
+    expect(steps).toEqual(["start", "async"]);
   });
 });

@@ -80,6 +80,10 @@ For asynchronous drivers (IndexedDB, async SQLite). Same shape, but the result
 arrives asynchronously, so it returns `defaultValue` (or `undefined`) until the
 first run resolves, and re-runs on relevant changes.
 
+Each run starts synchronously. If the selector completes from memory or cache,
+the result is applied in the same tick; if a command yields a promise, that run
+continues asynchronously.
+
 ```tsx
 const tasks = useAsyncSelector({
   selector: projectTasks,

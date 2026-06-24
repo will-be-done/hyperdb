@@ -9,6 +9,7 @@ import {
 import {
   initCachedSelector,
   runSelectorAsync,
+  runSelectorMaybeAsync,
   select,
   type AnyObjectSelector,
   type SelectorArgs,
@@ -60,6 +61,11 @@ const createDisabledStore = <TReturn>(defaultValue: TReturn) => ({
   getSnapshot: () => defaultValue,
 });
 
+const isPromiseLike = <T>(value: T | PromiseLike<T>): value is PromiseLike<T> =>
+  value !== null &&
+  (typeof value === "object" || typeof value === "function") &&
+  typeof (value as { then?: unknown }).then === "function";
+
 const defaultHookDeps = {
   useCallback,
   useEffect,
@@ -70,6 +76,7 @@ const defaultHookDeps = {
   useDB,
   initCachedSelector,
   runSelectorAsync,
+  runSelectorMaybeAsync,
   select,
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
@@ -170,37 +177,65 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
     let isRunning = false;
     let rerunRequested = false;
 
-    const run = async () => {
+    const run = () => {
       if (isRunning) {
         rerunRequested = true;
         return;
       }
 
       isRunning = true;
+
       try {
         do {
           rerunRequested = false;
           const cmds: SelectRangeCmd[] = [];
-          // TODO: we can detetect if CachedDB has already cached value in range,
-          // and don't spawn async/await promise that may dramatically improve performance
-          const value = await hookDeps.runSelectorAsync(
+          const value = hookDeps.runSelectorMaybeAsync(
             db,
             genRef.current,
             cmds,
           );
-          if (cancelled) return;
+
+          if (isPromiseLike(value)) {
+            void Promise.resolve(value)
+              .then((resolvedValue) => {
+                if (cancelled || rerunRequested) {
+                  return;
+                }
+
+                selectRangeCmdsRef.current = cmds;
+                setResult(resolvedValue);
+              })
+              .catch((error: unknown) => {
+                void Promise.reject(error);
+              })
+              .finally(() => {
+                isRunning = false;
+                if (rerunRequested && !cancelled) {
+                  run();
+                }
+              });
+            return;
+          }
+
+          if (cancelled) {
+            isRunning = false;
+            return;
+          }
 
           if (rerunRequested) continue;
 
           selectRangeCmdsRef.current = cmds;
           setResult(value);
         } while (rerunRequested);
-      } finally {
+
         isRunning = false;
+      } catch (error) {
+        isRunning = false;
+        void Promise.reject(error);
       }
     };
 
-    void run();
+    run();
 
     const unsubscribe = db.subscribe((ops) => {
       if (isRunning) {
@@ -216,7 +251,7 @@ export function useAsyncSelector<TSelector extends AnyObjectSelector>(
         return;
       }
 
-      void run();
+      run();
     });
 
     return () => {

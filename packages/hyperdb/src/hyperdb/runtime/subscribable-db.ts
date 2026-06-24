@@ -175,12 +175,10 @@ export class SubscribableDBTx implements HyperDBTx {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
 
-    return yield* this.txDb.intervalScan(
-      table,
-      indexName,
-      clauses,
-      selectOptions,
-    );
+    const txDb =
+      this.traits.length > 0 ? this.txDb.withTraits(...this.traits) : this.txDb;
+
+    return yield* txDb.intervalScan(table, indexName, clauses, selectOptions);
   }
 
   *insert<TTable extends TableDefinition<any>>(
@@ -497,12 +495,18 @@ export class SubscribableDB implements HyperDB {
     return this.state.revision.val;
   }
 
+  private delegateDB(): HyperDB {
+    return this.traits.length > 0
+      ? this.db.withTraits(...this.traits)
+      : this.db;
+  }
+
   loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
     return this.db.loadTables(tables);
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
-    return new SubscribableDBTx(this, yield* this.db.beginTx());
+    return new SubscribableDBTx(this, yield* this.delegateDB().beginTx());
   }
 
   withTraits(...traits: Trait[]): HyperDB {
@@ -585,7 +589,7 @@ export class SubscribableDB implements HyperDB {
       return [];
     }
 
-    return yield* this.db.intervalScan(
+    return yield* this.delegateDB().intervalScan(
       table,
       indexName,
       clauses,

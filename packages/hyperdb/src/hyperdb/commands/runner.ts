@@ -20,6 +20,7 @@ import type { Op } from "../runtime/ops";
 import {
   anonymousTraceMeta,
   getTracerForDB,
+  withCurrentSelectEventTrait,
   withTraceContextTrait,
   type HyperDBTracer,
   type TraceContext,
@@ -251,7 +252,10 @@ export function* runCommandGenerator<TReturn>(
             : undefined;
 
         try {
-          const rows = yield* scopedDB.intervalScan(
+          const selectDB = selectEvent
+            ? withCurrentSelectEventTrait(scopedDB, selectEvent)
+            : scopedDB;
+          const rows = yield* selectDB.intervalScan(
             table,
             index,
             selectQuery.where,

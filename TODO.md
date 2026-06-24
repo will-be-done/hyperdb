@@ -10,6 +10,7 @@ Devtool:
 
 1. resetcss
 1. fix tabl selection (like call tree) not persisted to local storage
+1. for hybrid db - mark whic data was loaded from cahce and which from persistent storage
 
 Doc:
 
