@@ -12,10 +12,7 @@ import {
   type Value,
   type WhereClause,
 } from "../core/primitives";
-import type {
-  SelectCommandEvent,
-  SelectScanSource,
-} from "../core/tracer";
+import type { SelectCommandEvent, SelectScanSource } from "../core/tracer";
 import type {
   ExtractIndexes,
   ExtractSchema,
@@ -179,10 +176,7 @@ export const mergeIntervals = (
   return merged;
 };
 
-export const hasOverlap = (
-  a: NormalizedInterval,
-  b: NormalizedInterval,
-) => {
+export const hasOverlap = (a: NormalizedInterval, b: NormalizedInterval) => {
   const leftCmp = compareTuple(a.upper, b.lower);
   if (
     leftCmp < 0 ||

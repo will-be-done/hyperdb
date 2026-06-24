@@ -1,6 +1,10 @@
 import type { DBCmd } from "../commands/async";
 import type { HyperDB, HyperDBTx } from "../core/contracts";
-import { type SelectOptions, type Trait, type WhereClause } from "../core/primitives";
+import {
+  type SelectOptions,
+  type Trait,
+  type WhereClause,
+} from "../core/primitives";
 import {
   getCurrentSelectEventForDB,
   type HyperDBTracerOption,

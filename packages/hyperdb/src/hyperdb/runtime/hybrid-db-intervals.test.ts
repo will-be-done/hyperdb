@@ -116,9 +116,9 @@ describe("HybridDB interval helpers", () => {
     expect(() => intervalFromClauses(intervalTable, "byValue", [])).toThrow(
       "scan clauses must be provided",
     );
-    expect(() =>
-      intervalFromClauses(intervalTable, "missing", [{}]),
-    ).toThrow("Index not found: missing for table: hybridIntervalTasks");
+    expect(() => intervalFromClauses(intervalTable, "missing", [{}])).toThrow(
+      "Index not found: missing for table: hybridIntervalTasks",
+    );
 
     expect(
       intervalFromClauses(intervalTable, "byValue", [
@@ -185,8 +185,9 @@ describe("HybridDB interval helpers", () => {
       i([7], [10], false, true),
     ]);
 
-    expect(subtractIntervals([i([1], [2]), i([2], [3])], [i([1], [3])]))
-      .toEqual([]);
+    expect(
+      subtractIntervals([i([1], [2]), i([2], [3])], [i([1], [3])]),
+    ).toEqual([]);
   });
 
   it("derives cached coverage from ascending limited rows across disjoint intervals", () => {
@@ -200,8 +201,9 @@ describe("HybridDB interval helpers", () => {
     expect(
       intervalsForLimitedRows(queryIntervals, rows, ["value"], "asc"),
     ).toEqual([i([1], [2]), i([5], [6])]);
-    expect(intervalsForLimitedRows(queryIntervals, [], ["value"], "asc"))
-      .toEqual([]);
+    expect(
+      intervalsForLimitedRows(queryIntervals, [], ["value"], "asc"),
+    ).toEqual([]);
   });
 
   it("derives cached coverage from descending limited rows across disjoint intervals", () => {

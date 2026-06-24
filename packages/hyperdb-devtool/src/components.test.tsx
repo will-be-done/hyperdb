@@ -234,14 +234,18 @@ describe("HyperDBDevtools", () => {
       getDetailTab("Call Tree").click();
     });
 
-    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe("true");
+    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe(
+      "true",
+    );
     expect(host.textContent).toContain("@newerTraceChild");
 
     await act(async () => {
       getButtonContaining("olderTrace").click();
     });
 
-    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe("true");
+    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe(
+      "true",
+    );
     expect(host.textContent).toContain("@olderTraceChild");
 
     await act(async () => {
