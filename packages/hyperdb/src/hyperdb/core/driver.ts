@@ -3,6 +3,8 @@ import type { DBCmd } from "../commands/async";
 import type { TableDefinition } from "../schema/table";
 import type { Row, SelectOptions, WhereClause } from "./primitives";
 
+export type DBTransactionMode = "readonly" | "readwrite";
+
 export type BaseDBDriverOperations = {
   intervalScan(
     table: string,
@@ -17,26 +19,11 @@ export type BaseDBDriverOperations = {
 
 export interface DBDriver extends BaseDBDriverOperations {
   loadTables(table: TableDefinition<any, any>[]): Generator<DBCmd>;
-  beginTx(): Generator<DBCmd, DBDriverTX>;
+  beginTx(mode?: DBTransactionMode): Generator<DBCmd, DBDriverTX>;
+  canUseReadonlyTransactionsForSelectors?(): boolean;
 }
 
 export interface DBDriverTX extends BaseDBDriverOperations {
   commit(): Generator<DBCmd>;
   rollback(): Generator<DBCmd>;
-}
-
-export type DBReadonlyTransactionScope = unknown;
-
-export interface DBReadonlyTransactionScopeDriver {
-  createReadonlyTransactionScope(): DBReadonlyTransactionScope;
-  closeReadonlyTransactionScope(
-    scope: DBReadonlyTransactionScope,
-  ): Generator<DBCmd, void>;
-  intervalScanWithReadonlyTransactionScope(
-    scope: DBReadonlyTransactionScope,
-    table: string,
-    indexName: string,
-    clauses: WhereClause[],
-    selectOptions: SelectOptions,
-  ): Generator<DBCmd, unknown[]>;
 }

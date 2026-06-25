@@ -1,4 +1,5 @@
 import type { DBCmd } from "../commands/async";
+import type { DBTransactionMode } from "./driver";
 import type { CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
@@ -36,11 +37,12 @@ export interface HyperDB {
   getDBName?(): string | undefined;
   getTracer?(): HyperDBTracerOption | undefined;
   getOptions?(): CodecOptions;
-  createReadonlyTransactionScope?(): unknown;
-  withReadonlyTransactionScope?(scope: unknown): HyperDB;
-  closeReadonlyTransactionScope?(scope: unknown): Generator<DBCmd, void>;
+  beginReadonlyTransactionForSelectors?(): Generator<
+    DBCmd,
+    HyperDBTx | undefined
+  >;
 
-  beginTx(): Generator<DBCmd, HyperDBTx>;
+  beginTx(mode?: DBTransactionMode): Generator<DBCmd, HyperDBTx>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
 }

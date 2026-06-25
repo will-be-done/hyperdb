@@ -10,6 +10,7 @@ import {
   getCurrentSelectEventForDB,
   type HyperDBTracerOption,
 } from "../core/tracer";
+import type { DBTransactionMode } from "../core/driver";
 import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
@@ -30,17 +31,18 @@ type HybridDBState = {
   lock: AwaitLock;
 };
 
-type HybridReadonlyTransactionScope = {
-  primaryScope?: unknown;
-  primaryDB?: HyperDB;
-};
-
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
   committed: RefVar<boolean>;
   rollbacked: RefVar<boolean>;
   txCounter: RefVar<number>;
   releaseLock: () => void;
+};
+
+type HybridReadonlyTxState = {
+  primaryTx?: HyperDBTx;
+  rollbacked: RefVar<boolean>;
+  txCounter: RefVar<number>;
 };
 
 const createHybridDBState = (): HybridDBState => ({
@@ -54,6 +56,11 @@ const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
   rollbacked: refVar(false),
   txCounter: refVar(1),
   releaseLock,
+});
+
+const createHybridReadonlyTxState = (): HybridReadonlyTxState => ({
+  rollbacked: refVar(false),
+  txCounter: refVar(1),
 });
 
 export type HybridDBOptions = {
@@ -91,8 +98,7 @@ export class HybridDB implements HyperDB {
   primary: HyperDB;
   cache: HyperDB;
   traits: Trait[] = [];
-  private state: HybridDBState;
-  private readonlyTransactionScope?: HybridReadonlyTransactionScope;
+  state: HybridDBState;
 
   constructor(primary: HyperDB, cache: HyperDB, options: HybridDBOptions = {}) {
     this.primary = primary;
@@ -106,33 +112,11 @@ export class HybridDB implements HyperDB {
       traits: [...this.traits, ...traits],
     });
     db.state = this.state;
-    db.readonlyTransactionScope = this.readonlyTransactionScope;
     return db;
   }
 
-  createReadonlyTransactionScope(): unknown {
-    return {};
-  }
-
-  withReadonlyTransactionScope(scope: unknown): HyperDB {
-    const db = new HybridDB(this.primary, this.cache, {
-      traits: this.traits,
-    });
-    db.state = this.state;
-    db.readonlyTransactionScope = scope as HybridReadonlyTransactionScope;
-    return db;
-  }
-
-  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
-    const hybridScope = scope as HybridReadonlyTransactionScope;
-    if (
-      hybridScope.primaryScope !== undefined &&
-      this.primary.closeReadonlyTransactionScope
-    ) {
-      yield* this.primary.closeReadonlyTransactionScope(
-        hybridScope.primaryScope,
-      );
-    }
+  *beginReadonlyTransactionForSelectors(): Generator<DBCmd, HyperDBTx> {
+    return new HybridDBReadonlyTx(this);
   }
 
   getTraits(): Trait[] {
@@ -164,12 +148,18 @@ export class HybridDB implements HyperDB {
     });
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(
+    mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
+    if (mode === "readonly") {
+      return yield* this.beginReadonlyTransactionForSelectors();
+    }
+
     const release = yield* acquireHybridLock(this.state);
     let primaryTx: HyperDBTx | undefined;
     try {
-      primaryTx = yield* this.primary.beginTx();
-      const cacheTx = yield* this.cache.beginTx();
+      primaryTx = yield* this.primary.beginTx("readwrite");
+      const cacheTx = yield* this.cache.beginTx("readwrite");
       return new HybridDBTx(this, primaryTx, cacheTx, release);
     } catch (error) {
       if (primaryTx) {
@@ -195,23 +185,9 @@ export class HybridDB implements HyperDB {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
-    const readonlyScope = this.readonlyTransactionScope;
-    const getPrimary = () => {
-      if (!readonlyScope) return primary;
-      if (readonlyScope.primaryDB) return readonlyScope.primaryDB;
-
-      const primaryScope = primary.createReadonlyTransactionScope?.();
-      readonlyScope.primaryScope = primaryScope;
-      readonlyScope.primaryDB =
-        primaryScope !== undefined && primary.withReadonlyTransactionScope
-          ? primary.withReadonlyTransactionScope(primaryScope)
-          : primary;
-      return readonlyScope.primaryDB;
-    };
-
     return yield* withHybridLock(this.state, function* () {
       return yield* hybridIntervalScan(
-        getPrimary,
+        primary,
         cache,
         state.cachedIntervals,
         selectEvent,
@@ -258,6 +234,143 @@ export class HybridDB implements HyperDB {
 
   mergeTxCoverage(intervals: HybridIntervalCache): void {
     mergeCoverageMaps(this.state.cachedIntervals, intervals);
+  }
+}
+
+class HybridDBReadonlyTx implements HyperDBTx {
+  private hybridDB: HybridDB;
+  private state: HybridReadonlyTxState;
+  private traits: Trait[];
+
+  constructor(
+    hybridDB: HybridDB,
+    state: HybridReadonlyTxState = createHybridReadonlyTxState(),
+    traits: Trait[] = [],
+  ) {
+    this.hybridDB = hybridDB;
+    this.state = state;
+    this.traits = traits;
+  }
+
+  withTraits(...traits: Trait[]): HyperDBTx {
+    return new HybridDBReadonlyTx(this.hybridDB, this.state, [
+      ...this.traits,
+      ...traits,
+    ]);
+  }
+
+  getTraits(): Trait[] {
+    return [...this.traits, ...this.hybridDB.getTraits()];
+  }
+
+  getId(): string {
+    return this.hybridDB.getId();
+  }
+
+  getDBName(): string | undefined {
+    return this.hybridDB.getDBName?.();
+  }
+
+  getTracer(): HyperDBTracerOption | undefined {
+    return this.hybridDB.getTracer?.();
+  }
+
+  getOptions(): CodecOptions {
+    return this.hybridDB.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
+  }
+
+  *loadTables(): Generator<DBCmd, void> {
+    throw new Error("Not supported");
+  }
+
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
+    this.throwIfDone();
+    this.state.txCounter.val++;
+    return this;
+  }
+
+  *intervalScan<
+    TTable extends TableDefinition,
+    K extends keyof ExtractIndexes<TTable>,
+  >(
+    table: TTable,
+    indexName: K,
+    clauses: WhereClause[],
+    selectOptions?: SelectOptions,
+  ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfDone();
+    const { cache, state } = this.hybridDB;
+    const selectEvent = getCurrentSelectEventForDB(this);
+    const getPrimaryForRead = function* (
+      this: HybridDBReadonlyTx,
+    ): Generator<DBCmd, HyperDB> {
+      if (this.state.primaryTx) return this.state.primaryTx;
+
+      const { primary } = this.hybridDB;
+      const tx = primary.beginReadonlyTransactionForSelectors
+        ? yield* primary.beginReadonlyTransactionForSelectors()
+        : undefined;
+
+      this.state.primaryTx = tx;
+      return tx ?? primary;
+    }.bind(this);
+
+    return yield* withHybridLock(state, function* () {
+      return yield* hybridIntervalScan(
+        getPrimaryForRead,
+        cache,
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+      );
+    }.bind(this));
+  }
+
+  *insert<TTable extends TableDefinition>(
+    _table: TTable,
+    _records: ExtractSchema<TTable>[],
+  ): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *upsert<TTable extends TableDefinition>(
+    _table: TTable,
+    _records: ExtractSchema<TTable>[],
+  ): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *delete<TTable extends TableDefinition>(
+    _table: TTable,
+    _ids: string[],
+  ): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *commit(): Generator<DBCmd, void> {
+    yield* this.rollback();
+  }
+
+  *rollback(): Generator<DBCmd, void> {
+    this.throwIfDone();
+    this.state.txCounter.val--;
+    if (this.state.txCounter.val !== 0) return;
+
+    this.state.rollbacked.val = true;
+    if (this.state.primaryTx) {
+      yield* this.state.primaryTx.rollback();
+    }
+  }
+
+  private throwIfDone(): void {
+    if (this.state.rollbacked.val) {
+      throw new Error("Cannot modify a rollbacked tx");
+    }
   }
 }
 
@@ -318,7 +431,9 @@ class HybridDBTx implements HyperDBTx {
     throw new Error("Not supported");
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
     this.state.txCounter.val++;
     return this;

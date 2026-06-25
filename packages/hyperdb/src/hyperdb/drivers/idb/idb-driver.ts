@@ -2,7 +2,11 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { unwrapCb, type DBCmd } from "../../commands/async";
-import type { DBDriver, DBDriverTX } from "../../core/driver";
+import type {
+  DBDriver,
+  DBDriverTX,
+  DBTransactionMode,
+} from "../../core/driver";
 import {
   MAX,
   MIN,
@@ -37,14 +41,10 @@ type LockRelease = () => void;
 type ActiveReadonlyTransaction = {
   tx: IDBTransaction;
   release: LockRelease;
-  scope: IdbReadonlyTransactionScope;
+  done: Promise<void>;
+  startedAt: number;
   finished: boolean;
   released: boolean;
-};
-
-type IdbReadonlyTransactionScope = {
-  active?: ActiveReadonlyTransaction;
-  closed: boolean;
 };
 
 export type OpenIndexedDBDriverOptions = {
@@ -925,6 +925,190 @@ class IdbDriverTx implements DBDriverTX {
   }
 }
 
+class IdbDriverReadonlyTx implements DBDriverTX {
+  private active: ActiveReadonlyTransaction | undefined;
+  private tableDefinitions: Map<string, TableDefinition>;
+  private acquireRead: () => Promise<LockRelease>;
+  private createTransaction: () => IDBTransaction;
+  private throwIfClosed: () => void;
+  private onDispose: (tx: IdbDriverReadonlyTx) => void;
+  private closed = false;
+
+  constructor(
+    active: ActiveReadonlyTransaction,
+    tableDefinitions: Map<string, TableDefinition>,
+    acquireRead: () => Promise<LockRelease>,
+    createTransaction: () => IDBTransaction,
+    throwIfClosed: () => void,
+    onDispose: (tx: IdbDriverReadonlyTx) => void,
+  ) {
+    this.active = active;
+    this.tableDefinitions = tableDefinitions;
+    this.acquireRead = acquireRead;
+    this.createTransaction = createTransaction;
+    this.throwIfClosed = throwIfClosed;
+    this.onDispose = onDispose;
+    this.watchActive(active);
+  }
+
+  *commit(): Generator<DBCmd, void> {
+    yield* this.rollback();
+  }
+
+  *rollback(): Generator<DBCmd, void> {
+    this.dispose();
+  }
+
+  *insert(): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *upsert(): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *delete(): Generator<DBCmd, void> {
+    throw new Error("Cannot write through a readonly transaction");
+  }
+
+  *intervalScan(
+    table: string,
+    indexName: string,
+    clauses: WhereClause[],
+    selectOptions: SelectOptions,
+  ): Generator<DBCmd, unknown[]> {
+    return yield* unwrapCb(async () => {
+      let canRetryInactiveTransaction = true;
+
+      while (true) {
+        const active = await this.getActive();
+        try {
+          return await performScan(
+            active.tx,
+            this.tableDefinitions,
+            table,
+            indexName,
+            clauses,
+            selectOptions,
+          );
+        } catch (error) {
+          if (
+            canRetryInactiveTransaction &&
+            isInactiveTransactionError(error)
+          ) {
+            canRetryInactiveTransaction = false;
+            logIdbOperation("transaction reopen", nowMs(), {
+              mode: active.tx.mode,
+            });
+            this.finishActive(active, true);
+            continue;
+          }
+
+          this.finishActive(active, true);
+          throw error;
+        }
+      }
+    });
+  }
+
+  private async getActive(): Promise<ActiveReadonlyTransaction> {
+    if (this.closed) {
+      throw new Error("Transaction already finished");
+    }
+    if (this.active && !this.active.finished) {
+      return this.active;
+    }
+
+    const release = await this.acquireRead();
+    const startedAt = nowMs();
+    try {
+      this.throwIfClosed();
+      const tx = this.createTransaction();
+      const active: ActiveReadonlyTransaction = {
+        tx,
+        release,
+        done: txDone(tx),
+        startedAt,
+        finished: false,
+        released: false,
+      };
+      this.active = active;
+      logIdbOperation("transaction start", startedAt, {
+        mode: tx.mode,
+      });
+      this.watchActive(active);
+      return active;
+    } catch (error) {
+      release();
+      logIdbOperation(
+        "transaction start",
+        startedAt,
+        {
+          mode: "readonly",
+        },
+        error,
+      );
+      throw error;
+    }
+  }
+
+  private watchActive(active: ActiveReadonlyTransaction): void {
+    void active.done
+      .then(
+        () => {
+          if (!active.finished) {
+            logIdbOperation("transaction commit", active.startedAt, {
+              mode: active.tx.mode,
+            });
+          }
+        },
+        (error) => {
+          if (!active.finished) {
+            logIdbOperation(
+              "transaction rollback",
+              active.startedAt,
+              {
+                mode: active.tx.mode,
+              },
+              error,
+            );
+          }
+        },
+      )
+      .finally(() => {
+        this.finishActive(active, false);
+      });
+  }
+
+  dispose(): void {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.active) {
+      this.finishActive(this.active, true);
+    }
+    this.onDispose(this);
+  }
+
+  private finishActive(
+    active: ActiveReadonlyTransaction,
+    abort: boolean,
+  ): void {
+    if (active.finished) return;
+
+    active.finished = true;
+    if (this.active === active) {
+      this.active = undefined;
+    }
+    if (abort) {
+      abortQuietly(active.tx);
+    }
+    if (!active.released) {
+      active.released = true;
+      active.release();
+    }
+  }
+}
+
 export class IdbDriver implements DBDriver {
   private db: IDBDatabase;
   private readonly dbName: string;
@@ -932,7 +1116,7 @@ export class IdbDriver implements DBDriver {
   private readonly options: OpenIndexedDBDriverOptions;
   private tableDefinitions = new Map<string, TableDefinition>();
   private lock = new AsyncReadWriteLock();
-  private readonlyScopes = new Set<IdbReadonlyTransactionScope>();
+  private readonlyTransactions = new Set<IdbDriverReadonlyTx>();
   private closedReason: Error | null = null;
 
   constructor(
@@ -952,25 +1136,23 @@ export class IdbDriver implements DBDriver {
     if (!this.closedReason) {
       this.closedReason = reason;
     }
-    for (const scope of [...this.readonlyScopes]) {
-      this.disposeReadonlyTransactionScope(scope);
+    for (const tx of [...this.readonlyTransactions]) {
+      tx.dispose();
     }
     this.db.close();
   }
 
-  createReadonlyTransactionScope(): IdbReadonlyTransactionScope {
-    const scope: IdbReadonlyTransactionScope = { closed: false };
-    this.readonlyScopes.add(scope);
-    return scope;
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return true;
   }
 
-  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
-    this.disposeReadonlyTransactionScope(
-      this.assertReadonlyTransactionScope(scope),
-    );
-  }
+  *beginTx(
+    mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, DBDriverTX> {
+    if (mode === "readonly") {
+      return yield* this.beginReadonlyTx();
+    }
 
-  *beginTx(): Generator<DBCmd, DBDriverTX> {
     const release = yield* unwrapCb(async () => this.lock.acquireWrite());
 
     let tx: IDBTransaction;
@@ -985,6 +1167,49 @@ export class IdbDriver implements DBDriver {
       return new IdbDriverTx(tx, this.tableDefinitions, release, startedAt);
     } catch (error) {
       release();
+      throw error;
+    }
+  }
+
+  private *beginReadonlyTx(): Generator<DBCmd, DBDriverTX> {
+    const release = yield* unwrapCb(async () => this.lock.acquireRead());
+    const startedAt = nowMs();
+
+    try {
+      this.throwIfClosed();
+      const storeNames = this.loadedStoreNames();
+      const tx = this.createTransaction(storeNames, "readonly");
+      const active: ActiveReadonlyTransaction = {
+        tx,
+        release,
+        done: txDone(tx),
+        startedAt,
+        finished: false,
+        released: false,
+      };
+      logIdbOperation("transaction start", startedAt, {
+        mode: tx.mode,
+      });
+      const readonlyTx = new IdbDriverReadonlyTx(
+        active,
+        this.tableDefinitions,
+        () => this.lock.acquireRead(),
+        () => this.createTransaction(storeNames, "readonly"),
+        () => this.throwIfClosed(),
+        (finishedTx) => this.readonlyTransactions.delete(finishedTx),
+      );
+      this.readonlyTransactions.add(readonlyTx);
+      return readonlyTx;
+    } catch (error) {
+      release();
+      logIdbOperation(
+        "transaction start",
+        startedAt,
+        {
+          mode: "readonly",
+        },
+        error,
+      );
       throw error;
     }
   }
@@ -1054,42 +1279,12 @@ export class IdbDriver implements DBDriver {
     clauses: WhereClause[],
     selectOptions: SelectOptions,
   ): Generator<DBCmd, unknown[]> {
-    return yield* this.withTransaction(
-      "readonly",
-      [tableStoreName(table)],
-      async (tx) =>
-        performScan(
-          tx,
-          this.tableDefinitions,
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-        ),
-    );
-  }
-
-  *intervalScanWithReadonlyTransactionScope(
-    scope: unknown,
-    table: string,
-    indexName: string,
-    clauses: WhereClause[],
-    selectOptions: SelectOptions,
-  ): Generator<DBCmd, unknown[]> {
-    return yield* unwrapCb(async () =>
-      this.withReadonlyTransaction(
-        this.assertReadonlyTransactionScope(scope),
-        async (tx) =>
-          performScan(
-            tx,
-            this.tableDefinitions,
-            table,
-            indexName,
-            clauses,
-            selectOptions,
-          ),
-      ),
-    );
+    const tx = yield* this.beginTx("readonly");
+    try {
+      return yield* tx.intervalScan(table, indexName, clauses, selectOptions);
+    } finally {
+      yield* tx.rollback();
+    }
   }
 
   private async ensureSchema(
@@ -1244,15 +1439,6 @@ export class IdbDriver implements DBDriver {
     run: (tx: IDBTransaction) => Promise<T>,
   ): Generator<DBCmd, T> {
     return yield* unwrapCb(async () => {
-      if (mode === "readonly") {
-        const scope = this.createReadonlyTransactionScope();
-        try {
-          return await this.withReadonlyTransaction(scope, run);
-        } finally {
-          this.disposeReadonlyTransactionScope(scope);
-        }
-      }
-
       const release = await this.lock.acquireWrite();
       let tx: IDBTransaction | undefined;
       let done: Promise<void> | undefined;
@@ -1298,147 +1484,6 @@ export class IdbDriver implements DBDriver {
         release();
       }
     });
-  }
-
-  private async withReadonlyTransaction<T>(
-    scope: IdbReadonlyTransactionScope,
-    run: (tx: IDBTransaction) => Promise<T>,
-  ): Promise<T> {
-    let canRetryInactiveTransaction = true;
-
-    while (true) {
-      const active = await this.getReadonlyTransaction(scope);
-
-      try {
-        return await run(active.tx);
-      } catch (error) {
-        if (canRetryInactiveTransaction && isInactiveTransactionError(error)) {
-          canRetryInactiveTransaction = false;
-          logIdbOperation("transaction reopen", nowMs(), {
-            mode: active.tx.mode,
-          });
-          this.finishReadonlyTransaction(active, false);
-          continue;
-        }
-
-        this.finishReadonlyTransaction(active, true);
-        throw error;
-      }
-    }
-  }
-
-  private async getReadonlyTransaction(
-    scope: IdbReadonlyTransactionScope,
-  ): Promise<ActiveReadonlyTransaction> {
-    if (scope.active && !scope.active.finished) {
-      return scope.active;
-    }
-
-    const release = await this.lock.acquireRead();
-    const transactionStartedAt = nowMs();
-
-    try {
-      this.throwIfClosed();
-      if (scope.closed) {
-        throw new Error("Readonly transaction scope is closed");
-      }
-      const tx = this.createTransaction(this.loadedStoreNames(), "readonly");
-      const active: ActiveReadonlyTransaction = {
-        tx,
-        release,
-        scope,
-        finished: false,
-        released: false,
-      };
-
-      scope.active = active;
-      logIdbOperation("transaction start", transactionStartedAt, {
-        mode: tx.mode,
-      });
-      void txDone(tx)
-        .then(
-          () => {
-            if (!active.finished) {
-              logIdbOperation("transaction commit", transactionStartedAt, {
-                mode: tx.mode,
-              });
-            }
-          },
-          (error) => {
-            if (!active.finished) {
-              logIdbOperation(
-                "transaction rollback",
-                transactionStartedAt,
-                {
-                  mode: tx.mode,
-                },
-                error,
-              );
-            }
-          },
-        )
-        .finally(() => {
-          this.finishReadonlyTransaction(active, false);
-        });
-
-      return active;
-    } catch (error) {
-      logIdbOperation(
-        "transaction start",
-        transactionStartedAt,
-        {
-          mode: "readonly",
-        },
-        error,
-      );
-      release();
-      throw error;
-    }
-  }
-
-  private assertReadonlyTransactionScope(
-    scope: unknown,
-  ): IdbReadonlyTransactionScope {
-    if (
-      typeof scope !== "object" ||
-      scope === null ||
-      !this.readonlyScopes.has(scope as IdbReadonlyTransactionScope)
-    ) {
-      throw new Error("Invalid readonly transaction scope");
-    }
-
-    return scope as IdbReadonlyTransactionScope;
-  }
-
-  private disposeReadonlyTransactionScope(
-    scope: IdbReadonlyTransactionScope,
-  ): void {
-    if (scope.closed) return;
-    scope.closed = true;
-
-    if (scope.active) {
-      this.finishReadonlyTransaction(scope.active, true);
-    }
-    this.readonlyScopes.delete(scope);
-  }
-
-  private finishReadonlyTransaction(
-    active: ActiveReadonlyTransaction,
-    abort: boolean,
-  ): void {
-    if (active.finished) return;
-
-    active.finished = true;
-    if (active.scope.active === active) {
-      active.scope.active = undefined;
-    }
-    if (abort) {
-      abortQuietly(active.tx);
-    }
-    if (!active.released) {
-      active.released = true;
-      active.release();
-    }
   }
 
   private attachVersionChangeHandler(): void {

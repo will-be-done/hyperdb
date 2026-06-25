@@ -1,7 +1,7 @@
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
 import type { HyperDBTx } from "../core/contracts";
-import type { DBDriverTX } from "../core/driver";
+import type { DBDriverTX, DBTransactionMode } from "../core/driver";
 import type {
   Row,
   SelectOptions,
@@ -165,7 +165,7 @@ export class DBTx implements HyperDBTx {
     return this.options;
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(_mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
     if (this.isFinished.val) {
       throw new Error("Transaction is finished");
     }

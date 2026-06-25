@@ -9,6 +9,7 @@ import type {
 import { runCommandGenerator } from "../commands/runner";
 import type { DBCmd } from "../commands/async";
 import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
+import type { DBTransactionMode } from "../core/driver";
 // import { collectAll } from "../commands/async";
 import type {
   ExtractIndexes,
@@ -158,7 +159,7 @@ export class SubscribableDBTx implements HyperDBTx {
     ]);
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(_mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
     this.state.txCounter.val++;
 
     return this;
@@ -506,8 +507,8 @@ export class SubscribableDB implements HyperDB {
     return this.db.loadTables(tables);
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
-    return new SubscribableDBTx(this, yield* this.delegateDB().beginTx());
+  *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    return new SubscribableDBTx(this, yield* this.delegateDB().beginTx(mode));
   }
 
   withTraits(...traits: Trait[]): HyperDB {
@@ -517,23 +518,16 @@ export class SubscribableDB implements HyperDB {
     return db;
   }
 
-  createReadonlyTransactionScope(): unknown {
-    return this.delegateDB().createReadonlyTransactionScope?.();
-  }
-
-  withReadonlyTransactionScope(scope: unknown): HyperDB {
+  *beginReadonlyTransactionForSelectors(): Generator<
+    DBCmd,
+    HyperDBTx | undefined
+  > {
     const delegate = this.delegateDB();
-    return new SubscribableDB(
-      delegate.withReadonlyTransactionScope?.(scope) ?? delegate,
-      this.state,
-    );
-  }
+    const tx = delegate.beginReadonlyTransactionForSelectors
+      ? yield* delegate.beginReadonlyTransactionForSelectors()
+      : undefined;
 
-  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
-    const delegate = this.delegateDB();
-    if (delegate.closeReadonlyTransactionScope) {
-      yield* delegate.closeReadonlyTransactionScope(scope);
-    }
+    return tx ? new SubscribableDBTx(this, tx) : undefined;
   }
 
   getTraits(): Trait[] {

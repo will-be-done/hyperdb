@@ -38,8 +38,8 @@ state libraries start to strain:
   time. Cache fills, write-through mutations, and transactions are serialized
   per HybridDB instance so async selectors and actions do not overlap against
   the in-memory cache tier. With an IndexedDB primary, readonly transaction
-  reuse is scoped to a single selector run and starts only when the persistent
-  tier is actually read.
+  reuse is scoped to a single selector execution and starts only when the
+  persistent tier is actually read.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
