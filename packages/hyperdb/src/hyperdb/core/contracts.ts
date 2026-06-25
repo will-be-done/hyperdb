@@ -36,6 +36,9 @@ export interface HyperDB {
   getDBName?(): string | undefined;
   getTracer?(): HyperDBTracerOption | undefined;
   getOptions?(): CodecOptions;
+  createReadonlyTransactionScope?(): unknown;
+  withReadonlyTransactionScope?(scope: unknown): HyperDB;
+  closeReadonlyTransactionScope?(scope: unknown): Generator<DBCmd, void>;
 
   beginTx(): Generator<DBCmd, HyperDBTx>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

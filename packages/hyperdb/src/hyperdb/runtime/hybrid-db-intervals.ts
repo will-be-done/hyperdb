@@ -352,7 +352,7 @@ const setSelectSource = (
 };
 
 export function* hybridIntervalScan<TTable extends TableDefinition>(
-  primary: HyperDB,
+  primary: HyperDB | (() => HyperDB),
   cache: HyperDB,
   cachedIntervals: HybridIntervalCache,
   selectEvent: SelectCommandEvent | undefined,
@@ -394,7 +394,8 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
   }
 
   setSelectSource(selectEvent, "persist");
-  const primaryRows = yield* primary.intervalScan(
+  const primaryDB = typeof primary === "function" ? primary() : primary;
+  const primaryRows = yield* primaryDB.intervalScan(
     table,
     indexName,
     clauses,

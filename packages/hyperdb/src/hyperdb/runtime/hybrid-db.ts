@@ -30,6 +30,11 @@ type HybridDBState = {
   lock: AwaitLock;
 };
 
+type HybridReadonlyTransactionScope = {
+  primaryScope?: unknown;
+  primaryDB?: HyperDB;
+};
+
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
   committed: RefVar<boolean>;
@@ -87,6 +92,7 @@ export class HybridDB implements HyperDB {
   cache: HyperDB;
   traits: Trait[] = [];
   private state: HybridDBState;
+  private readonlyTransactionScope?: HybridReadonlyTransactionScope;
 
   constructor(primary: HyperDB, cache: HyperDB, options: HybridDBOptions = {}) {
     this.primary = primary;
@@ -100,7 +106,33 @@ export class HybridDB implements HyperDB {
       traits: [...this.traits, ...traits],
     });
     db.state = this.state;
+    db.readonlyTransactionScope = this.readonlyTransactionScope;
     return db;
+  }
+
+  createReadonlyTransactionScope(): unknown {
+    return {};
+  }
+
+  withReadonlyTransactionScope(scope: unknown): HyperDB {
+    const db = new HybridDB(this.primary, this.cache, {
+      traits: this.traits,
+    });
+    db.state = this.state;
+    db.readonlyTransactionScope = scope as HybridReadonlyTransactionScope;
+    return db;
+  }
+
+  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
+    const hybridScope = scope as HybridReadonlyTransactionScope;
+    if (
+      hybridScope.primaryScope !== undefined &&
+      this.primary.closeReadonlyTransactionScope
+    ) {
+      yield* this.primary.closeReadonlyTransactionScope(
+        hybridScope.primaryScope,
+      );
+    }
   }
 
   getTraits(): Trait[] {
@@ -124,14 +156,12 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.loadTables(tables);
-        yield* this.cache.loadTables(tables);
-        this.state.cachedIntervals.clear();
-      }.bind(this),
-    );
+    const { cache, primary, state } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.loadTables(tables);
+      yield* cache.loadTables(tables);
+      state.cachedIntervals.clear();
+    });
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
@@ -163,60 +193,67 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
-    return yield* withHybridLock(
-      this.state,
-      function* () {
-        return yield* hybridIntervalScan(
-          this.primary,
-          this.cache,
-          this.state.cachedIntervals,
-          getCurrentSelectEventForDB(this),
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-        );
-      }.bind(this),
-    );
+    const { cache, primary, state } = this;
+    const selectEvent = getCurrentSelectEventForDB(this);
+    const readonlyScope = this.readonlyTransactionScope;
+    const getPrimary = () => {
+      if (!readonlyScope) return primary;
+      if (readonlyScope.primaryDB) return readonlyScope.primaryDB;
+
+      const primaryScope = primary.createReadonlyTransactionScope?.();
+      readonlyScope.primaryScope = primaryScope;
+      readonlyScope.primaryDB =
+        primaryScope !== undefined && primary.withReadonlyTransactionScope
+          ? primary.withReadonlyTransactionScope(primaryScope)
+          : primary;
+      return readonlyScope.primaryDB;
+    };
+
+    return yield* withHybridLock(this.state, function* () {
+      return yield* hybridIntervalScan(
+        getPrimary,
+        cache,
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+      );
+    });
   }
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.insert(table, records);
-        yield* this.cache.insert(table, records);
-      }.bind(this),
-    );
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.insert(table, records);
+      yield* cache.insert(table, records);
+    });
   }
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.upsert(table, records);
-        yield* this.cache.upsert(table, records);
-      }.bind(this),
-    );
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.upsert(table, records);
+      yield* cache.upsert(table, records);
+    });
   }
 
   *delete<TTable extends TableDefinition>(
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.delete(table, ids);
-        yield* this.cache.delete(table, ids);
-      }.bind(this),
-    );
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.delete(table, ids);
+      yield* cache.delete(table, ids);
+    });
   }
 
   mergeTxCoverage(intervals: HybridIntervalCache): void {

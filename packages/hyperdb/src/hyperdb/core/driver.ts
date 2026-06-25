@@ -24,3 +24,19 @@ export interface DBDriverTX extends BaseDBDriverOperations {
   commit(): Generator<DBCmd>;
   rollback(): Generator<DBCmd>;
 }
+
+export type DBReadonlyTransactionScope = unknown;
+
+export interface DBReadonlyTransactionScopeDriver {
+  createReadonlyTransactionScope(): DBReadonlyTransactionScope;
+  closeReadonlyTransactionScope(
+    scope: DBReadonlyTransactionScope,
+  ): Generator<DBCmd, void>;
+  intervalScanWithReadonlyTransactionScope(
+    scope: DBReadonlyTransactionScope,
+    table: string,
+    indexName: string,
+    clauses: WhereClause[],
+    selectOptions: SelectOptions,
+  ): Generator<DBCmd, unknown[]>;
+}

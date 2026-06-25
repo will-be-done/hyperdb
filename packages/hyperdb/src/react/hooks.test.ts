@@ -16,7 +16,7 @@ const mocks = {
   cleanup: undefined as undefined | (() => void),
   db: undefined as unknown as MockDB,
   refs: [] as { current: unknown }[],
-  setResult: vi.fn(),
+  setState: vi.fn(),
   initCachedSelector: vi.fn(),
   runSelectorAsync: vi.fn(),
   runSelectorMaybeAsync: vi.fn(),
@@ -35,7 +35,10 @@ const fakeReactHooks = {
     mocks.refs.push(ref);
     return ref;
   }),
-  useState: vi.fn((initial) => [initial, mocks.setResult]),
+  useState: vi.fn((initial) => [
+    typeof initial === "function" ? initial() : initial,
+    mocks.setState,
+  ]),
   useSyncExternalStore: vi.fn((_subscribe, getSnapshot) => getSnapshot()),
 };
 
@@ -85,7 +88,7 @@ describe("useAsyncSelector", () => {
     mocks.cleanup = undefined;
     mocks.db = createMockDB();
     mocks.refs = [];
-    mocks.setResult.mockReset();
+    mocks.setState.mockReset();
     mocks.initCachedSelector.mockReset();
     mocks.runSelectorAsync.mockReset();
     mocks.runSelectorMaybeAsync.mockReset();
@@ -183,6 +186,7 @@ describe("useAsyncSelector", () => {
 
     expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
+    mocks.setState.mockClear();
 
     mocks.db.emit([{ id: "op-1" }]);
     mocks.db.emit([{ id: "op-2" }]);
@@ -193,15 +197,20 @@ describe("useAsyncSelector", () => {
     first.resolve("stale");
     await flushPromises();
 
-    expect(mocks.setResult).not.toHaveBeenCalled();
+    expect(mocks.setState).not.toHaveBeenCalled();
     expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
 
     second.resolve("latest");
     await flushPromises();
 
-    expect(mocks.setResult).toHaveBeenCalledTimes(1);
-    expect(mocks.setResult).toHaveBeenCalledWith("latest");
-    expect(mocks.refs[0].current).toEqual([secondCmd]);
+    expect(mocks.setState).toHaveBeenCalledTimes(1);
+    expect(mocks.setState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: "latest",
+        status: "success",
+      }),
+    );
+    expect(mocks.refs[2].current).toEqual([secondCmd]);
 
     const ignoredOps = [{ id: "ignored" }];
     mocks.isNeedToRerunRange.mockReturnValue(false);
@@ -233,8 +242,9 @@ describe("useAsyncSelector", () => {
       args: {},
     });
 
-    const selectRangeCmdsRef = mocks.refs[0];
+    const selectRangeCmdsRef = mocks.refs[2];
     expect(mocks.db.subscriberCount()).toBe(1);
+    mocks.setState.mockClear();
 
     mocks.cleanup?.();
 
@@ -243,7 +253,7 @@ describe("useAsyncSelector", () => {
     pending.resolve("late");
     await flushPromises();
 
-    expect(mocks.setResult).not.toHaveBeenCalled();
+    expect(mocks.setState).not.toHaveBeenCalled();
     expect(selectRangeCmdsRef.current).toEqual([]);
   });
 
@@ -259,7 +269,10 @@ describe("useAsyncSelector", () => {
       defaultValue: [],
     });
 
-    expect(result).toEqual([]);
+    expect(result.data).toEqual([]);
+    expect(result.status).toBe("pending");
+    expect(result.fetchStatus).toBe("idle");
+    expect(result.isEnabled).toBe(false);
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
     expect(mocks.runSelectorMaybeAsync).not.toHaveBeenCalled();
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
@@ -288,8 +301,13 @@ describe("useAsyncSelector", () => {
     expect(selector).toHaveBeenCalledWith({ projectId: "project-1" });
     expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.runSelectorAsync).not.toHaveBeenCalled();
-    expect(mocks.setResult).toHaveBeenCalledWith(["task-1"]);
-    expect(mocks.refs[0].current).toEqual([cmd]);
+    expect(mocks.setState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["task-1"],
+        status: "success",
+      }),
+    );
+    expect(mocks.refs[2].current).toEqual([cmd]);
   });
 
   it("runs object-form async selectors with args", async () => {
@@ -313,7 +331,12 @@ describe("useAsyncSelector", () => {
     expect(selector).toHaveBeenCalledWith({ projectId: "project-1" });
     expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
-    expect(mocks.setResult).toHaveBeenCalledWith(["task-1"]);
+    expect(mocks.setState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["task-1"],
+        status: "success",
+      }),
+    );
   });
 
   it("resets object-form async selector result when args key changes", () => {
@@ -337,8 +360,12 @@ describe("useAsyncSelector", () => {
       defaultValue: ["loading-2"],
     });
 
-    expect(mocks.setResult).toHaveBeenCalledWith(["loading-1"]);
-    expect(mocks.setResult).toHaveBeenCalledWith(["loading-2"]);
+    expect(mocks.setState).toHaveBeenCalledWith(
+      expect.objectContaining({ data: ["loading-1"] }),
+    );
+    expect(mocks.setState).toHaveBeenCalledWith(
+      expect.objectContaining({ data: ["loading-2"] }),
+    );
     expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
   });
 });

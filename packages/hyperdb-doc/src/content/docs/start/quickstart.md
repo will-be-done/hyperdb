@@ -183,6 +183,10 @@ export function App() {
 The list re-renders automatically whenever a `createTask` (or any mutation
 touching the queried range) commits.
 
+For async drivers, use `useAsyncSelector` instead. It keeps the same
+`selector`/`args` input and returns a React Query-style object with `data`,
+`status`, `error`, fetching flags, and `refetch()`.
+
 ## Where to next
 
 - [Schemas](/database/schemas/): tables, validators, tagged unions.

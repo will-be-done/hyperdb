@@ -266,7 +266,58 @@ describe("IdbDriver", () => {
     }
   });
 
-  it("reuses one active readonly transaction across selector scans", async () => {
+  it("does not share readonly transactions across concurrent selector runs", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+    await execAsync(
+      db.insert(tasksTable, [
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]),
+    );
+
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    const readonlyTransactions: IDBTransaction[] = [];
+    const txSpy = vi
+      .spyOn(IDBDatabase.prototype, "transaction")
+      .mockImplementation(function (
+        this: IDBDatabase,
+        storeNames: string | string[],
+        mode?: IDBTransactionMode,
+        options?: IDBTransactionOptions,
+      ) {
+        const tx = originalTransaction.call(this, storeNames, mode, options);
+        if (mode === "readonly") {
+          readonlyTransactions.push(tx);
+        }
+        return tx;
+      });
+
+    const readProjectTasks = () =>
+      (function* () {
+        return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      })();
+
+    try {
+      await Promise.all([
+        selectAsync(db, readProjectTasks()),
+        selectAsync(db, readProjectTasks()),
+      ]);
+
+      expect(readonlyTransactions).toHaveLength(2);
+      expect(readonlyTransactions[0]).not.toBe(readonlyTransactions[1]);
+    } finally {
+      txSpy.mockRestore();
+    }
+  });
+
+  it("reuses one scoped readonly transaction across scans in one selector", async () => {
     const db = await createDB();
     await execAsync(db.loadTables([tasksTable]));
     await execAsync(
@@ -286,7 +337,22 @@ describe("IdbDriver", () => {
       ]),
     );
 
-    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+    const originalTransaction = IDBDatabase.prototype.transaction;
+    const readonlyTransactions: IDBTransaction[] = [];
+    const txSpy = vi
+      .spyOn(IDBDatabase.prototype, "transaction")
+      .mockImplementation(function (
+        this: IDBDatabase,
+        storeNames: string | string[],
+        mode?: IDBTransactionMode,
+        options?: IDBTransactionOptions,
+      ) {
+        const tx = originalTransaction.call(this, storeNames, mode, options);
+        if (mode === "readonly") {
+          readonlyTransactions.push(tx);
+        }
+        return tx;
+      });
 
     try {
       const result = await selectAsync(
@@ -314,8 +380,81 @@ describe("IdbDriver", () => {
       );
       expect(readonlyCalls).toHaveLength(1);
       expect(readonlyCalls[0]?.[0]).toEqual(["hyperdb:idbTasks"]);
+      expect(readonlyTransactions).toHaveLength(1);
     } finally {
       txSpy.mockRestore();
+    }
+  });
+
+  it("retries and logs when a scoped readonly transaction is no longer active", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+    await execAsync(
+      db.insert(tasksTable, [
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]),
+    );
+
+    const getAllRecordsSpy = spyOnGetAllRecords(IDBIndex.prototype);
+    const getAllSpy = getAllRecordsSpy
+      ? undefined
+      : vi.spyOn(IDBIndex.prototype, "getAll");
+    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const inactiveError = new DOMException(
+      "The transaction is not active.",
+      "TransactionInactiveError",
+    );
+
+    try {
+      if (getAllRecordsSpy) {
+        getAllRecordsSpy.mockImplementationOnce(() => {
+          throw inactiveError;
+        });
+      } else {
+        getAllSpy?.mockImplementationOnce(() => {
+          throw inactiveError;
+        });
+      }
+
+      await expect(
+        selectAsync(
+          db,
+          (function* () {
+            return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+              q.eq("projectId", "project-1"),
+            );
+          })(),
+        ),
+      ).resolves.toEqual([
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]);
+
+      expect(
+        txSpy.mock.calls.filter(([, mode]) => mode === "readonly").length,
+      ).toBeGreaterThanOrEqual(2);
+      expect(
+        logSpy.mock.calls
+          .map(([message]) => String(message))
+          .some((message) =>
+            /IDB transaction reopen .* mode readonly/.test(message),
+          ),
+      ).toBe(true);
+    } finally {
+      getAllRecordsSpy?.mockRestore();
+      getAllSpy?.mockRestore();
+      txSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 

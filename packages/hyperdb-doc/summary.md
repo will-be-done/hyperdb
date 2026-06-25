@@ -103,7 +103,8 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/integrations/react.md`: React integration guide. Covers
   `DBProvider`, `useDB`, `useSyncSelector`, `useAsyncSelector`, `useDispatch`,
   `useAsyncDispatch`, `useSelect`, `useAsyncSelect`, selector options, default
-  values, `enabled`, `gcTime`, and the full hook reference table.
+  values, `enabled`, `gcTime`, the React Query-style async selector result, and
+  the full hook reference table.
 - `src/content/docs/integrations/devtools.md`: Devtool and tracing guide. Covers
   adding `HyperDBDevtools`, devtool tabs and trace inspection, component props,
   embedded panel option, trace contents, cache-hit traces, `HybridDB` source

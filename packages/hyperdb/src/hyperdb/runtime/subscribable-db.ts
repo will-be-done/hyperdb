@@ -456,6 +456,7 @@ export class SubscribableDB implements HyperDB {
   private state: SubscribableDBState;
 
   constructor(db: HyperDB);
+  constructor(db: HyperDB, state: SubscribableDBState, traits?: Trait[]);
   constructor(
     db: HyperDB,
     state: SubscribableDBState = createSubscribableDBState(),
@@ -514,6 +515,25 @@ export class SubscribableDB implements HyperDB {
     db.state = this.state;
     db.traits = [...this.traits, ...traits];
     return db;
+  }
+
+  createReadonlyTransactionScope(): unknown {
+    return this.delegateDB().createReadonlyTransactionScope?.();
+  }
+
+  withReadonlyTransactionScope(scope: unknown): HyperDB {
+    const delegate = this.delegateDB();
+    return new SubscribableDB(
+      delegate.withReadonlyTransactionScope?.(scope) ?? delegate,
+      this.state,
+    );
+  }
+
+  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
+    const delegate = this.delegateDB();
+    if (delegate.closeReadonlyTransactionScope) {
+      yield* delegate.closeReadonlyTransactionScope(scope);
+    }
   }
 
   getTraits(): Trait[] {

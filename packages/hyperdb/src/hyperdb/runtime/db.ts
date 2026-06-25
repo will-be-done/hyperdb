@@ -2,7 +2,11 @@
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
 import type { HyperDB } from "../core/contracts";
-import type { BaseDBDriverOperations, DBDriver } from "../core/driver";
+import type {
+  BaseDBDriverOperations,
+  DBDriver,
+  DBReadonlyTransactionScopeDriver,
+} from "../core/driver";
 import type {
   Row,
   SelectOptions,
@@ -73,6 +77,7 @@ function* performScan(
   clauses: WhereClause[],
   options: CodecOptions,
   selectOptions?: SelectOptions,
+  readonlyTransactionScope?: unknown,
 ) {
   if (clauses.length === 0) {
     throw new Error("scan clauses must be provided");
@@ -91,15 +96,32 @@ function* performScan(
   // Validation-only; driver handles conversion.
   convertWhereToBound(indexConfig.cols as string[], clauses);
 
-  const records = yield* driver.intervalScan(
-    table.tableName,
-    indexName as string,
-    clauses,
-    selectOptions || {},
-  );
+  const records =
+    readonlyTransactionScope !== undefined &&
+    isReadonlyTransactionScopeDriver(driver)
+      ? yield* driver.intervalScanWithReadonlyTransactionScope(
+          readonlyTransactionScope,
+          table.tableName,
+          indexName as string,
+          clauses,
+          selectOptions || {},
+        )
+      : yield* driver.intervalScan(
+          table.tableName,
+          indexName as string,
+          clauses,
+          selectOptions || {},
+        );
 
   return validateRecordsFromDriver(table, records, options);
 }
+
+const isReadonlyTransactionScopeDriver = (
+  driver: BaseDBDriverOperations,
+): driver is BaseDBDriverOperations & DBReadonlyTransactionScopeDriver =>
+  "createReadonlyTransactionScope" in driver &&
+  "closeReadonlyTransactionScope" in driver &&
+  "intervalScanWithReadonlyTransactionScope" in driver;
 
 function* performInsert(
   driver: BaseDBDriverOperations,
@@ -146,6 +168,7 @@ export class DB implements HyperDB {
   driver: DBDriver;
   traits: Trait[] = [];
   private state: DBState;
+  private readonlyTransactionScope: unknown;
 
   constructor(driver: DBDriver, options?: DBOptions);
   constructor(driver: DBDriver, options: DBOptions = {}) {
@@ -162,7 +185,29 @@ export class DB implements HyperDB {
     db.driver = this.driver;
     db.traits = [...this.traits, ...traits];
     db.state = this.state;
+    db.readonlyTransactionScope = this.readonlyTransactionScope;
     return db;
+  }
+
+  createReadonlyTransactionScope(): unknown {
+    return isReadonlyTransactionScopeDriver(this.driver)
+      ? this.driver.createReadonlyTransactionScope()
+      : undefined;
+  }
+
+  withReadonlyTransactionScope(scope: unknown): HyperDB {
+    const db = Object.create(DB.prototype) as DB;
+    db.driver = this.driver;
+    db.traits = this.traits;
+    db.state = this.state;
+    db.readonlyTransactionScope = scope;
+    return db;
+  }
+
+  *closeReadonlyTransactionScope(scope: unknown): Generator<DBCmd, void> {
+    if (isReadonlyTransactionScopeDriver(this.driver)) {
+      yield* this.driver.closeReadonlyTransactionScope(scope);
+    }
   }
 
   getTraits(): Trait[] {
@@ -219,6 +264,7 @@ export class DB implements HyperDB {
       clauses,
       this.options,
       selectOptions,
+      this.readonlyTransactionScope,
     ) as Generator<DBCmd, ExtractSchema<TTable>[]>;
   }
 

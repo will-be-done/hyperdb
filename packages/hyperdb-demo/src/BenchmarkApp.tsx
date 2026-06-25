@@ -60,15 +60,16 @@ export function BenchmarkApp() {
     isWorking,
     setIsWorking,
   } = benchmarkState;
-  const dashboard =
-    useAsyncSelector({
-      selector: getDashboardSnapshot,
-      args: {
-        taskLimit,
-        projectLimit,
-        selectedProjectId: benchmarkState.selectedProjectId,
-      },
-    }) ?? EMPTY_DASHBOARD_SNAPSHOT;
+  const { data: dashboard } = useAsyncSelector({
+    selector: getDashboardSnapshot,
+    args: {
+      taskLimit,
+      projectLimit,
+      selectedProjectId: benchmarkState.selectedProjectId,
+    },
+    placeholderData: (previousDashboard) =>
+      previousDashboard ?? EMPTY_DASHBOARD_SNAPSHOT,
+  });
 
   const storeMode = getStoredMode();
   const persistence = usePersistence();

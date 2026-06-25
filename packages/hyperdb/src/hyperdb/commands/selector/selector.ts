@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { SubscribableDB, Op } from "../../runtime/subscribable-db";
 import { execAsync, execMaybeAsync, execSync } from "../../core/executor";
+import type { DBCmd } from "../async";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import type { Row } from "../../core/primitives";
@@ -348,6 +349,27 @@ type RunSelectorOptions = Pick<CommandRunnerOptions, "ops" | "childMemo">;
 const makeVisited = (options: RunSelectorOptions): ChildVisited | undefined =>
   options.childMemo ? new Map() : undefined;
 
+const createReadonlyScopedDB = (
+  db: HyperDB,
+):
+  | {
+      db: HyperDB;
+      close: () => Generator<DBCmd, void>;
+    }
+  | undefined => {
+  const scope = db.createReadonlyTransactionScope?.();
+  if (scope === undefined) return undefined;
+
+  return {
+    db: db.withReadonlyTransactionScope?.(scope) ?? db,
+    close: function* () {
+      if (db.closeReadonlyTransactionScope) {
+        yield* db.closeReadonlyTransactionScope(scope);
+      }
+    },
+  };
+};
+
 export function runSelector<TReturn>(
   db: HyperDB,
   gen: () => Generator<unknown, TReturn, unknown>,
@@ -356,14 +378,26 @@ export function runSelector<TReturn>(
 ): TReturn {
   selectRangeCmds.splice(0, selectRangeCmds.length);
 
+  const scoped = createReadonlyScopedDB(db);
+  const runnerDB = scoped?.db ?? db;
   const visited = makeVisited(options);
-  const result = execSync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
-  );
-  if (options.childMemo && visited) {
-    pruneChildMemo(options.childMemo, visited);
+  try {
+    const result = execSync(
+      runCommandGenerator(runnerDB, gen(), {
+        ...options,
+        selectRangeCmds,
+        visited,
+      }),
+    );
+    if (options.childMemo && visited) {
+      pruneChildMemo(options.childMemo, visited);
+    }
+    return result;
+  } finally {
+    if (scoped) {
+      execSync(scoped.close());
+    }
   }
-  return result;
 }
 
 export async function runSelectorAsync<TReturn>(
@@ -374,14 +408,26 @@ export async function runSelectorAsync<TReturn>(
 ): Promise<TReturn> {
   selectRangeCmds.splice(0, selectRangeCmds.length);
 
+  const scoped = createReadonlyScopedDB(db);
+  const runnerDB = scoped?.db ?? db;
   const visited = makeVisited(options);
-  const result = await execAsync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
-  );
-  if (options.childMemo && visited) {
-    pruneChildMemo(options.childMemo, visited);
+  try {
+    const result = await execAsync(
+      runCommandGenerator(runnerDB, gen(), {
+        ...options,
+        selectRangeCmds,
+        visited,
+      }),
+    );
+    if (options.childMemo && visited) {
+      pruneChildMemo(options.childMemo, visited);
+    }
+    return result;
+  } finally {
+    if (scoped) {
+      await execAsync(scoped.close());
+    }
   }
-  return result;
 }
 
 export function runSelectorMaybeAsync<TReturn>(
@@ -392,24 +438,42 @@ export function runSelectorMaybeAsync<TReturn>(
 ): TReturn | Promise<TReturn> {
   selectRangeCmds.splice(0, selectRangeCmds.length);
 
+  const scoped = createReadonlyScopedDB(db);
+  const runnerDB = scoped?.db ?? db;
   const visited = makeVisited(options);
+  const closeScope = () => {
+    if (scoped) {
+      return execMaybeAsync(scoped.close());
+    }
+  };
+
   const result = execMaybeAsync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
+    runCommandGenerator(runnerDB, gen(), {
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
 
   if (result instanceof Promise) {
-    return result.then((value) => {
-      if (options.childMemo && visited) {
-        pruneChildMemo(options.childMemo, visited);
-      }
-      return value;
-    });
+    return result
+      .then((value) => {
+        if (options.childMemo && visited) {
+          pruneChildMemo(options.childMemo, visited);
+        }
+        return value;
+      })
+      .finally(closeScope);
   }
 
-  if (options.childMemo && visited) {
-    pruneChildMemo(options.childMemo, visited);
+  try {
+    if (options.childMemo && visited) {
+      pruneChildMemo(options.childMemo, visited);
+    }
+    return result;
+  } finally {
+    void closeScope();
   }
-  return result;
 }
 
 export function initSelector<TReturn>(

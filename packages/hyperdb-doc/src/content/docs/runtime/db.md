@@ -114,7 +114,9 @@ later reads. Empty misses are cached too. Limited B-tree reads cache the covered
 prefix or suffix when the runtime can prove the returned rows are enough to
 answer the same limited query from memory. With an IndexedDB primary, this means
 no readonly IndexedDB transaction is opened until the selector actually falls
-through to the persisted tier.
+through to the persisted tier. If the persistent tier is read, readonly
+transaction reuse stays scoped to that selector run, so concurrent selector runs
+do not share one IndexedDB transaction.
 
 ```ts
 import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
