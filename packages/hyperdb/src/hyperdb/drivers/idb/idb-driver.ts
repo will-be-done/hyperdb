@@ -1312,10 +1312,7 @@ export class IdbDriver implements DBDriver {
       try {
         return await run(active.tx);
       } catch (error) {
-        if (
-          canRetryInactiveTransaction &&
-          isInactiveTransactionError(error)
-        ) {
+        if (canRetryInactiveTransaction && isInactiveTransactionError(error)) {
           canRetryInactiveTransaction = false;
           logIdbOperation("transaction reopen", nowMs(), {
             mode: active.tx.mode,
