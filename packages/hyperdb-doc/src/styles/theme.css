@@ -3,7 +3,9 @@
    Single solid brand color (violet). No gradients.
    ========================================================================= */
 
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+/* TODO: use local */
+
+/* @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"); */
 
 :root {
   /* One solid brand color used for buttons, logo, and accents */

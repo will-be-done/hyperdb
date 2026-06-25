@@ -137,6 +137,11 @@ current immediately, while uncached ranges still load lazily on first access.
 Transactions open transactions against both tiers; scan coverage discovered
 inside a transaction is published to the outer cache only after commit.
 
+HybridDB serializes cache fills, write-through mutations, coverage updates, and
+transaction lifetimes per instance. This keeps async selector misses and actions
+from overlapping against the in-memory cache tier while a primary read or
+transaction is still in flight.
+
 ## Executing commands
 
 Selectors and actions are generators. The dispatch and select helpers run them

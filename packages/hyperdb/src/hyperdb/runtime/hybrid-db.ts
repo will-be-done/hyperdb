@@ -1,4 +1,5 @@
 import type { DBCmd } from "../commands/async";
+import { unwrap } from "../commands/async";
 import type { HyperDB, HyperDBTx } from "../core/contracts";
 import {
   type SelectOptions,
@@ -15,6 +16,7 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
+import AwaitLock from "../utils/await-lock";
 import { refVar, type RefVar } from "../utils";
 import {
   createHybridIntervalCache,
@@ -25,6 +27,7 @@ import {
 
 type HybridDBState = {
   cachedIntervals: HybridIntervalCache;
+  lock: AwaitLock;
 };
 
 type HybridDBTxState = {
@@ -32,22 +35,52 @@ type HybridDBTxState = {
   committed: RefVar<boolean>;
   rollbacked: RefVar<boolean>;
   txCounter: RefVar<number>;
+  releaseLock: () => void;
 };
 
 const createHybridDBState = (): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
+  lock: new AwaitLock(),
 });
 
-const createHybridDBTxState = (): HybridDBTxState => ({
+const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
   cachedIntervals: createHybridIntervalCache(),
   committed: refVar(false),
   rollbacked: refVar(false),
   txCounter: refVar(1),
+  releaseLock,
 });
 
 export type HybridDBOptions = {
   traits?: Trait[];
 };
+
+function* acquireHybridLock(
+  state: HybridDBState,
+): Generator<DBCmd, () => void> {
+  if (!state.lock.tryAcquire()) {
+    yield* unwrap(state.lock.acquireAsync());
+  }
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    state.lock.release();
+  };
+}
+
+function* withHybridLock<T>(
+  state: HybridDBState,
+  run: () => Generator<DBCmd, T>,
+): Generator<DBCmd, T> {
+  const release = yield* acquireHybridLock(state);
+  try {
+    return yield* run();
+  } finally {
+    release();
+  }
+}
 
 export class HybridDB implements HyperDB {
   primary: HyperDB;
@@ -91,15 +124,31 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
-    yield* this.primary.loadTables(tables);
-    yield* this.cache.loadTables(tables);
-    this.state.cachedIntervals.clear();
+    yield* withHybridLock(this.state, function* () {
+      yield* this.primary.loadTables(tables);
+      yield* this.cache.loadTables(tables);
+      this.state.cachedIntervals.clear();
+    }.bind(this));
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
-    const primaryTx = yield* this.primary.beginTx();
-    const cacheTx = yield* this.cache.beginTx();
-    return new HybridDBTx(this, primaryTx, cacheTx);
+    const release = yield* acquireHybridLock(this.state);
+    let primaryTx: HyperDBTx | undefined;
+    try {
+      primaryTx = yield* this.primary.beginTx();
+      const cacheTx = yield* this.cache.beginTx();
+      return new HybridDBTx(this, primaryTx, cacheTx, release);
+    } catch (error) {
+      if (primaryTx) {
+        try {
+          yield* primaryTx.rollback();
+        } catch {
+          // Preserve the original beginTx error.
+        }
+      }
+      release();
+      throw error;
+    }
   }
 
   *intervalScan<
@@ -111,40 +160,48 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
-    return yield* hybridIntervalScan(
-      this.primary,
-      this.cache,
-      this.state.cachedIntervals,
-      getCurrentSelectEventForDB(this),
-      table,
-      indexName,
-      clauses,
-      selectOptions,
-    );
+    return yield* withHybridLock(this.state, function* () {
+      return yield* hybridIntervalScan(
+        this.primary,
+        this.cache,
+        this.state.cachedIntervals,
+        getCurrentSelectEventForDB(this),
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+      );
+    }.bind(this));
   }
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* this.primary.insert(table, records);
-    yield* this.cache.insert(table, records);
+    yield* withHybridLock(this.state, function* () {
+      yield* this.primary.insert(table, records);
+      yield* this.cache.insert(table, records);
+    }.bind(this));
   }
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* this.primary.upsert(table, records);
-    yield* this.cache.upsert(table, records);
+    yield* withHybridLock(this.state, function* () {
+      yield* this.primary.upsert(table, records);
+      yield* this.cache.upsert(table, records);
+    }.bind(this));
   }
 
   *delete<TTable extends TableDefinition>(
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
-    yield* this.primary.delete(table, ids);
-    yield* this.cache.delete(table, ids);
+    yield* withHybridLock(this.state, function* () {
+      yield* this.primary.delete(table, ids);
+      yield* this.cache.delete(table, ids);
+    }.bind(this));
   }
 
   mergeTxCoverage(intervals: HybridIntervalCache): void {
@@ -163,7 +220,8 @@ class HybridDBTx implements HyperDBTx {
     hybridDB: HybridDB,
     primaryTx: HyperDBTx,
     cacheTx: HyperDBTx,
-    state: HybridDBTxState = createHybridDBTxState(),
+    releaseLock: () => void,
+    state: HybridDBTxState = createHybridDBTxState(releaseLock),
     traits: Trait[] = [],
   ) {
     this.hybridDB = hybridDB;
@@ -178,6 +236,7 @@ class HybridDBTx implements HyperDBTx {
       this.hybridDB,
       this.primaryTx,
       this.cacheTx,
+      this.state.releaseLock,
       this.state,
       [...this.traits, ...traits],
     );
@@ -267,17 +326,53 @@ class HybridDBTx implements HyperDBTx {
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
-    yield* this.primaryTx.commit();
-    yield* this.cacheTx.commit();
-    this.hybridDB.mergeTxCoverage(this.state.cachedIntervals);
-    this.state.committed.val = true;
+    let primaryCommitted = false;
+    try {
+      yield* this.primaryTx.commit();
+      primaryCommitted = true;
+      yield* this.cacheTx.commit();
+      this.hybridDB.mergeTxCoverage(this.state.cachedIntervals);
+      this.state.committed.val = true;
+    } catch (error) {
+      if (!primaryCommitted) {
+        try {
+          yield* this.primaryTx.rollback();
+        } catch {
+          // Preserve the original commit error.
+        }
+      }
+      try {
+        yield* this.cacheTx.rollback();
+      } catch {
+        // Preserve the original commit error.
+      }
+      throw error;
+    } finally {
+      this.state.releaseLock();
+    }
   }
 
   *rollback(): Generator<DBCmd, void> {
     this.throwIfDone();
-    yield* this.primaryTx.rollback();
-    yield* this.cacheTx.rollback();
-    this.state.rollbacked.val = true;
+    let rollbackError: unknown;
+    try {
+      try {
+        yield* this.primaryTx.rollback();
+      } catch (error) {
+        rollbackError = error;
+      }
+      try {
+        yield* this.cacheTx.rollback();
+      } catch (error) {
+        rollbackError ??= error;
+      }
+      this.state.rollbacked.val = true;
+      if (rollbackError) {
+        throw rollbackError;
+      }
+    } finally {
+      this.state.releaseLock();
+    }
   }
 
   private throwIfDone() {

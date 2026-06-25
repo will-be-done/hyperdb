@@ -35,7 +35,9 @@ state libraries start to strain:
 - **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
   primary store with an in-memory cache: reads check memory first, fall through
   to persistent storage on a miss, then cache the covered index range for next
-  time.
+  time. Cache fills, write-through mutations, and transactions are serialized
+  per HybridDB instance so async selectors and actions do not overlap against
+  the in-memory cache tier.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this

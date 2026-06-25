@@ -8,6 +8,7 @@ import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import { select, selectAsync } from "../commands/selector/selector";
 import { selectFrom } from "../commands/selector/builder";
+import { unwrap } from "../commands/async";
 import {
   hyperDBTraceStore,
   traceRootsRuntimeTable,
@@ -51,6 +52,19 @@ const createDBs = async () => {
 
   return { db, hybrid, primary, cache, primaryScanSpy, cacheScanSpy };
 };
+
+const deferred = () => {
+  let resolve!: () => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return { promise, resolve, reject };
+};
+
+const waitOneTurn = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
   select(
@@ -306,6 +320,88 @@ describe("HybridDB", () => {
       ]),
     ).resolves.toEqual(tasks);
     expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("serializes read miss cache fill against transactions", async () => {
+    const { db, primary } = await createDBs();
+    const tasks = [createTask(1), createTask(2)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    const scanStarted = deferred();
+    const resumeScan = deferred();
+    const originalPrimaryScan = DB.prototype.intervalScan.bind(primary);
+    vi.spyOn(primary, "intervalScan").mockImplementation(function* (
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    ) {
+      scanStarted.resolve();
+      yield* unwrap(resumeScan.promise);
+      return yield* originalPrimaryScan(table, indexName, clauses, selectOptions);
+    });
+
+    const readPromise = db.intervalScan(tasksTable, "byValue", [
+      { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
+    ]);
+    await scanStarted.promise;
+
+    let txResolved = false;
+    const txPromise = db.beginTx().then((tx) => {
+      txResolved = true;
+      return tx;
+    });
+    await waitOneTurn();
+    expect(txResolved).toBe(false);
+
+    resumeScan.resolve();
+    await expect(readPromise).resolves.toEqual(tasks);
+
+    const tx = await txPromise;
+    expect(txResolved).toBe(true);
+    await tx.rollback();
+  });
+
+  it("shares the concurrency lock across withTraits wrappers", async () => {
+    const { hybrid, primary } = await createDBs();
+    const db = new AsyncDB(hybrid);
+    const traitedDb = new AsyncDB(hybrid.withTraits({ type: "traited" }));
+    const tasks = [createTask(1), createTask(2)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    const scanStarted = deferred();
+    const resumeScan = deferred();
+    const originalPrimaryScan = DB.prototype.intervalScan.bind(primary);
+    vi.spyOn(primary, "intervalScan").mockImplementation(function* (
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    ) {
+      scanStarted.resolve();
+      yield* unwrap(resumeScan.promise);
+      return yield* originalPrimaryScan(table, indexName, clauses, selectOptions);
+    });
+
+    const readPromise = traitedDb.intervalScan(tasksTable, "byValue", [
+      { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
+    ]);
+    await scanStarted.promise;
+
+    let txResolved = false;
+    const txPromise = db.beginTx().then((tx) => {
+      txResolved = true;
+      return tx;
+    });
+    await waitOneTurn();
+    expect(txResolved).toBe(false);
+
+    resumeScan.resolve();
+    await expect(readPromise).resolves.toEqual(tasks);
+
+    const tx = await txPromise;
+    expect(txResolved).toBe(true);
+    await tx.rollback();
   });
 
   it("writes through to primary and cache synchronously", async () => {
