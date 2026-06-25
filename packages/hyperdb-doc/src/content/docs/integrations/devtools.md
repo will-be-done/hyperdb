@@ -53,6 +53,14 @@ selector frames, the index ranges scanned, and the mutations performed. Cache
 hits are recorded too, so you can see when a selector was reused instead of
 recomputed.
 
+The details pane keeps the active tab while you move between traces, so you can
+compare Overview, Queries, Mutations, or Call Tree output without reselecting
+the same tab each time.
+
+When a selector reads through `HybridDB`, select nodes in the call tree also show
+where the returned rows came from: `in-mem` for the memory cache, or `persist`
+for the primary persistent database.
+
 ### Per-DB tracer
 
 Set a tracer when constructing a [`DB`](/runtime/db/). Pass the shared store, the

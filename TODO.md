@@ -10,9 +10,11 @@ Devtool:
 
 1. resetcss
 1. fix tabl selection (like call tree) not persisted to local storage
+1. for hybrid db - mark whic data was loaded from cahce and which from persistent storage
 
 Doc:
 
+1. Make font be local
 1. Maybe reframe it and remove mention about sync nature? amybe even async by default?
 1. review index.mdx, start/\*(execpt why), index.md, in-memory-persistence.md
 1. Add performance compare doc
@@ -40,3 +42,11 @@ Others:
 1. Understand when normalisation happen. Does it happened in-mem? Indexeddb? When validation happen?
 1. intent skills css tanstack support
 1. On release - cp readme.md to hyperdb/readme.md
+
+DB:
+
+1. start readonly transaction for one selector, if not cached data appeared for hybrid db, and reuse it for other selectors too. Also, don't wait commit to finish for readonly txes. It also means that now beginTx() will accpes modes - readonly | readwrite
+2. (? maybe) CoW if new cloned btree appeared. But it still will be locked by idb transaction
+3. Allow disable/enable logging of sqlite/idb. Disabled by default
+4. Renamer upsert -> put ?
+5. Is there any bulk insert for indexeddb?

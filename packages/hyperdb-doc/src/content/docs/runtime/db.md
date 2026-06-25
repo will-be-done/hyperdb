@@ -101,6 +101,47 @@ Because hooks run within the transaction, anything they write commits
 atomically with the change that triggered them, and a throw rolls the whole
 thing back.
 
+## `HybridDB`
+
+`HybridDB` wraps two DBs: a persistent primary DB and an in-memory cache DB. It
+is for datasets that are too large to hydrate eagerly, or apps where startup
+time matters more than synchronous reads.
+
+On read, `HybridDB` checks the in-memory cache first. If the requested index
+range is not cached, it runs the same scan against the persistent primary,
+upserts the returned rows into memory, and records that range as cached for
+later reads. Empty misses are cached too. Limited B-tree reads cache the covered
+prefix or suffix when the runtime can prove the returned rows are enough to
+answer the same limited query from memory.
+
+```ts
+import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
+import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
+import { AsyncSqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
+
+const primary = new DB(new AsyncSqlDriver(sqlite, sqliteDb));
+const cache = new DB(new BptreeInmemDriver());
+
+const db = new SubscribableDB(new HybridDB(primary, cache));
+
+await execAsync(db.loadTables([tasksTable]));
+```
+
+The trade-off is async reads. A selector may fall through to disk, so use
+`selectAsync`, `asyncDispatch`, `useAsyncSelector`, and `useAsyncDispatch` with a
+hybrid runtime. Once a working set is cached, repeated reads are served from the
+in-memory tier.
+
+Writes go to both tiers in the same operation. That means cached rows stay
+current immediately, while uncached ranges still load lazily on first access.
+Transactions open transactions against both tiers; scan coverage discovered
+inside a transaction is published to the outer cache only after commit.
+
+HybridDB serializes cache fills, write-through mutations, coverage updates, and
+transaction lifetimes per instance. This keeps async selector misses and actions
+from overlapping against the in-memory cache tier while a primary read or
+transaction is still in flight.
+
 ## Executing commands
 
 Selectors and actions are generators. The dispatch and select helpers run them

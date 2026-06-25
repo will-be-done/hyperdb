@@ -1,9 +1,15 @@
-export type StoreMode = "idb" | "idb-inmem" | "wa-sqlite" | "wa-sqlite-inmem";
+export type StoreMode =
+  | "idb"
+  | "idb-inmem"
+  | "idb-hybrid"
+  | "wa-sqlite"
+  | "wa-sqlite-inmem";
 
 const STORAGE_KEY = "hyperdb-demo-mode";
 const modes = new Set<StoreMode>([
   "idb",
   "idb-inmem",
+  "idb-hybrid",
   "wa-sqlite",
   "wa-sqlite-inmem",
 ]);

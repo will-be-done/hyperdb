@@ -39,6 +39,7 @@ export type {
   MutationEventKind,
   RootTrace,
   SelectCommandEvent,
+  SelectScanSource,
   SerializableTraceValue,
   TraceContext,
   TraceError,

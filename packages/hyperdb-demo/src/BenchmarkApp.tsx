@@ -89,29 +89,37 @@ export function BenchmarkApp() {
     : 0;
   const visibleProjectCount = Math.min(projectLimit, dashboard.totalProjects);
   const directDriver =
-    storeMode === "idb" || storeMode === "idb-inmem"
+    storeMode === "idb" ||
+    storeMode === "idb-inmem" ||
+    storeMode === "idb-hybrid"
       ? "IndexedDB"
       : "WA-SQLite OPFS";
   const hybrid = storeMode === "idb-inmem" || storeMode === "wa-sqlite-inmem";
-  const storageStatus = hybrid
+  const runtimeHybrid = storeMode === "idb-hybrid";
+  const storageStatus = runtimeHybrid
     ? {
-        dot:
-          persistence?.draining || persistence?.pendingBatches
-            ? "animate-blip bg-amber"
-            : "bg-green",
-        text:
-          persistence?.draining || persistence?.pendingBatches
-            ? `Saving... ${formatNumber(persistence.pendingOps)} ops queued`
-            : persistence?.lastDurationMs != null
-              ? `Saved ${formatNumber(
-                  persistence.lastOpCount ?? 0,
-                )} ops in ${formatDuration(persistence.lastDurationMs)} ms`
-              : `${directDriver} mirrored behind in-memory reads/writes.`,
-      }
-    : {
         dot: "bg-green",
-        text: `Direct async ${directDriver} driver; changes survive reloads.`,
-      };
+        text: "HybridDB uses IndexedDB as primary storage with an in-memory cache.",
+      }
+    : hybrid
+      ? {
+          dot:
+            persistence?.draining || persistence?.pendingBatches
+              ? "animate-blip bg-amber"
+              : "bg-green",
+          text:
+            persistence?.draining || persistence?.pendingBatches
+              ? `Saving... ${formatNumber(persistence.pendingOps)} ops queued`
+              : persistence?.lastDurationMs != null
+                ? `Saved ${formatNumber(
+                    persistence.lastOpCount ?? 0,
+                  )} ops in ${formatDuration(persistence.lastDurationMs)} ms`
+                : `${directDriver} mirrored behind in-memory reads/writes.`,
+        }
+      : {
+          dot: "bg-green",
+          text: `Direct async ${directDriver} driver; changes survive reloads.`,
+        };
 
   const runMeasured = (
     label: string,
@@ -187,6 +195,7 @@ export function BenchmarkApp() {
           >
             <option value="idb">IndexedDB</option>
             <option value="idb-inmem">IndexedDB + in-memory</option>
+            <option value="idb-hybrid">IndexedDB + HybridDB cache</option>
             <option value="wa-sqlite">WA-SQLite OPFS</option>
             <option value="wa-sqlite-inmem">WA-SQLite OPFS + in-memory</option>
           </select>

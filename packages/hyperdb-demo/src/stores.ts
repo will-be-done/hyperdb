@@ -7,6 +7,7 @@ import {
 } from "@will-be-done/hyperdb/drivers/sqlite";
 import {
   DB,
+  HybridDB,
   SubscribableDB,
   asyncDispatch,
   createAction,
@@ -166,23 +167,33 @@ class WaSQLiteWorkerDB implements AsyncSQLiteDB {
 }
 
 function getBackend(mode: StoreMode): PersistentBackend {
-  return mode === "idb" || mode === "idb-inmem" ? "idb" : "wa-sqlite";
+  return mode === "idb" || mode === "idb-inmem" || mode === "idb-hybrid"
+    ? "idb"
+    : "wa-sqlite";
 }
 
 function isHybridMode(mode: StoreMode): boolean {
   return mode === "idb-inmem" || mode === "wa-sqlite-inmem";
 }
 
+function isRuntimeHybridMode(mode: StoreMode): boolean {
+  return mode === "idb-hybrid";
+}
+
 async function createPersistentDriver(mode: StoreMode) {
   const backend = getBackend(mode);
-  const hybrid = isHybridMode(mode);
+  const hybrid = isHybridMode(mode) || isRuntimeHybridMode(mode);
 
   if (backend === "idb") {
     return {
       driver: await openIndexedDBDriver(
         hybrid ? IDB_HYBRID_NAME : IDB_DIRECT_NAME,
       ),
-      dbName: hybrid ? "demo-idb-inmem:persistent" : "demo-idb",
+      dbName: isRuntimeHybridMode(mode)
+        ? "demo-idb-hybrid:primary"
+        : hybrid
+          ? "demo-idb-inmem:persistent"
+          : "demo-idb",
     };
   }
 
@@ -363,6 +374,26 @@ export type InitResult = {
 };
 
 export async function initStore(mode: StoreMode): Promise<InitResult> {
+  if (isRuntimeHybridMode(mode)) {
+    const { driver, dbName } = await createPersistentDriver(mode);
+    const primaryDB = new DB(driver, {
+      freezeArgs: false,
+      freezeRows: false,
+      dbName,
+    });
+    const cacheDB = new DB(new BptreeInmemDriver(), {
+      freezeArgs: false,
+      freezeRows: false,
+      dbName: "demo-idb-hybrid:cache",
+    });
+    const db = new SubscribableDB(new HybridDB(primaryDB, cacheDB));
+
+    await execAsync(db.loadTables(ALL_TABLES));
+    installTaskStatsHooks(db);
+
+    return { db, persistence: null };
+  }
+
   if (isHybridMode(mode)) {
     const memDB = createMemDb(mode);
     const { driver, dbName } = await createPersistentDriver(mode);

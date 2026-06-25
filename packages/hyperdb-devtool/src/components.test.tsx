@@ -23,6 +23,7 @@ import {
   createTraceFrameMeta,
   endSelectEventSuccess,
   endTraceSuccess,
+  getTraceDBInfo,
   hyperDBTraceStore,
   markTraceFrameCached,
   startRootTrace,
@@ -38,6 +39,63 @@ const createDB = (dbName?: string): SubscribableDB => {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver(), { dbName }));
   execSync(db.loadTables([]));
   return db;
+};
+
+const traceWithChild = ({
+  id,
+  name,
+  childName,
+  startedAt,
+  dbId,
+  dbLabel,
+}: {
+  id: string;
+  name: string;
+  childName: string;
+  startedAt: number;
+  dbId?: string;
+  dbLabel?: string;
+}): RootTrace => {
+  const childFrame: TraceFrame = {
+    id: `${id}-child`,
+    parentId: `${id}-root`,
+    kind: "selector",
+    name: childName,
+    arg: undefined,
+    startedAt: startedAt + 1,
+    durationMs: 2,
+    status: "success",
+    children: [],
+    commandIds: [],
+    mutationIds: [],
+  };
+  const rootFrame: TraceFrame = {
+    id: `${id}-root`,
+    kind: "action",
+    name,
+    arg: undefined,
+    startedAt,
+    durationMs: 5,
+    status: "success",
+    children: [childFrame],
+    commandIds: [],
+    mutationIds: [],
+  };
+
+  return {
+    id,
+    ...(dbId !== undefined ? { dbId } : {}),
+    ...(dbLabel !== undefined ? { dbLabel } : {}),
+    kind: "action",
+    name,
+    arg: undefined,
+    startedAt,
+    durationMs: 5,
+    status: "success",
+    frames: [rootFrame],
+    commandEvents: [],
+    mutationEvents: [],
+  };
 };
 
 type HyperDBRegistryGlobal = typeof globalThis & {
@@ -118,6 +176,82 @@ describe("HyperDBDevtools", () => {
 
     expect(html).toContain("sampleAction");
     expect(html).toContain("Overview");
+  });
+
+  it("keeps the selected details tab when switching traces", async () => {
+    const db = createDB("Trace tab test");
+    const dbInfo = getTraceDBInfo(db);
+
+    hyperDBTraceStore.addTrace(
+      traceWithChild({
+        id: "older-trace",
+        name: "olderTrace",
+        childName: "olderTraceChild",
+        startedAt: 100,
+        dbId: dbInfo.id,
+        dbLabel: dbInfo.label,
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      traceWithChild({
+        id: "newer-trace",
+        name: "newerTrace",
+        childName: "newerTraceChild",
+        startedAt: 200,
+        dbId: dbInfo.id,
+        dbLabel: dbInfo.label,
+      }),
+    );
+    const host = document.createElement("div");
+    host.style.width = "1000px";
+    host.style.height = "600px";
+    document.body.append(host);
+    const root = createRoot(host);
+    const getDetailTab = (name: string): HTMLButtonElement => {
+      const tab = Array.from(
+        host.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+      ).find((element) => element.textContent === name);
+
+      if (!tab) throw new Error(`Missing ${name} tab`);
+      return tab;
+    };
+    const getButtonContaining = (text: string): HTMLButtonElement => {
+      const button = Array.from(host.querySelectorAll("button")).find(
+        (element) => element.textContent?.includes(text),
+      );
+
+      if (!button) throw new Error(`Missing button containing ${text}`);
+      return button;
+    };
+
+    await act(async () => {
+      root.render(<HyperDBDevtoolsPanel db={db} embedded />);
+    });
+
+    expect(getDetailTab("Overview").getAttribute("aria-selected")).toBe("true");
+
+    await act(async () => {
+      getDetailTab("Call Tree").click();
+    });
+
+    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(host.textContent).toContain("@newerTraceChild");
+
+    await act(async () => {
+      getButtonContaining("olderTrace").click();
+    });
+
+    expect(getDetailTab("Call Tree").getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(host.textContent).toContain("@olderTraceChild");
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
   });
 
   it("renders queried and mutated row totals in the trace list and overview", async () => {
@@ -708,6 +842,105 @@ describe("HyperDBDevtools", () => {
         { text: "2 rows", tone: "rows" },
       ],
       [{ text: "50ms", tone: "duration" }],
+    ]);
+  });
+
+  it.each(["in-mem", "persist"] as const)(
+    "adds a %s badge for HybridDB select sources",
+    (source) => {
+      const rootFrame: TraceFrame = {
+        id: "frame-1",
+        kind: "selector",
+        name: "readTasks",
+        arg: undefined,
+        startedAt: 100,
+        durationMs: 50,
+        status: "success",
+        children: [],
+        commandIds: ["cmd-1"],
+        mutationIds: [],
+      };
+      const selectEvent: SelectCommandEvent = {
+        id: "cmd-1",
+        frameId: "frame-1",
+        kind: "select",
+        tableName: "tasks",
+        index: "byProject",
+        where: [],
+        bounds: [],
+        startedAt: 110,
+        durationMs: 7,
+        status: "success",
+        resultCount: 3,
+        source,
+      };
+      const trace: RootTrace = {
+        id: "trace-1",
+        kind: "selector",
+        name: "readTasks",
+        arg: undefined,
+        startedAt: 100,
+        durationMs: 50,
+        status: "success",
+        frames: [rootFrame],
+        commandEvents: [selectEvent],
+        mutationEvents: [],
+      };
+
+      const [operation] = getCallTreeOperations(rootFrame, trace);
+
+      expect(getCallTreeOperationBadges(operation!)).toEqual([
+        { text: "7ms", tone: "duration" },
+        { text: "3 rows", tone: "rows" },
+        { text: source, tone: "source" },
+      ]);
+    },
+  );
+
+  it("keeps old select traces without source on the existing badge shape", () => {
+    const rootFrame: TraceFrame = {
+      id: "frame-1",
+      kind: "selector",
+      name: "readTasks",
+      arg: undefined,
+      startedAt: 100,
+      durationMs: 50,
+      status: "success",
+      children: [],
+      commandIds: ["cmd-1"],
+      mutationIds: [],
+    };
+    const selectEvent: SelectCommandEvent = {
+      id: "cmd-1",
+      frameId: "frame-1",
+      kind: "select",
+      tableName: "tasks",
+      index: "byProject",
+      where: [],
+      bounds: [],
+      startedAt: 110,
+      durationMs: 7,
+      status: "success",
+      resultCount: 3,
+    };
+    const trace: RootTrace = {
+      id: "trace-1",
+      kind: "selector",
+      name: "readTasks",
+      arg: undefined,
+      startedAt: 100,
+      durationMs: 50,
+      status: "success",
+      frames: [rootFrame],
+      commandEvents: [selectEvent],
+      mutationEvents: [],
+    };
+
+    const [operation] = getCallTreeOperations(rootFrame, trace);
+
+    expect(getCallTreeOperationBadges(operation!)).toEqual([
+      { text: "7ms", tone: "duration" },
+      { text: "3 rows", tone: "rows" },
     ]);
   });
 

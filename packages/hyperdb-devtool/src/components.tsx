@@ -63,6 +63,8 @@ export type HyperDBDevtoolsPanelProps = {
   onClose?: () => void;
 };
 
+type TraceDetailsTab = "overview" | "data" | "mutations" | "tree";
+
 type DevtoolsPanelInnerProps = HyperDBDevtoolsPanelProps & {
   discoverRegisteredDBs?: boolean;
 };
@@ -458,7 +460,15 @@ const ButtonElement = (
 
 const SpanElement = (
   props: React.HTMLAttributes<HTMLSpanElement> & {
-    tone?: "green" | "blue" | "red" | "amber" | "duration" | "rows" | "cached";
+    tone?:
+      | "green"
+      | "blue"
+      | "red"
+      | "amber"
+      | "duration"
+      | "rows"
+      | "cached"
+      | "source";
   },
 ) => {
   const { tone, ...domProps } = props;
@@ -1613,14 +1623,17 @@ const TreeLabel = styled("span")`
   color: var(--hdb-text);
 `;
 
-const treeBadgeColor = (tone: "duration" | "rows" | "cached"): string => {
+type CallTreeBadgeTone = "duration" | "rows" | "cached" | "source";
+
+const treeBadgeColor = (tone: CallTreeBadgeTone): string => {
   if (tone === "rows") return "var(--hdb-accent)";
   if (tone === "cached") return "var(--hdb-blue)";
+  if (tone === "source") return "var(--hdb-warn)";
   return "var(--hdb-border)";
 };
 
 const TreeBadge = styled(SpanElement)<{
-  tone: "duration" | "rows" | "cached";
+  tone: CallTreeBadgeTone;
 }>`
   flex: 0 0 auto;
   display: inline-flex;
@@ -2079,14 +2092,18 @@ export const getMutationDisplay = (
 
 export const getCallTreeOperationBadges = (
   operation: CallTreeOperation,
-): { text: string; tone: "duration" | "rows" | "cached" }[] => {
-  const badges: { text: string; tone: "duration" | "rows" | "cached" }[] = [
+): { text: string; tone: CallTreeBadgeTone }[] => {
+  const badges: { text: string; tone: CallTreeBadgeTone }[] = [
     { text: callTreeOperationDuration(operation), tone: "duration" },
   ];
   const recordCount = callTreeOperationRecordCount(operation);
 
   if (recordCount !== undefined) {
     badges.push({ text: formatRowCount(recordCount), tone: "rows" });
+  }
+
+  if (operation.kind === "select" && operation.event.source !== undefined) {
+    badges.push({ text: operation.event.source, tone: "source" });
   }
 
   if (operation.kind === "frame" && operation.frame.cached) {
@@ -2609,10 +2626,17 @@ const CallTree = React.memo(({ trace }: { trace: RootTrace }) => {
 CallTree.displayName = "CallTree";
 
 const TraceDetails = React.memo(
-  ({ trace, onBack }: { trace: RootTrace; onBack?: () => void }) => {
-    const [tab, setTab] = useState<"overview" | "data" | "mutations" | "tree">(
-      "overview",
-    );
+  ({
+    trace,
+    tab,
+    onTabChange,
+    onBack,
+  }: {
+    trace: RootTrace;
+    tab: TraceDetailsTab;
+    onTabChange: (tab: TraceDetailsTab) => void;
+    onBack?: () => void;
+  }) => {
     const contentRef = useRef<HTMLDivElement>(null);
 
     const tone = statusTone(trace.status);
@@ -2640,20 +2664,37 @@ const TraceDetails = React.memo(
             </StatusPill>
           </HeaderBadges>
         </DetailHeader>
-        <Tabs>
-          <Tab selected={tab === "overview"} onClick={() => setTab("overview")}>
+        <Tabs role="tablist" aria-label="Trace details">
+          <Tab
+            role="tab"
+            aria-selected={tab === "overview"}
+            selected={tab === "overview"}
+            onClick={() => onTabChange("overview")}
+          >
             Overview
           </Tab>
-          <Tab selected={tab === "data"} onClick={() => setTab("data")}>
+          <Tab
+            role="tab"
+            aria-selected={tab === "data"}
+            selected={tab === "data"}
+            onClick={() => onTabChange("data")}
+          >
             Queries
           </Tab>
           <Tab
+            role="tab"
+            aria-selected={tab === "mutations"}
             selected={tab === "mutations"}
-            onClick={() => setTab("mutations")}
+            onClick={() => onTabChange("mutations")}
           >
             Mutations
           </Tab>
-          <Tab selected={tab === "tree"} onClick={() => setTab("tree")}>
+          <Tab
+            role="tab"
+            aria-selected={tab === "tree"}
+            selected={tab === "tree"}
+            onClick={() => onTabChange("tree")}
+          >
             Call Tree
           </Tab>
         </Tabs>
@@ -2692,6 +2733,8 @@ const DevtoolsPanelInner = ({
   const [sortField, setSortField] =
     useState<TraceSortField>(readStoredSortField);
   const [sortDir, setSortDir] = useState<TraceSortDir>(readStoredSortDir);
+  const [selectedTraceTab, setSelectedTraceTab] =
+    useState<TraceDetailsTab>("overview");
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [isNarrow, setIsNarrow] = useState(false);
   const isDraggingRef = useRef(false);
@@ -3066,11 +3109,18 @@ const DevtoolsPanelInner = ({
             <TraceDetails
               key={detailTrace.id}
               trace={detailTrace}
+              tab={selectedTraceTab}
+              onTabChange={setSelectedTraceTab}
               onBack={() => setSelectedTraceId(undefined)}
             />
           </MobileDetailOverlay>
         ) : (
-          <TraceDetails key={detailTrace.id} trace={detailTrace} />
+          <TraceDetails
+            key={detailTrace.id}
+            trace={detailTrace}
+            tab={selectedTraceTab}
+            onTabChange={setSelectedTraceTab}
+          />
         )
       ) : isNarrow ? null : (
         <Empty>No traces</Empty>

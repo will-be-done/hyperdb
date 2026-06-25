@@ -12,6 +12,7 @@ export type TraceQueryOrder = "asc" | "desc";
 export type CommandEventKind = "select";
 export type MutationEventKind = "insert" | "upsert" | "delete";
 export type TraceStartOn = "devtoolOpen" | "load";
+export type SelectScanSource = "in-mem" | "persist";
 
 export type TraceOptions = {
   enabled: boolean;
@@ -66,6 +67,7 @@ export type SelectCommandEvent = {
   bounds: SelectTraceInput["bounds"];
   limit?: SelectOptions["limit"];
   order?: TraceQueryOrder;
+  source?: SelectScanSource;
   resultCount?: number;
   result?: unknown[];
   startedAt: number;
@@ -282,6 +284,57 @@ export const withTraceContextTrait = <
   }
 
   return db.withTraits(traceContextTrait(context)) as TDB;
+};
+
+export const currentSelectEventTraitType = "hyperdb.currentSelectEvent";
+
+export type CurrentSelectEventTrait = Trait & {
+  type: typeof currentSelectEventTraitType;
+  event: SelectCommandEvent;
+};
+
+export const currentSelectEventTrait = (
+  event: SelectCommandEvent,
+): CurrentSelectEventTrait => ({
+  type: currentSelectEventTraitType,
+  event,
+});
+
+export const isCurrentSelectEventTrait = (
+  trait: Trait,
+): trait is CurrentSelectEventTrait =>
+  trait.type === currentSelectEventTraitType && "event" in trait;
+
+export const getCurrentSelectEventFromTraits = (
+  traits: Trait[],
+): SelectCommandEvent | undefined => {
+  for (let index = traits.length - 1; index >= 0; index -= 1) {
+    const trait = traits[index];
+    if (trait && isCurrentSelectEventTrait(trait)) {
+      return trait.event;
+    }
+  }
+};
+
+export const getCurrentSelectEventForDB = (db: {
+  getTraits(): Trait[];
+}): SelectCommandEvent | undefined =>
+  getCurrentSelectEventFromTraits(db.getTraits());
+
+export const withCurrentSelectEventTrait = <
+  TDB extends {
+    getTraits(): Trait[];
+    withTraits(...trait: Trait[]): unknown;
+  },
+>(
+  db: TDB,
+  event: SelectCommandEvent,
+): TDB => {
+  if (getCurrentSelectEventForDB(db) === event) {
+    return db;
+  }
+
+  return db.withTraits(currentSelectEventTrait(event)) as TDB;
 };
 
 export type SerializableTraceValue = string | number | boolean | null | Value;

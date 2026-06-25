@@ -32,9 +32,17 @@ state libraries start to strain:
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a
   selector touches instead of hydrating the whole dataset into memory.
+- **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
+  primary store with an in-memory cache: reads check memory first, fall through
+  to persistent storage on a miss, then cache the covered index range for next
+  time. Cache fills, write-through mutations, and transactions are serialized
+  per HybridDB instance so async selectors and actions do not overlap against
+  the in-memory cache tier.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
-  updates the store and the UI in the same tick.
+  updates the store and the UI in the same tick. `useAsyncSelector` keeps this
+  fast path when a run completes from memory, then promotes to async only if a
+  command yields a promise.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
@@ -64,7 +72,11 @@ npm install @will-be-done/hyperdb
 ```
 
 The React devtool ships separately. It traces every selector run and mutation
-into a browsable call tree, so you can see which index a slow view scanned:
+into a browsable call tree, so you can see which index a slow view scanned. For
+HybridDB reads, select nodes are labeled `in-mem` or `persist` to show whether
+the returned rows came from the memory cache or the primary persistent store.
+When you switch traces, the active detail tab stays selected so comparison stays
+focused:
 
 ```bash
 npm install @will-be-done/hyperdb-devtool

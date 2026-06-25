@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { SubscribableDB, Op } from "../../runtime/subscribable-db";
-import { execAsync, execSync } from "../../core/executor";
+import { execAsync, execMaybeAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import type { Row } from "../../core/primitives";
@@ -378,6 +378,34 @@ export async function runSelectorAsync<TReturn>(
   const result = await execAsync(
     runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
   );
+  if (options.childMemo && visited) {
+    pruneChildMemo(options.childMemo, visited);
+  }
+  return result;
+}
+
+export function runSelectorMaybeAsync<TReturn>(
+  db: HyperDB,
+  gen: () => Generator<unknown, TReturn, unknown>,
+  selectRangeCmds: SelectRangeCmd[] = [],
+  options: RunSelectorOptions = {},
+): TReturn | Promise<TReturn> {
+  selectRangeCmds.splice(0, selectRangeCmds.length);
+
+  const visited = makeVisited(options);
+  const result = execMaybeAsync(
+    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
+  );
+
+  if (result instanceof Promise) {
+    return result.then((value) => {
+      if (options.childMemo && visited) {
+        pruneChildMemo(options.childMemo, visited);
+      }
+      return value;
+    });
+  }
+
   if (options.childMemo && visited) {
     pruneChildMemo(options.childMemo, visited);
   }

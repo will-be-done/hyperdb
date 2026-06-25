@@ -29,9 +29,15 @@ state libraries start to strain:
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today). The runtime reads only the rows a selector touches
   instead of hydrating the whole dataset into memory.
+- **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
+  primary store with an in-memory cache: reads check memory first, fall through
+  to persistent storage on a miss, then cache the covered index range for next
+  time.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
-  updates the store and the UI in the same tick.
+  updates the store and the UI in the same tick. `useAsyncSelector` keeps this
+  fast path when a run completes from memory, then promotes to async only if a
+  command yields a promise.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
@@ -188,15 +194,15 @@ export function App() {
 
 ## Entry points
 
-| Import path                              | Contents                                                                 |
-| ---------------------------------------- | ------------------------------------------------------------------------ |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB` |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                             |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                   |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                      |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                            |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                       |
-| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)             |
+| Import path                              | Contents                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------ |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB` |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                         |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                               |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                  |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                        |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                   |
+| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                         |
 
 ## Learn more
 
