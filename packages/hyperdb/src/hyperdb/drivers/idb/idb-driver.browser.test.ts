@@ -5,9 +5,12 @@ import {
   insert,
 } from "../../commands/action/builders";
 import { selectFrom } from "../../commands/selector/builder";
+import { selectAsync } from "../../commands/selector/selector";
 import { execAsync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import { DB } from "../../runtime/db";
+import { HybridDB } from "../../runtime/hybrid-db";
+import { BptreeInmemDriver } from "../inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
 import { v } from "../../schema/values";
 import { openIndexedDBDriver } from "./idb-driver";
@@ -260,6 +263,119 @@ describe("IdbDriver", () => {
       ).toBe(true);
     } finally {
       logSpy.mockRestore();
+    }
+  });
+
+  it("reuses one active readonly transaction across selector scans", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+    await execAsync(
+      db.insert(tasksTable, [
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+        {
+          id: "task-2",
+          title: "Second",
+          projectId: "project-1",
+          rank: 2,
+        },
+      ]),
+    );
+
+    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+
+    try {
+      const result = await selectAsync(
+        db,
+        (function* () {
+          const byProject = yield* selectFrom(tasksTable, "byProjectRank")
+            .where((q) => q.eq("projectId", "project-1"))
+            .order("asc");
+          const byTitle = yield* selectFrom(tasksTable, "byTitle").where((q) =>
+            q.eq("title", "Second"),
+          );
+
+          return { byProject, byTitle };
+        })(),
+      );
+
+      expect(result.byProject.map((row) => row.id)).toEqual([
+        "task-1",
+        "task-2",
+      ]);
+      expect(result.byTitle.map((row) => row.id)).toEqual(["task-2"]);
+
+      const readonlyCalls = txSpy.mock.calls.filter(
+        ([, mode]) => mode === "readonly",
+      );
+      expect(readonlyCalls).toHaveLength(1);
+      expect(readonlyCalls[0]?.[0]).toEqual(["hyperdb:idbTasks"]);
+    } finally {
+      txSpy.mockRestore();
+    }
+  });
+
+  it("does not open an IDB readonly transaction for cached HybridDB reads", async () => {
+    dbCounter += 1;
+    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    await deleteDatabase(dbName);
+
+    const primaryDriver = await openIndexedDBDriver(dbName);
+    const primary = new DB(primaryDriver);
+    const cache = new DB(new BptreeInmemDriver());
+    const hybrid = new HybridDB(primary, cache);
+
+    await execAsync(hybrid.loadTables([tasksTable]));
+    await execAsync(
+      primary.insert(tasksTable, [
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]),
+    );
+
+    const readProjectTasks = () =>
+      (function* () {
+        return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      })();
+
+    await expect(selectAsync(hybrid, readProjectTasks())).resolves.toEqual([
+      {
+        id: "task-1",
+        title: "First",
+        projectId: "project-1",
+        rank: 1,
+      },
+    ]);
+
+    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+
+    try {
+      await expect(selectAsync(hybrid, readProjectTasks())).resolves.toEqual([
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]);
+
+      expect(
+        txSpy.mock.calls.filter(([, mode]) => mode === "readonly"),
+      ).toHaveLength(0);
+    } finally {
+      txSpy.mockRestore();
+      primaryDriver.close();
+      await deleteDatabase(dbName);
     }
   });
 

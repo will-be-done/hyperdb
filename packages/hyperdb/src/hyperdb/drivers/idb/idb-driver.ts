@@ -34,6 +34,11 @@ type StoredTableMetadata = {
 
 type StoreMode = "readonly" | "readwrite";
 type LockRelease = () => void;
+type ActiveReadonlyTransaction = {
+  tx: IDBTransaction;
+  release: LockRelease;
+  finished: boolean;
+};
 
 export type OpenIndexedDBDriverOptions = {
   indexedDB?: IDBFactory;
@@ -135,6 +140,24 @@ function abortQuietly(tx: IDBTransaction): void {
   } catch {
     // Transaction may already be finished or aborting.
   }
+}
+
+function isInactiveTransactionError(error: unknown): boolean {
+  const name =
+    typeof error === "object" && error !== null && "name" in error
+      ? String((error as { name: unknown }).name)
+      : "";
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : String(error);
+
+  return (
+    name === "TransactionInactiveError" ||
+    /TransactionInactiveError|transaction.*inactive|inactive.*transaction/i.test(
+      message,
+    )
+  );
 }
 
 function tableStoreName(tableName: string): string {
@@ -900,6 +923,7 @@ export class IdbDriver implements DBDriver {
   private readonly options: OpenIndexedDBDriverOptions;
   private tableDefinitions = new Map<string, TableDefinition>();
   private lock = new AsyncReadWriteLock();
+  private activeReadonlyTransaction: ActiveReadonlyTransaction | undefined;
   private closedReason: Error | null = null;
 
   constructor(
@@ -918,6 +942,12 @@ export class IdbDriver implements DBDriver {
   close(reason: Error = new Error("IndexedDB connection is closed")): void {
     if (!this.closedReason) {
       this.closedReason = reason;
+    }
+    if (this.activeReadonlyTransaction) {
+      const active = this.activeReadonlyTransaction;
+      active.finished = true;
+      this.clearReadonlyTransaction(active);
+      abortQuietly(active.tx);
     }
     this.db.close();
   }
@@ -1173,10 +1203,11 @@ export class IdbDriver implements DBDriver {
     run: (tx: IDBTransaction) => Promise<T>,
   ): Generator<DBCmd, T> {
     return yield* unwrapCb(async () => {
-      const release =
-        mode === "readonly"
-          ? await this.lock.acquireRead()
-          : await this.lock.acquireWrite();
+      if (mode === "readonly") {
+        return this.withReadonlyTransaction(run);
+      }
+
+      const release = await this.lock.acquireWrite();
       let tx: IDBTransaction | undefined;
       let done: Promise<void> | undefined;
       const transactionStartedAt = nowMs();
@@ -1221,6 +1252,107 @@ export class IdbDriver implements DBDriver {
         release();
       }
     });
+  }
+
+  private async withReadonlyTransaction<T>(
+    run: (tx: IDBTransaction) => Promise<T>,
+  ): Promise<T> {
+    let canRetryInactiveTransaction = true;
+
+    while (true) {
+      const active = await this.getReadonlyTransaction();
+
+      try {
+        return await run(active.tx);
+      } catch (error) {
+        if (
+          canRetryInactiveTransaction &&
+          isInactiveTransactionError(error)
+        ) {
+          canRetryInactiveTransaction = false;
+          this.clearReadonlyTransaction(active);
+          continue;
+        }
+
+        abortQuietly(active.tx);
+        throw error;
+      }
+    }
+  }
+
+  private async getReadonlyTransaction(): Promise<ActiveReadonlyTransaction> {
+    if (
+      this.activeReadonlyTransaction &&
+      !this.activeReadonlyTransaction.finished
+    ) {
+      return this.activeReadonlyTransaction;
+    }
+
+    const release = await this.lock.acquireRead();
+    const transactionStartedAt = nowMs();
+
+    try {
+      this.throwIfClosed();
+      const tx = this.createTransaction(this.loadedStoreNames(), "readonly");
+      const active: ActiveReadonlyTransaction = {
+        tx,
+        release,
+        finished: false,
+      };
+
+      this.activeReadonlyTransaction = active;
+      logIdbOperation("transaction start", transactionStartedAt, {
+        mode: tx.mode,
+      });
+      void txDone(tx)
+        .then(
+          () => {
+            if (!active.finished) {
+              logIdbOperation("transaction commit", transactionStartedAt, {
+                mode: tx.mode,
+              });
+            }
+          },
+          (error) => {
+            if (!active.finished) {
+              logIdbOperation(
+                "transaction rollback",
+                transactionStartedAt,
+                {
+                  mode: tx.mode,
+                },
+                error,
+              );
+            }
+          },
+        )
+        .finally(() => {
+          if (!active.finished) {
+            active.finished = true;
+          }
+          this.clearReadonlyTransaction(active);
+          active.release();
+        });
+
+      return active;
+    } catch (error) {
+      logIdbOperation(
+        "transaction start",
+        transactionStartedAt,
+        {
+          mode: "readonly",
+        },
+        error,
+      );
+      release();
+      throw error;
+    }
+  }
+
+  private clearReadonlyTransaction(active: ActiveReadonlyTransaction): void {
+    if (this.activeReadonlyTransaction === active) {
+      this.activeReadonlyTransaction = undefined;
+    }
   }
 
   private attachVersionChangeHandler(): void {

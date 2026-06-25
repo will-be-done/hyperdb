@@ -311,7 +311,9 @@ await asyncDispatch(
 
 The IndexedDB driver uses the same storage encoding and sort-key ordering as
 the SQLite driver, so data and index semantics are consistent across the two
-persistent backends.
+persistent backends. Selector reads use readonly IndexedDB transactions; when
+multiple scans happen while the browser keeps a readonly transaction active, the
+driver reuses it instead of opening one transaction per scan.
 
 ## Sync vs. async, in practice
 

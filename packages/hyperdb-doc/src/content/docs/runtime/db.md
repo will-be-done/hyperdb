@@ -112,7 +112,9 @@ range is not cached, it runs the same scan against the persistent primary,
 upserts the returned rows into memory, and records that range as cached for
 later reads. Empty misses are cached too. Limited B-tree reads cache the covered
 prefix or suffix when the runtime can prove the returned rows are enough to
-answer the same limited query from memory.
+answer the same limited query from memory. With an IndexedDB primary, this means
+no readonly IndexedDB transaction is opened until the selector actually falls
+through to the persisted tier.
 
 ```ts
 import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
