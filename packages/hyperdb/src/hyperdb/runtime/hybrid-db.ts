@@ -124,11 +124,14 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
-    yield* withHybridLock(this.state, function* () {
-      yield* this.primary.loadTables(tables);
-      yield* this.cache.loadTables(tables);
-      this.state.cachedIntervals.clear();
-    }.bind(this));
+    yield* withHybridLock(
+      this.state,
+      function* () {
+        yield* this.primary.loadTables(tables);
+        yield* this.cache.loadTables(tables);
+        this.state.cachedIntervals.clear();
+      }.bind(this),
+    );
   }
 
   *beginTx(): Generator<DBCmd, HyperDBTx> {
@@ -160,48 +163,60 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
-    return yield* withHybridLock(this.state, function* () {
-      return yield* hybridIntervalScan(
-        this.primary,
-        this.cache,
-        this.state.cachedIntervals,
-        getCurrentSelectEventForDB(this),
-        table,
-        indexName,
-        clauses,
-        selectOptions,
-      );
-    }.bind(this));
+    return yield* withHybridLock(
+      this.state,
+      function* () {
+        return yield* hybridIntervalScan(
+          this.primary,
+          this.cache,
+          this.state.cachedIntervals,
+          getCurrentSelectEventForDB(this),
+          table,
+          indexName,
+          clauses,
+          selectOptions,
+        );
+      }.bind(this),
+    );
   }
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(this.state, function* () {
-      yield* this.primary.insert(table, records);
-      yield* this.cache.insert(table, records);
-    }.bind(this));
+    yield* withHybridLock(
+      this.state,
+      function* () {
+        yield* this.primary.insert(table, records);
+        yield* this.cache.insert(table, records);
+      }.bind(this),
+    );
   }
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(this.state, function* () {
-      yield* this.primary.upsert(table, records);
-      yield* this.cache.upsert(table, records);
-    }.bind(this));
+    yield* withHybridLock(
+      this.state,
+      function* () {
+        yield* this.primary.upsert(table, records);
+        yield* this.cache.upsert(table, records);
+      }.bind(this),
+    );
   }
 
   *delete<TTable extends TableDefinition>(
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(this.state, function* () {
-      yield* this.primary.delete(table, ids);
-      yield* this.cache.delete(table, ids);
-    }.bind(this));
+    yield* withHybridLock(
+      this.state,
+      function* () {
+        yield* this.primary.delete(table, ids);
+        yield* this.cache.delete(table, ids);
+      }.bind(this),
+    );
   }
 
   mergeTxCoverage(intervals: HybridIntervalCache): void {

@@ -44,6 +44,7 @@ Others:
 1. On release - cp readme.md to hyperdb/readme.md
 
 DB:
+
 1. start readonly transaction for one selector, if not cached data appeared for hybrid db, and reuse it for other selectors too. Also, don't wait commit to finish for readonly txes. It also means that now beginTx() will accpes modes - readonly | readwrite
 2. (? maybe) CoW if new cloned btree appeared. But it still will be locked by idb transaction
 3. Allow disable/enable logging of sqlite/idb. Disabled by default

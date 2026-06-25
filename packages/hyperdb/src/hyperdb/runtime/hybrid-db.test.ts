@@ -330,16 +330,18 @@ describe("HybridDB", () => {
     const scanStarted = deferred();
     const resumeScan = deferred();
     const originalPrimaryScan = DB.prototype.intervalScan.bind(primary);
-    vi.spyOn(primary, "intervalScan").mockImplementation(function* (
-      table,
-      indexName,
-      clauses,
-      selectOptions,
-    ) {
-      scanStarted.resolve();
-      yield* unwrap(resumeScan.promise);
-      return yield* originalPrimaryScan(table, indexName, clauses, selectOptions);
-    });
+    vi.spyOn(primary, "intervalScan").mockImplementation(
+      function* (table, indexName, clauses, selectOptions) {
+        scanStarted.resolve();
+        yield* unwrap(resumeScan.promise);
+        return yield* originalPrimaryScan(
+          table,
+          indexName,
+          clauses,
+          selectOptions,
+        );
+      },
+    );
 
     const readPromise = db.intervalScan(tasksTable, "byValue", [
       { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
@@ -372,16 +374,18 @@ describe("HybridDB", () => {
     const scanStarted = deferred();
     const resumeScan = deferred();
     const originalPrimaryScan = DB.prototype.intervalScan.bind(primary);
-    vi.spyOn(primary, "intervalScan").mockImplementation(function* (
-      table,
-      indexName,
-      clauses,
-      selectOptions,
-    ) {
-      scanStarted.resolve();
-      yield* unwrap(resumeScan.promise);
-      return yield* originalPrimaryScan(table, indexName, clauses, selectOptions);
-    });
+    vi.spyOn(primary, "intervalScan").mockImplementation(
+      function* (table, indexName, clauses, selectOptions) {
+        scanStarted.resolve();
+        yield* unwrap(resumeScan.promise);
+        return yield* originalPrimaryScan(
+          table,
+          indexName,
+          clauses,
+          selectOptions,
+        );
+      },
+    );
 
     const readPromise = traitedDb.intervalScan(tasksTable, "byValue", [
       { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
