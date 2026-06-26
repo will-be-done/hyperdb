@@ -5,14 +5,22 @@ import type { DBCmd } from "../async";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import type { Row } from "../../core/primitives";
-import type { TraceOptions } from "../../core/tracer";
+import {
+  driverTraceContextFromFrameMeta,
+  getDriverTraceContextForDB,
+  withDriverTraceContextTrait,
+  type TraceOptions,
+} from "../../core/tracer";
 import {
   assertValid,
   v,
   type InferObject,
   type Validator,
 } from "../../schema/values";
-import { wrapGeneratorWithTraceMeta } from "../../tracing/metadata";
+import {
+  getGeneratorTraceMeta,
+  wrapGeneratorWithTraceMeta,
+} from "../../tracing/metadata";
 import {
   pruneChildMemo,
   runCommandGenerator,
@@ -354,13 +362,20 @@ function* runCommandGeneratorWithReadonlyTransaction<TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   options: CommandRunnerOptions,
 ): Generator<DBCmd, TReturn, unknown> {
-  const tx = db.canUseReadonlyTransactionsForSelectors()
-    ? yield* db.beginTx("readonly")
+  const runnerDB = withDriverTraceContextTrait(
+    db,
+    driverTraceContextFromFrameMeta(
+      getGeneratorTraceMeta(gen),
+      getDriverTraceContextForDB(db),
+    ),
+  );
+  const tx = runnerDB.canUseReadonlyTransactionsForSelectors()
+    ? yield* runnerDB.beginTx("readonly")
     : undefined;
-  const runnerDB = tx ?? db;
+  const scopedDB = tx ?? runnerDB;
 
   try {
-    return yield* runCommandGenerator(runnerDB, gen, options);
+    return yield* runCommandGenerator(scopedDB, gen, options);
   } finally {
     if (tx) {
       yield* tx.rollback();

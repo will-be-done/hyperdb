@@ -19,8 +19,11 @@ import {
 import type { Op } from "../runtime/ops";
 import {
   anonymousTraceMeta,
+  driverTraceContextFromFrameMeta,
+  getDriverTraceContextForDB,
   getTracerForDB,
   withCurrentSelectEventTrait,
+  withDriverTraceContextTrait,
   withTraceContextTrait,
   type HyperDBTracer,
   type TraceContext,
@@ -211,17 +214,25 @@ export function* runCommandGenerator<TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   options: CommandRunnerOptions = {},
 ): Generator<DBCmd, TReturn, unknown> {
-  const tracer = options.traceContext?.tracer ?? getTracerForDB(db);
+  const generatorMeta = getGeneratorTraceMeta(gen);
+  const driverTraceContext = driverTraceContextFromFrameMeta(
+    generatorMeta,
+    getDriverTraceContextForDB(db),
+  );
+  const driverScopedDB = withDriverTraceContextTrait(db, driverTraceContext);
+  const tracer = options.traceContext?.tracer ?? getTracerForDB(driverScopedDB);
   const traceContext =
     options.traceContext ??
     (options.skipRootTrace
       ? undefined
       : tracer?.startRootTrace(
-          getGeneratorTraceMeta(gen) ?? anonymousTraceMeta(),
-          db,
+          generatorMeta ?? anonymousTraceMeta(),
+          driverScopedDB,
         ));
   const ownsTraceContext = traceContext !== undefined && !options.traceContext;
-  const scopedDB = traceContext ? withTraceContextTrait(db, traceContext) : db;
+  const scopedDB = traceContext
+    ? withTraceContextTrait(driverScopedDB, traceContext)
+    : driverScopedDB;
 
   try {
     let result = gen.next();

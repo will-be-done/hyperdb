@@ -143,7 +143,9 @@ inside a transaction is published to the outer cache only after commit.
 Drivers explicitly report whether selector-scoped readonly transactions are
 supported. When they are, HyperDB uses `beginTx("readonly")`; HybridDB keeps
 that context lazy until a selector misses the cache and reads the persistent
-tier.
+tier. If the browser finishes that readonly transaction between selector scans,
+the current scan reopens it once. Selector and action execution context is
+carried as a trait so persistent drivers can include run names in their logs.
 
 HybridDB serializes cache fills, write-through mutations, coverage updates, and
 transaction lifetimes per instance. This keeps async selector misses and actions

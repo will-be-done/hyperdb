@@ -5,6 +5,7 @@ import type {
   Value,
   WhereClause,
 } from "./primitives";
+import type { DBDriverTraceContext } from "./driver";
 
 export type TraceKind = "action" | "selector" | "unknown";
 export type TraceStatus = "running" | "success" | "error";
@@ -284,6 +285,78 @@ export const withTraceContextTrait = <
   }
 
   return db.withTraits(traceContextTrait(context)) as TDB;
+};
+
+export const driverTraceContextTraitType = "hyperdb.driverTraceContext";
+
+export type DriverTraceContextTrait = Trait & {
+  type: typeof driverTraceContextTraitType;
+  traceContext: DBDriverTraceContext;
+};
+
+export const driverTraceContextTrait = (
+  traceContext: DBDriverTraceContext,
+): DriverTraceContextTrait => ({
+  type: driverTraceContextTraitType,
+  traceContext,
+});
+
+export const isDriverTraceContextTrait = (
+  trait: Trait,
+): trait is DriverTraceContextTrait =>
+  trait.type === driverTraceContextTraitType && "traceContext" in trait;
+
+export const getDriverTraceContextFromTraits = (
+  traits: Trait[],
+): DBDriverTraceContext | undefined => {
+  for (let index = traits.length - 1; index >= 0; index -= 1) {
+    const trait = traits[index];
+    if (trait && isDriverTraceContextTrait(trait)) {
+      return trait.traceContext;
+    }
+  }
+};
+
+export const getDriverTraceContextForDB = (db: {
+  getTraits(): Trait[];
+}): DBDriverTraceContext | undefined =>
+  getDriverTraceContextFromTraits(db.getTraits());
+
+export const driverTraceContextFromFrameMeta = (
+  meta: TraceFrameMeta | undefined,
+  parent?: DBDriverTraceContext,
+): DBDriverTraceContext | undefined => {
+  if (!meta) return undefined;
+
+  return {
+    kind: meta.kind,
+    name: meta.name,
+    runId: meta.id,
+    parentRunId: parent?.runId,
+  };
+};
+
+export const withDriverTraceContextTrait = <
+  TDB extends {
+    getTraits(): Trait[];
+    withTraits(...trait: Trait[]): unknown;
+  },
+>(
+  db: TDB,
+  context: DBDriverTraceContext | undefined,
+): TDB => {
+  if (!context) return db;
+
+  const current = getDriverTraceContextForDB(db);
+  if (
+    current?.runId === context.runId &&
+    current.name === context.name &&
+    current.kind === context.kind
+  ) {
+    return db;
+  }
+
+  return db.withTraits(driverTraceContextTrait(context)) as TDB;
 };
 
 export const currentSelectEventTraitType = "hyperdb.currentSelectEvent";

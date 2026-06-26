@@ -1,14 +1,21 @@
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
 import type { HyperDBTx } from "../core/contracts";
-import type { DBDriverTX, DBTransactionMode } from "../core/driver";
+import type {
+  DBDriverOperationOptions,
+  DBDriverTX,
+  DBTransactionMode,
+} from "../core/driver";
 import type {
   Row,
   SelectOptions,
   Trait,
   WhereClause,
 } from "../core/primitives";
-import type { HyperDBTracerOption } from "../core/tracer";
+import {
+  getDriverTraceContextForDB,
+  type HyperDBTracerOption,
+} from "../core/tracer";
 import { deepFreeze } from "../deep-freeze";
 import {
   normalizeRecordsForDriver,
@@ -38,6 +45,7 @@ function* performScan(
   clauses: WhereClause[],
   options: CodecOptions,
   selectOptions?: SelectOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (clauses.length === 0) {
     throw new Error("scan clauses must be provided");
@@ -61,6 +69,7 @@ function* performScan(
     indexName as string,
     clauses,
     selectOptions || {},
+    driverOptions,
   );
 
   return validateRecordsFromDriver(table, records, options);
@@ -71,10 +80,11 @@ function* performInsert(
   table: TableDefinition,
   records: Row[],
   options: CodecOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (records.length === 0) return;
   const normalizedRecords = normalizeRecordsForDriver(table, records, options);
-  yield* driver.insert(table.tableName, normalizedRecords);
+  yield* driver.insert(table.tableName, normalizedRecords, driverOptions);
 
   if (options.freezeRows) {
     deepFreeze(records);
@@ -87,10 +97,11 @@ function* performUpsert(
   table: TableDefinition,
   records: Row[],
   options: CodecOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (records.length === 0) return;
   const normalizedRecords = normalizeRecordsForDriver(table, records, options);
-  yield* driver.upsert(table.tableName, normalizedRecords);
+  yield* driver.upsert(table.tableName, normalizedRecords, driverOptions);
 
   if (options.freezeRows) {
     deepFreeze(records);
@@ -102,8 +113,9 @@ function* performDelete(
   driver: DBDriverTX,
   table: TableDefinition,
   ids: string[],
+  driverOptions?: DBDriverOperationOptions,
 ) {
-  yield* driver.delete(table.tableName, ids);
+  yield* driver.delete(table.tableName, ids, driverOptions);
 }
 
 export class DBTx implements HyperDBTx {
@@ -221,6 +233,9 @@ export class DBTx implements HyperDBTx {
       clauses,
       this.options,
       selectOptions,
+      {
+        traceContext: getDriverTraceContextForDB(this),
+      },
     ) as Generator<DBCmd, ExtractSchema<TTable>[]>;
   }
 
@@ -232,7 +247,9 @@ export class DBTx implements HyperDBTx {
       throw new Error("Transaction is finished");
     }
 
-    yield* performInsert(this.driver, table, records as Row[], this.options);
+    yield* performInsert(this.driver, table, records as Row[], this.options, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 
   *upsert<TTable extends TableDefinition>(
@@ -243,7 +260,9 @@ export class DBTx implements HyperDBTx {
       throw new Error("Transaction is finished");
     }
 
-    yield* performUpsert(this.driver, table, records as Row[], this.options);
+    yield* performUpsert(this.driver, table, records as Row[], this.options, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 
   *delete<TTable extends TableDefinition>(
@@ -254,6 +273,8 @@ export class DBTx implements HyperDBTx {
       throw new Error("Transaction is finished");
     }
 
-    yield* performDelete(this.driver, table, ids);
+    yield* performDelete(this.driver, table, ids, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 }

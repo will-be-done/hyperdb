@@ -84,6 +84,12 @@ Each run starts synchronously. If the selector completes from memory or cache,
 the result is applied in the same tick; if a command yields a promise, that run
 continues asynchronously.
 
+When the context database wraps a `HybridDB`, `useAsyncSelector` reads the
+HybridDB in-memory cache through React's `useSyncExternalStore` and starts the
+HybridDB selector run in an effect to preload any missing persistent ranges.
+That keeps the render snapshot synchronous while `fetchStatus` reports the
+background preload/refetch.
+
 ```tsx
 const {
   data: tasks = [],

@@ -5,6 +5,7 @@ import type { HyperDB } from "../core/contracts";
 import type {
   BaseDBDriverOperations,
   DBDriver,
+  DBDriverOperationOptions,
   DBTransactionMode,
 } from "../core/driver";
 import type {
@@ -13,7 +14,10 @@ import type {
   Trait,
   WhereClause,
 } from "../core/primitives";
-import type { HyperDBTracerOption } from "../core/tracer";
+import {
+  getDriverTraceContextForDB,
+  type HyperDBTracerOption,
+} from "../core/tracer";
 import { deepFreeze } from "../deep-freeze";
 import {
   DEFAULT_CODEC_OPTIONS,
@@ -77,6 +81,7 @@ function* performScan(
   clauses: WhereClause[],
   options: CodecOptions,
   selectOptions?: SelectOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (clauses.length === 0) {
     throw new Error("scan clauses must be provided");
@@ -100,6 +105,7 @@ function* performScan(
     indexName as string,
     clauses,
     selectOptions || {},
+    driverOptions,
   );
 
   return validateRecordsFromDriver(table, records, options);
@@ -110,10 +116,11 @@ function* performInsert(
   table: TableDefinition,
   records: Row[],
   options: CodecOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (records.length === 0) return;
   const normalizedRecords = normalizeRecordsForDriver(table, records, options);
-  yield* driver.insert(table.tableName, normalizedRecords);
+  yield* driver.insert(table.tableName, normalizedRecords, driverOptions);
 
   if (options.freezeRows) {
     deepFreeze(records);
@@ -126,10 +133,11 @@ function* performUpsert(
   table: TableDefinition,
   records: Row[],
   options: CodecOptions,
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (records.length === 0) return;
   const normalizedRecords = normalizeRecordsForDriver(table, records, options);
-  yield* driver.upsert(table.tableName, normalizedRecords);
+  yield* driver.upsert(table.tableName, normalizedRecords, driverOptions);
 
   if (options.freezeRows) {
     deepFreeze(records);
@@ -141,9 +149,10 @@ function* performDelete(
   driver: BaseDBDriverOperations,
   table: TableDefinition,
   ids: string[],
+  driverOptions?: DBDriverOperationOptions,
 ) {
   if (ids.length === 0) return;
-  yield* driver.delete(table.tableName, ids);
+  yield* driver.delete(table.tableName, ids, driverOptions);
 }
 
 export class DB implements HyperDB {
@@ -207,7 +216,9 @@ export class DB implements HyperDB {
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, DBTx> {
-    const tx = yield* this.driver.beginTx(mode);
+    const tx = yield* this.driver.beginTx(mode, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
     return new DBTx(this, tx);
   }
 
@@ -227,6 +238,9 @@ export class DB implements HyperDB {
       clauses,
       this.options,
       selectOptions,
+      {
+        traceContext: getDriverTraceContextForDB(this),
+      },
     ) as Generator<DBCmd, ExtractSchema<TTable>[]>;
   }
 
@@ -234,20 +248,26 @@ export class DB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ) {
-    yield* performInsert(this.driver, table, records as Row[], this.options);
+    yield* performInsert(this.driver, table, records as Row[], this.options, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 
   *upsert<TTable extends TableDefinition<any, any>>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ) {
-    yield* performUpsert(this.driver, table, records as Row[], this.options);
+    yield* performUpsert(this.driver, table, records as Row[], this.options, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 
   *delete<TTable extends TableDefinition<any, any>>(
     table: TTable,
     ids: string[],
   ) {
-    yield* performDelete(this.driver, table, ids);
+    yield* performDelete(this.driver, table, ids, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
   }
 }

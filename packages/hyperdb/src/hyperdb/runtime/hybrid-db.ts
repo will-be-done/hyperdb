@@ -8,7 +8,9 @@ import {
 } from "../core/primitives";
 import {
   getCurrentSelectEventForDB,
+  getDriverTraceContextForDB,
   type HyperDBTracerOption,
+  withDriverTraceContextTrait,
 } from "../core/tracer";
 import type { DBTransactionMode } from "../core/driver";
 import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
@@ -154,10 +156,18 @@ export class HybridDB implements HyperDB {
     }
 
     const release = yield* acquireHybridLock(this.state);
+    const primary = withDriverTraceContextTrait(
+      this.primary,
+      getDriverTraceContextForDB(this),
+    );
+    const cache = withDriverTraceContextTrait(
+      this.cache,
+      getDriverTraceContextForDB(this),
+    );
     let primaryTx: HyperDBTx | undefined;
     try {
-      primaryTx = yield* this.primary.beginTx("readwrite");
-      const cacheTx = yield* this.cache.beginTx("readwrite");
+      primaryTx = yield* primary.beginTx("readwrite");
+      const cacheTx = yield* cache.beginTx("readwrite");
       return new HybridDBTx(this, primaryTx, cacheTx, release);
     } catch (error) {
       if (primaryTx) {
@@ -183,10 +193,11 @@ export class HybridDB implements HyperDB {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
+    const traceContext = getDriverTraceContextForDB(this);
     return yield* withHybridLock(this.state, function* () {
       return yield* hybridIntervalScan(
-        primary,
-        cache,
+        withDriverTraceContextTrait(primary, traceContext),
+        withDriverTraceContextTrait(cache, traceContext),
         state.cachedIntervals,
         selectEvent,
         table,
@@ -202,9 +213,16 @@ export class HybridDB implements HyperDB {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     const { cache, primary } = this;
+    const traceContext = getDriverTraceContextForDB(this);
     yield* withHybridLock(this.state, function* () {
-      yield* primary.insert(table, records);
-      yield* cache.insert(table, records);
+      yield* withDriverTraceContextTrait(primary, traceContext).insert(
+        table,
+        records,
+      );
+      yield* withDriverTraceContextTrait(cache, traceContext).insert(
+        table,
+        records,
+      );
     });
   }
 
@@ -213,9 +231,16 @@ export class HybridDB implements HyperDB {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     const { cache, primary } = this;
+    const traceContext = getDriverTraceContextForDB(this);
     yield* withHybridLock(this.state, function* () {
-      yield* primary.upsert(table, records);
-      yield* cache.upsert(table, records);
+      yield* withDriverTraceContextTrait(primary, traceContext).upsert(
+        table,
+        records,
+      );
+      yield* withDriverTraceContextTrait(cache, traceContext).upsert(
+        table,
+        records,
+      );
     });
   }
 
@@ -224,9 +249,16 @@ export class HybridDB implements HyperDB {
     ids: string[],
   ): Generator<DBCmd, void> {
     const { cache, primary } = this;
+    const traceContext = getDriverTraceContextForDB(this);
     yield* withHybridLock(this.state, function* () {
-      yield* primary.delete(table, ids);
-      yield* cache.delete(table, ids);
+      yield* withDriverTraceContextTrait(primary, traceContext).delete(
+        table,
+        ids,
+      );
+      yield* withDriverTraceContextTrait(cache, traceContext).delete(
+        table,
+        ids,
+      );
     });
   }
 
@@ -305,18 +337,22 @@ class HybridDBReadonlyTx implements HyperDBTx {
     this.throwIfDone();
     const { cache, state } = this.hybridDB;
     const selectEvent = getCurrentSelectEventForDB(this);
+    const traceContext = getDriverTraceContextForDB(this);
     const getPrimaryForRead = function* (
       this: HybridDBReadonlyTx,
     ): Generator<DBCmd, HyperDB> {
-      if (this.state.primaryTx) return this.state.primaryTx;
+      if (this.state.primaryTx) {
+        return withDriverTraceContextTrait(this.state.primaryTx, traceContext);
+      }
 
       const { primary } = this.hybridDB;
-      const tx = primary.canUseReadonlyTransactionsForSelectors()
-        ? yield* primary.beginTx("readonly")
+      const tracePrimary = withDriverTraceContextTrait(primary, traceContext);
+      const tx = tracePrimary.canUseReadonlyTransactionsForSelectors()
+        ? yield* tracePrimary.beginTx("readonly")
         : undefined;
 
       this.state.primaryTx = tx;
-      return tx ?? primary;
+      return tx ?? tracePrimary;
     }.bind(this);
 
     return yield* withHybridLock(
@@ -324,7 +360,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
       function* () {
         return yield* hybridIntervalScan(
           getPrimaryForRead,
-          cache,
+          withDriverTraceContextTrait(cache, traceContext),
           state.cachedIntervals,
           selectEvent,
           table,
@@ -458,9 +494,10 @@ class HybridDBTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
+    const traceContext = getDriverTraceContextForDB(this);
     return yield* hybridIntervalScan(
-      this.primaryTx,
-      this.cacheTx,
+      withDriverTraceContextTrait(this.primaryTx, traceContext),
+      withDriverTraceContextTrait(this.cacheTx, traceContext),
       this.state.cachedIntervals,
       getCurrentSelectEventForDB(this),
       table,
@@ -475,8 +512,15 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
-    yield* this.primaryTx.insert(table, records);
-    yield* this.cacheTx.insert(table, records);
+    const traceContext = getDriverTraceContextForDB(this);
+    yield* withDriverTraceContextTrait(this.primaryTx, traceContext).insert(
+      table,
+      records,
+    );
+    yield* withDriverTraceContextTrait(this.cacheTx, traceContext).insert(
+      table,
+      records,
+    );
   }
 
   *upsert<TTable extends TableDefinition>(
@@ -484,8 +528,15 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
-    yield* this.primaryTx.upsert(table, records);
-    yield* this.cacheTx.upsert(table, records);
+    const traceContext = getDriverTraceContextForDB(this);
+    yield* withDriverTraceContextTrait(this.primaryTx, traceContext).upsert(
+      table,
+      records,
+    );
+    yield* withDriverTraceContextTrait(this.cacheTx, traceContext).upsert(
+      table,
+      records,
+    );
   }
 
   *delete<TTable extends TableDefinition>(
@@ -493,8 +544,15 @@ class HybridDBTx implements HyperDBTx {
     ids: string[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
-    yield* this.primaryTx.delete(table, ids);
-    yield* this.cacheTx.delete(table, ids);
+    const traceContext = getDriverTraceContextForDB(this);
+    yield* withDriverTraceContextTrait(this.primaryTx, traceContext).delete(
+      table,
+      ids,
+    );
+    yield* withDriverTraceContextTrait(this.cacheTx, traceContext).delete(
+      table,
+      ids,
+    );
   }
 
   *commit(): Generator<DBCmd, void> {

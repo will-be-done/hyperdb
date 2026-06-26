@@ -156,6 +156,12 @@ export class SubscribableDBTx implements HyperDBTx {
     throw new Error("Not supported");
   }
 
+  private delegateTx(): HyperDBTx {
+    return this.traits.length > 0
+      ? (this.txDb.withTraits(...this.traits) as HyperDBTx)
+      : this.txDb;
+  }
+
   withTraits(...traits: Trait[]): HyperDBTx {
     return new SubscribableDBTx(this.subDb, this.txDb, this.state, [
       ...this.traits,
@@ -182,10 +188,12 @@ export class SubscribableDBTx implements HyperDBTx {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
 
-    const txDb =
-      this.traits.length > 0 ? this.txDb.withTraits(...this.traits) : this.txDb;
-
-    return yield* txDb.intervalScan(table, indexName, clauses, selectOptions);
+    return yield* this.delegateTx().intervalScan(
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    );
   }
 
   *insert<TTable extends TableDefinition<any>>(
@@ -210,7 +218,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      yield* this.txDb.insert(table, records);
+      yield* this.delegateTx().insert(table, records);
     } catch (error) {
       if (traceContext && mutationEvent) {
         traceContext.tracer.endMutationEventError(
@@ -300,7 +308,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      for (const oldRecord of yield* this.txDb.intervalScan(
+      for (const oldRecord of yield* this.delegateTx().intervalScan(
         table,
         table.idIndexName,
         upsertRecords.map((r) => ({ eq: [{ col: "id", val: r.id }] })),
@@ -308,7 +316,7 @@ export class SubscribableDBTx implements HyperDBTx {
         previousRecords.set(oldRecord.id, oldRecord);
       }
 
-      yield* this.txDb.upsert(table, upsertRecords);
+      yield* this.delegateTx().upsert(table, upsertRecords);
     } catch (error) {
       if (traceContext && mutationEvent) {
         traceContext.tracer.endMutationEventError(
@@ -376,7 +384,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      for (const oldRecord of yield* this.txDb.intervalScan(
+      for (const oldRecord of yield* this.delegateTx().intervalScan(
         table,
         table.idIndexName,
         ids.map((id) => ({ eq: [{ col: "id", val: id }] })),
@@ -384,7 +392,7 @@ export class SubscribableDBTx implements HyperDBTx {
         deleteOps.push({ type: "delete", table, oldValue: oldRecord });
       }
 
-      yield* this.txDb.delete(table, ids);
+      yield* this.delegateTx().delete(table, ids);
       appendOps(this.operations, deleteOps);
     } catch (error) {
       if (traceContext && mutationEvent) {

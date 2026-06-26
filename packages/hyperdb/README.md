@@ -37,8 +37,11 @@ state libraries start to strain:
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
   fast path when a run completes from memory, then promotes to async only if a
-  command yields a promise. Its async React API returns a React Query-style
-  object with `data`, `status`, `error`, fetching flags, and `refetch()`.
+  command yields a promise. With `HybridDB`, React reads the in-memory cache
+  through `useSyncExternalStore` while the persistent tier preloads missing
+  ranges in the background, so cached data can stay visible during refreshes.
+  Its async React API returns a React Query-style object with `data`, `status`,
+  `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.

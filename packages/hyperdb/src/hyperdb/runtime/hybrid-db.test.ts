@@ -202,6 +202,22 @@ describe("HybridDB", () => {
     expect(lastSelectSource()).toBe("in-mem");
   });
 
+  it("makes HybridDB selector results available to direct in-memory cache reads", async () => {
+    const { hybrid, primary, cache, primaryScanSpy } = await createDBs();
+    const tasks = [createTask(1), createTask(2), createTask(3)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    await expect(selectAsync(hybrid, selectByValue(1, 3))).resolves.toEqual(
+      tasks,
+    );
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+
+    primaryScanSpy.mockClear();
+
+    expect(select(cache, selectByValue(1, 3))).toEqual(tasks);
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
   it("records sources through SubscribableDB-wrapped HybridDB scans", async () => {
     const { hybrid, primary } = await createDBs();
     const db = new SubscribableDB(hybrid);

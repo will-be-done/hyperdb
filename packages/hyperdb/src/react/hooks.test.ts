@@ -18,6 +18,7 @@ const mocks = {
   refs: [] as { current: unknown }[],
   setState: vi.fn(),
   initCachedSelector: vi.fn(),
+  runSelector: vi.fn(),
   runSelectorAsync: vi.fn(),
   runSelectorMaybeAsync: vi.fn(),
   isNeedToRerunRange: vi.fn(),
@@ -90,6 +91,7 @@ describe("useAsyncSelector", () => {
     mocks.refs = [];
     mocks.setState.mockReset();
     mocks.initCachedSelector.mockReset();
+    mocks.runSelector.mockReset();
     mocks.runSelectorAsync.mockReset();
     mocks.runSelectorMaybeAsync.mockReset();
     mocks.isNeedToRerunRange.mockReset();
@@ -99,6 +101,7 @@ describe("useAsyncSelector", () => {
       ...fakeReactHooks,
       useDB: () => mocks.db,
       initCachedSelector: (...args) => mocks.initCachedSelector(...args),
+      runSelector: (...args) => mocks.runSelector(...args),
       runSelectorAsync: (...args) => mocks.runSelectorAsync(...args),
       runSelectorMaybeAsync: (...args) => mocks.runSelectorMaybeAsync(...args),
       isNeedToRerunRange: (...args) => mocks.isNeedToRerunRange(...args),
@@ -270,6 +273,168 @@ describe("useAsyncSelector", () => {
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
     expect(mocks.runSelectorMaybeAsync).not.toHaveBeenCalled();
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("reads HybridDB cache snapshots synchronously while preloading through the async db", async () => {
+    const cacheDB = {
+      beginTx: vi.fn(),
+      intervalScan: vi.fn(),
+    };
+    mocks.db = {
+      ...createMockDB(),
+      db: { cache: cacheDB },
+    } as unknown as MockDB;
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+    const cmd = { table: "tasks", range: "hybrid" };
+
+    mocks.runSelector
+      .mockReturnValueOnce(["cached"])
+      .mockReturnValueOnce(["fresh"]);
+    mocks.runSelectorMaybeAsync.mockImplementation(
+      (_db, gen, cmds: unknown[]) => {
+        cmds.push(cmd);
+        gen();
+        return Promise.resolve(["fresh"]);
+      },
+    );
+
+    const result = useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+
+    expect(result.data).toEqual(["cached"]);
+    expect(result.status).toBe("success");
+    expect(result.isLoading).toBe(false);
+    expect(result.isRefetching).toBe(true);
+    expect(mocks.runSelector).toHaveBeenCalledWith(
+      cacheDB,
+      expect.any(Function),
+      expect.any(Array),
+    );
+    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+
+    await flushPromises();
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(2);
+    expect(mocks.setState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["fresh"],
+        status: "success",
+      }),
+    );
+  });
+
+  it("does not refresh the HybridDB cache snapshot until preload finishes", async () => {
+    const cacheDB = {
+      beginTx: vi.fn(),
+      intervalScan: vi.fn(),
+    };
+    mocks.db = {
+      ...createMockDB(),
+      db: { cache: cacheDB },
+    } as unknown as MockDB;
+    const pending = deferred<string[]>();
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+
+    mocks.runSelector.mockReturnValue(["cached"]);
+    mocks.runSelectorMaybeAsync.mockImplementation(
+      (_db, gen, _cmds: unknown[]) => {
+        gen();
+        return pending.promise;
+      },
+    );
+
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(1);
+
+    await flushPromises();
+    expect(mocks.runSelector).toHaveBeenCalledTimes(1);
+
+    pending.resolve(["fresh"]);
+    await flushPromises();
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a late HybridDB preload after args change cleanup", async () => {
+    const cacheDB = {
+      beginTx: vi.fn(),
+      intervalScan: vi.fn(),
+    };
+    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+      return ["unused"];
+    });
+    const first = deferred<string[]>();
+    const second = deferred<string[]>();
+
+    mocks.runSelector
+      .mockReturnValueOnce(["cached-1"])
+      .mockReturnValueOnce(["cached-2"])
+      .mockReturnValueOnce(["fresh-2"]);
+    mocks.runSelectorMaybeAsync
+      .mockImplementationOnce((_db, gen, _cmds: unknown[]) => {
+        gen();
+        return first.promise;
+      })
+      .mockImplementationOnce((_db, gen, _cmds: unknown[]) => {
+        gen();
+        return second.promise;
+      });
+    mocks.stableSerializeSelectorArgs
+      .mockReturnValueOnce("project-1")
+      .mockReturnValueOnce("project-2");
+    mocks.db = {
+      ...createMockDB(),
+      db: { cache: cacheDB },
+    } as unknown as MockDB;
+
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+    const firstCleanup = mocks.cleanup;
+
+    firstCleanup?.();
+    useAsyncSelector({
+      selector,
+      args: { projectId: "project-2" },
+      defaultValue: [],
+    });
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(2);
+
+    first.resolve(["stale-1"]);
+    await flushPromises();
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(2);
+    expect(mocks.setState).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["stale-1"],
+      }),
+    );
+
+    second.resolve(["fresh-2"]);
+    await flushPromises();
+
+    expect(mocks.runSelector).toHaveBeenCalledTimes(3);
+    expect(mocks.setState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["fresh-2"],
+        status: "success",
+      }),
+    );
   });
 
   it("resolves refetch with the freshly fetched selector result", async () => {
