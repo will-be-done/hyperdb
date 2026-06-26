@@ -165,7 +165,13 @@ export class DBTx implements HyperDBTx {
     return this.options;
   }
 
-  *beginTx(_mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
     if (this.isFinished.val) {
       throw new Error("Transaction is finished");
     }

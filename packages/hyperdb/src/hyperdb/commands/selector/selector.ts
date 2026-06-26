@@ -354,8 +354,8 @@ function* runCommandGeneratorWithReadonlyTransaction<TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   options: CommandRunnerOptions,
 ): Generator<DBCmd, TReturn, unknown> {
-  const tx = db.beginReadonlyTransactionForSelectors
-    ? yield* db.beginReadonlyTransactionForSelectors()
+  const tx = db.canUseReadonlyTransactionsForSelectors()
+    ? yield* db.beginTx("readonly")
     : undefined;
   const runnerDB = tx ?? db;
 
@@ -379,10 +379,10 @@ export function runSelector<TReturn>(
   const visited = makeVisited(options);
   const result = execSync(
     runCommandGeneratorWithReadonlyTransaction(db, gen(), {
-        ...options,
-        selectRangeCmds,
-        visited,
-      }),
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
   if (options.childMemo && visited) {
     pruneChildMemo(options.childMemo, visited);
@@ -401,10 +401,10 @@ export async function runSelectorAsync<TReturn>(
   const visited = makeVisited(options);
   const result = await execAsync(
     runCommandGeneratorWithReadonlyTransaction(db, gen(), {
-        ...options,
-        selectRangeCmds,
-        visited,
-      }),
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
   if (options.childMemo && visited) {
     pruneChildMemo(options.childMemo, visited);

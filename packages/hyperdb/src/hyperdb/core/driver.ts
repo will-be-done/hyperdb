@@ -20,7 +20,7 @@ export type BaseDBDriverOperations = {
 export interface DBDriver extends BaseDBDriverOperations {
   loadTables(table: TableDefinition<any, any>[]): Generator<DBCmd>;
   beginTx(mode?: DBTransactionMode): Generator<DBCmd, DBDriverTX>;
-  canUseReadonlyTransactionsForSelectors?(): boolean;
+  canUseReadonlyTransactionsForSelectors(): boolean;
 }
 
 export interface DBDriverTX extends BaseDBDriverOperations {

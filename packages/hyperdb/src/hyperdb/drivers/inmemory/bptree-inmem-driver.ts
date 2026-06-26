@@ -903,6 +903,10 @@ export class BptreeInmemDriver implements DBDriver {
 
   constructor() {}
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *beginTx(): Generator<DBCmd, DBDriverTX> {
     if (this.isInTransaction) {
       throw new Error("can't run while transaction is in progress");

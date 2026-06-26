@@ -429,6 +429,10 @@ export class AsyncSqlDriver implements DBDriver {
     this.db = db;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *beginTx(): Generator<DBCmd, DBDriverTX> {
     yield* unwrapCb(async () => {
       await this.txAndQueryLock.acquireAsync();

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
-import type { HyperDB, HyperDBTx } from "../core/contracts";
+import type { HyperDB } from "../core/contracts";
 import type {
   BaseDBDriverOperations,
   DBDriver,
@@ -169,15 +169,8 @@ export class DB implements HyperDB {
     return db;
   }
 
-  *beginReadonlyTransactionForSelectors(): Generator<
-    DBCmd,
-    HyperDBTx | undefined
-  > {
-    if (this.driver.canUseReadonlyTransactionsForSelectors?.() !== true) {
-      return undefined;
-    }
-
-    return yield* this.beginTx("readonly");
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.driver.canUseReadonlyTransactionsForSelectors();
   }
 
   getTraits(): Trait[] {

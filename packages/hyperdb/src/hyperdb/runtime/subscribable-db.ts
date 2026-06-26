@@ -148,6 +148,10 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
@@ -159,7 +163,9 @@ export class SubscribableDBTx implements HyperDBTx {
     ]);
   }
 
-  *beginTx(_mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
     this.state.txCounter.val++;
 
     return this;
@@ -511,23 +517,15 @@ export class SubscribableDB implements HyperDB {
     return new SubscribableDBTx(this, yield* this.delegateDB().beginTx(mode));
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.delegateDB().canUseReadonlyTransactionsForSelectors();
+  }
+
   withTraits(...traits: Trait[]): HyperDB {
     const db = new SubscribableDB(this.db);
     db.state = this.state;
     db.traits = [...this.traits, ...traits];
     return db;
-  }
-
-  *beginReadonlyTransactionForSelectors(): Generator<
-    DBCmd,
-    HyperDBTx | undefined
-  > {
-    const delegate = this.delegateDB();
-    const tx = delegate.beginReadonlyTransactionForSelectors
-      ? yield* delegate.beginReadonlyTransactionForSelectors()
-      : undefined;
-
-    return tx ? new SubscribableDBTx(this, tx) : undefined;
   }
 
   getTraits(): Trait[] {

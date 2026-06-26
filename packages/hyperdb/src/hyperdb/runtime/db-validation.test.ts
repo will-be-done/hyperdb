@@ -19,6 +19,10 @@ class RecordingDriver implements DBDriver, DBDriverTX {
   upserted: Row[][] = [];
   scanRows: unknown[] = [];
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(_tables: TableDefinition<any, any>[]): Generator<DBCmd, void> {}
 
   *beginTx(): Generator<DBCmd, DBDriverTX> {

@@ -242,6 +242,10 @@ export class SqlDriver implements DBDriver {
     this.db = db;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *beginTx(): Generator<DBCmd, DBDriverTX> {
     if (this.isInTransaction) {
       throw new Error("can't run while transaction is in progress");

@@ -115,8 +115,8 @@ export class HybridDB implements HyperDB {
     return db;
   }
 
-  *beginReadonlyTransactionForSelectors(): Generator<DBCmd, HyperDBTx> {
-    return new HybridDBReadonlyTx(this);
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.primary.canUseReadonlyTransactionsForSelectors();
   }
 
   getTraits(): Trait[] {
@@ -148,11 +148,9 @@ export class HybridDB implements HyperDB {
     });
   }
 
-  *beginTx(
-    mode: DBTransactionMode = "readwrite",
-  ): Generator<DBCmd, HyperDBTx> {
+  *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
     if (mode === "readonly") {
-      return yield* this.beginReadonlyTransactionForSelectors();
+      return new HybridDBReadonlyTx(this);
     }
 
     const release = yield* acquireHybridLock(this.state);
@@ -279,6 +277,10 @@ class HybridDBReadonlyTx implements HyperDBTx {
     return this.hybridDB.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
@@ -309,26 +311,29 @@ class HybridDBReadonlyTx implements HyperDBTx {
       if (this.state.primaryTx) return this.state.primaryTx;
 
       const { primary } = this.hybridDB;
-      const tx = primary.beginReadonlyTransactionForSelectors
-        ? yield* primary.beginReadonlyTransactionForSelectors()
+      const tx = primary.canUseReadonlyTransactionsForSelectors()
+        ? yield* primary.beginTx("readonly")
         : undefined;
 
       this.state.primaryTx = tx;
       return tx ?? primary;
     }.bind(this);
 
-    return yield* withHybridLock(state, function* () {
-      return yield* hybridIntervalScan(
-        getPrimaryForRead,
-        cache,
-        state.cachedIntervals,
-        selectEvent,
-        table,
-        indexName,
-        clauses,
-        selectOptions,
-      );
-    }.bind(this));
+    return yield* withHybridLock(
+      state,
+      function* () {
+        return yield* hybridIntervalScan(
+          getPrimaryForRead,
+          cache,
+          state.cachedIntervals,
+          selectEvent,
+          table,
+          indexName,
+          clauses,
+          selectOptions,
+        );
+      }.bind(this),
+    );
   }
 
   *insert<TTable extends TableDefinition>(
@@ -425,6 +430,10 @@ class HybridDBTx implements HyperDBTx {
 
   getOptions(): CodecOptions {
     return this.hybridDB.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
+  }
+
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
   }
 
   *loadTables(): Generator<DBCmd, void> {
