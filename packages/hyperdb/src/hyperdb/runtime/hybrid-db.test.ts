@@ -218,6 +218,29 @@ describe("HybridDB", () => {
     expect(primaryScanSpy).not.toHaveBeenCalled();
   });
 
+  it("allows direct cache selector reads while a HybridDB write transaction is active", async () => {
+    const { db, cache } = await createDBs();
+    const original = createTask(1);
+    const updated = { ...original, value: 2, title: "updated" };
+    await db.insert(tasksTable, [original]);
+
+    const tx = await db.beginTx();
+    await tx.upsert(tasksTable, [updated]);
+
+    expect(select(cache, selectByValue(1, 1))).toEqual([original]);
+    expect(select(cache, selectByValue(2, 2))).toEqual([]);
+    await expect(
+      tx.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 2 }] },
+      ]),
+    ).resolves.toEqual([updated]);
+
+    await tx.commit();
+
+    expect(select(cache, selectByValue(1, 1))).toEqual([]);
+    expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
+  });
+
   it("records sources through SubscribableDB-wrapped HybridDB scans", async () => {
     const { hybrid, primary } = await createDBs();
     const db = new SubscribableDB(hybrid);

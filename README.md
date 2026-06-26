@@ -37,12 +37,15 @@ state libraries start to strain:
   to persistent storage on a miss, then cache the covered index range for next
   time. Cache fills, write-through mutations, and transactions are serialized
   per HybridDB instance so async selectors and actions do not overlap against
-  the in-memory cache tier. Drivers explicitly report whether selector readonly
-  transactions are supported; enabled drivers use `beginTx("readonly")` for
-  scoped reuse. With an IndexedDB primary, that readonly transaction starts
-  only when the persistent tier is actually read, and is reopened once if the
-  browser finishes it between scans. IDB operation logs include transaction ids
-  and selector/action names when a run context is available.
+  the in-memory cache tier. The committed cache snapshot remains synchronously
+  readable while a write transaction is active, so React can keep showing cached
+  data without seeing uncommitted writes. Drivers explicitly report whether
+  selector readonly transactions are supported; enabled drivers use
+  `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
+  readonly transaction starts only when the persistent tier is actually read,
+  and is reopened once if the browser finishes it between scans. IDB operation
+  logs include transaction ids and selector/action names when a run context is
+  available.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this

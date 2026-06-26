@@ -140,6 +140,9 @@ Writes go to both tiers in the same operation. That means cached rows stay
 current immediately, while uncached ranges still load lazily on first access.
 Transactions open transactions against both tiers; scan coverage discovered
 inside a transaction is published to the outer cache only after commit.
+Non-transaction reads of the in-memory cache continue to see the last committed
+cache snapshot while a write transaction is active; they do not see uncommitted
+transaction writes.
 Drivers explicitly report whether selector-scoped readonly transactions are
 supported. When they are, HyperDB uses `beginTx("readonly")`; HybridDB keeps
 that context lazy until a selector misses the cache and reads the persistent

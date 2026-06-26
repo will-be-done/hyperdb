@@ -917,6 +917,10 @@ export class BptreeInmemDriver implements DBDriver {
   }
 
   *loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
+    if (this.isInTransaction) {
+      throw new Error("can't run while transaction is in progress");
+    }
+
     for (const tableDef of tables) {
       assertSafeTableDefinition(tableDef);
 
@@ -1022,10 +1026,6 @@ export class BptreeInmemDriver implements DBDriver {
     clauses: WhereClause[],
     selectOptions: SelectOptions,
   ): Generator<DBCmd, Row[]> {
-    if (this.isInTransaction) {
-      throw new Error("can't run while transaction is in progress");
-    }
-
     const tableData = this.tblDatas.get(tableName);
     if (!tableData) {
       throw new Error(`Table ${tableName} not found`);

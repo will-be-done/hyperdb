@@ -88,7 +88,9 @@ When the context database wraps a `HybridDB`, `useAsyncSelector` reads the
 HybridDB in-memory cache through React's `useSyncExternalStore` and starts the
 HybridDB selector run in an effect to preload any missing persistent ranges.
 That keeps the render snapshot synchronous while `fetchStatus` reports the
-background preload/refetch.
+background preload/refetch. If a HybridDB write transaction is active, the
+synchronous cache snapshot still reads the last committed cache state and does
+not expose uncommitted transaction writes.
 
 ```tsx
 const {
