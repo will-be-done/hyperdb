@@ -67,7 +67,8 @@ npm install @will-be-done/hyperdb
 ```
 
 The React devtool ships separately. It traces every selector run and mutation
-into a browsable call tree, so you can see which index a slow view scanned:
+into a browsable call tree, so you can see which index a slow view scanned and
+sort traces by creation time, duration, or rows fetched:
 
 ```bash
 npm install @will-be-done/hyperdb-devtool

@@ -341,6 +341,61 @@ describe("devtool runtime tracing", () => {
     ).toEqual(["running", "fast", "slow"]);
   });
 
+  it("returns traces ordered by fetched rows through HyperDB indexes", () => {
+    const commandEvent = (id: string, resultCount: number) => ({
+      id,
+      frameId: "frame",
+      kind: "select" as const,
+      tableName: "tasks",
+      index: "projectState",
+      where: [],
+      bounds: [],
+      startedAt: 0,
+      status: "success" as const,
+      resultCount,
+    });
+
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "few",
+        name: "few",
+        commandEvents: [commandEvent("few-select", 2)],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "many",
+        name: "many",
+        commandEvents: [
+          commandEvent("many-select-1", 6),
+          commandEvent("many-select-2", 4),
+        ],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "none",
+        name: "none",
+        commandEvents: [],
+      }),
+    );
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(
+            traceRootsRuntimeTable,
+            "byRowsFetched",
+          )
+            .order("desc")
+            .limit(10);
+          return hyperDBTraceStore.resolveTraceRows(rows);
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["many", "few", "none"]);
+  });
+
   it("filters traces by DB through HyperDB indexes and cached state in memory", () => {
     hyperDBTraceStore.addTrace(
       trace({

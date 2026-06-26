@@ -169,8 +169,8 @@ that in a built-in [devtool](/integrations/devtools/).
 
 ![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
 
-Each dispatch and selector run becomes a trace you can sort by duration. Open
-one and you get a full call tree: the selector at the top, every nested
+Each dispatch and selector run becomes a trace you can sort by duration or rows
+fetched. Open one and you get a full call tree: the selector at the top, every nested
 selector it composed, and at the leaves the actual index reads, like
 `select project_categories.byProjectIdOrderToken → 3 rows`, each annotated with
 its own timing and row count. When a view is slow, you can see precisely which

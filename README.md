@@ -84,8 +84,8 @@ The React devtool ships separately. It traces every selector run and mutation
 into a browsable call tree, so you can see which index a slow view scanned. For
 HybridDB reads, select nodes are labeled `in-mem` or `persist` to show whether
 the returned rows came from the memory cache or the primary persistent store.
-When you switch traces, the active detail tab stays selected so comparison stays
-focused:
+You can sort traces by creation time, duration, or rows fetched, and when you
+switch traces, the active detail tab stays selected so comparison stays focused:
 
 ```bash
 npm install @will-be-done/hyperdb-devtool

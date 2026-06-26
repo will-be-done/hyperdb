@@ -56,7 +56,7 @@ export type SerializedValue = {
   value: unknown;
 };
 
-export type TraceSortField = "created" | "duration";
+export type TraceSortField = "created" | "duration" | "rowsFetched";
 export type TraceSortDir = "asc" | "desc";
 export type TraceQueryKind = "selector" | "action";
 
@@ -103,7 +103,9 @@ const traceRootsTable = defineTable("hyperdbTraceRoots", {
   .index("byStartedAt", ["startedAt"])
   .index("byDbStartedAt", ["dbKey", "startedAt"])
   .index("byDurationMs", ["durationMs"])
-  .index("byDbDurationMs", ["dbKey", "durationMs"]);
+  .index("byDbDurationMs", ["dbKey", "durationMs"])
+  .index("byRowsFetched", ["queriedRowCount"])
+  .index("byDbRowsFetched", ["dbKey", "queriedRowCount"]);
 
 export type TraceRootRow = ExtractSchema<typeof traceRootsTable>;
 export const traceRootsRuntimeTable = traceRootsTable;

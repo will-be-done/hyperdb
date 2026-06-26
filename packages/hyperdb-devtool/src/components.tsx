@@ -221,13 +221,23 @@ const kindFilterOptions: {
 
 const sortFieldKey = "hyperdb-devtools-sort-field";
 const sortDirKey = "hyperdb-devtools-sort-dir";
+const traceSortFields: TraceSortField[] = [
+  "created",
+  "duration",
+  "rowsFetched",
+];
+
+const traceSortFieldLabels: Record<TraceSortField, string> = {
+  created: "created",
+  duration: "duration",
+  rowsFetched: "rows fetched",
+};
 
 const readStoredSortField = (): TraceSortField => {
   try {
     if (typeof globalThis.localStorage === "undefined") return "created";
-    return globalThis.localStorage.getItem(sortFieldKey) === "duration"
-      ? "duration"
-      : "created";
+    const field = globalThis.localStorage.getItem(sortFieldKey);
+    return field === "duration" || field === "rowsFetched" ? field : "created";
   } catch {
     return "created";
   }
@@ -2945,8 +2955,10 @@ const DevtoolsPanelInner = ({
   }, []);
 
   const toggleSortField = useCallback(() => {
-    const next: TraceSortField =
-      sortField === "created" ? "duration" : "created";
+    const next =
+      traceSortFields[
+        (traceSortFields.indexOf(sortField) + 1) % traceSortFields.length
+      ] ?? "created";
     setSortField(next);
     writeStoredSortField(next);
   }, [sortField]);
@@ -3081,10 +3093,14 @@ const DevtoolsPanelInner = ({
             <SortButton
               onClick={toggleSortField}
               title="Toggle sort field"
-              aria-label={`Sort by ${sortField}. Click to change.`}
+              aria-label={`Sort by ${
+                traceSortFieldLabels[sortField]
+              }. Click to change.`}
             >
               <SortButtonLabel>Sort</SortButtonLabel>
-              <SortButtonValue>{sortField}</SortButtonValue>
+              <SortButtonValue>
+                {traceSortFieldLabels[sortField]}
+              </SortButtonValue>
             </SortButton>
             <SortDirButton
               onClick={toggleSortDir}

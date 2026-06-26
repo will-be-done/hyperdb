@@ -100,6 +100,59 @@ describe("devtool trace selectors", () => {
     expect(traces.map((item) => item.name)).toEqual(["action-1", "action-2"]);
   });
 
+  it("sorts traces by fetched row count", () => {
+    const commandEvent = (resultCount: number) => ({
+      id: `select-${resultCount}`,
+      frameId: "frame",
+      kind: "select" as const,
+      tableName: "tasks",
+      index: "byProject",
+      where: [],
+      bounds: [],
+      startedAt: 0,
+      status: "success" as const,
+      resultCount,
+    });
+
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "small",
+        name: "small",
+        commandEvents: [commandEvent(2)],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "large",
+        name: "large",
+        commandEvents: [commandEvent(8)],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "medium",
+        name: "medium",
+        commandEvents: [commandEvent(5)],
+      }),
+    );
+
+    const traces = select(
+      hyperDBTraceStore.getDB(),
+      traceStoreTraces({
+        maxTraces: 3,
+        kind: "all",
+        sortField: "rowsFetched",
+        sortDir: "desc",
+      }),
+    );
+
+    expect(traces.map((item) => item.name)).toEqual([
+      "large",
+      "medium",
+      "small",
+    ]);
+  });
+
   it("returns up to the requested limit after skipping cached traces", () => {
     hyperDBTraceStore.addTrace(
       trace({
