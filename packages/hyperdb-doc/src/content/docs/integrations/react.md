@@ -66,13 +66,12 @@ function Tasks({ projectId }: { projectId: string }) {
 
 Options:
 
-| Option         | Description                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `selector`     | The selector to run                                                                              |
-| `args`         | Its arguments (also the cache key)                                                               |
-| `defaultValue` | Value returned before the first result / when disabled                                           |
-| `enabled`      | Set `false` to skip running; returns `defaultValue`                                              |
-| `gcTime`       | Override the cache [garbage-collection time](/database/selectors-reactivity/#garbage-collection) |
+| Option         | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `selector`     | The selector to run                                    |
+| `args`         | Its arguments (also the cache key)                     |
+| `defaultValue` | Value returned before the first result / when disabled |
+| `enabled`      | Set `false` to skip running; returns `defaultValue`    |
 
 ### `useAsyncSelector`
 
@@ -112,7 +111,6 @@ Options:
 | `initialData`          | Initial successful data for the result                                     |
 | `initialDataUpdatedAt` | Timestamp for `initialData`                                                |
 | `placeholderData`      | Temporary data while the selector is still pending                         |
-| `staleTime`            | Time in ms before successful data is considered stale, or `"static"`       |
 | `subscribed`           | Set `false` to avoid automatic runs and DB subscriptions for this instance |
 | `throwOnError`         | Throw render-phase errors to an error boundary when `true` or a predicate  |
 

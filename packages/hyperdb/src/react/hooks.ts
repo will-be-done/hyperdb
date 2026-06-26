@@ -31,7 +31,6 @@ type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   args: SelectorArgs<TSelector>;
   enabled?: true;
   defaultValue?: SelectorReturn<TSelector>;
-  gcTime?: number;
 };
 
 type SyncSelectorMaybeDisabledOptions<TSelector extends AnyObjectSelector> = {
@@ -39,7 +38,6 @@ type SyncSelectorMaybeDisabledOptions<TSelector extends AnyObjectSelector> = {
   args: SelectorArgs<TSelector>;
   enabled: boolean;
   defaultValue: SelectorReturn<TSelector>;
-  gcTime?: number;
 };
 
 export type AsyncSelectorStatus = "pending" | "error" | "success";
@@ -104,7 +102,6 @@ type AsyncSelectorBaseOptions<
         previousValue: SelectorReturn<TSelector> | undefined,
         previousQuery: undefined,
       ) => SelectorReturn<TSelector>);
-  staleTime?: number | "static";
   subscribed?: boolean;
   throwOnError?:
     | boolean
@@ -265,8 +262,40 @@ const createAsyncSelectorState = <TData, TError>(
   };
 };
 
-const getStaleTime = (staleTime: number | "static" | undefined) =>
-  staleTime ?? 0;
+const createUseAsyncSelectorResult = <TData, TError>(
+  queryState: AsyncSelectorState<TData, TError>,
+  options: {
+    enabled: boolean;
+    refetch: UseAsyncSelectorResult<TData, TError>["refetch"];
+  },
+): UseAsyncSelectorResult<TData, TError> => {
+  const isStale = (() => {
+    if (queryState.status !== "success") return true;
+
+    return Date.now() > queryState.dataUpdatedAt;
+  })();
+  const isPending = queryState.status === "pending";
+  const isError = queryState.status === "error";
+  const isFetching = queryState.fetchStatus === "fetching";
+  const isPaused = queryState.fetchStatus === "paused";
+
+  return {
+    ...queryState,
+    isEnabled: options.enabled,
+    isError,
+    isFetching,
+    isInitialLoading: isFetching && isPending,
+    isLoading: isFetching && isPending,
+    isLoadingError: isError && queryState.dataUpdatedAt === 0,
+    isPaused,
+    isPending,
+    isRefetchError: isError && queryState.dataUpdatedAt > 0,
+    isRefetching: isFetching && !isPending,
+    isStale,
+    isSuccess: queryState.status === "success",
+    refetch: options.refetch,
+  };
+};
 
 const defaultHookDeps = {
   useCallback,
@@ -322,10 +351,8 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
       );
     }
 
-    return hookDeps.initCachedSelector(db, input.selector, input.args, {
-      gcTime: input.gcTime,
-    });
-  }, [db, input.selector, argsKey, enabled, input.defaultValue, input.gcTime]);
+    return hookDeps.initCachedSelector(db, input.selector, input.args);
+  }, [db, input.selector, argsKey, enabled, input.defaultValue]);
 
   return hookDeps.useSyncExternalStore(
     selector.subscribe,
@@ -409,34 +436,10 @@ export function useAsyncSelector<
     [],
   );
 
-  const isStale = (() => {
-    if (queryState.status !== "success") return true;
-
-    const staleTime = getStaleTime(input.staleTime);
-    if (staleTime === "static" || staleTime === Infinity) return false;
-
-    return Date.now() - queryState.dataUpdatedAt > staleTime;
-  })();
-  const isPending = queryState.status === "pending";
-  const isError = queryState.status === "error";
-  const isFetching = queryState.fetchStatus === "fetching";
-  const isPaused = queryState.fetchStatus === "paused";
-  const result: UseAsyncSelectorResult<SelectorReturn<TSelector>, TError> = {
-    ...queryState,
-    isEnabled: enabled,
-    isError,
-    isFetching,
-    isInitialLoading: isFetching && isPending,
-    isLoading: isFetching && isPending,
-    isLoadingError: isError && queryState.dataUpdatedAt === 0,
-    isPaused,
-    isPending,
-    isRefetchError: isError && queryState.dataUpdatedAt > 0,
-    isRefetching: isFetching && !isPending,
-    isStale,
-    isSuccess: queryState.status === "success",
+  const result = createUseAsyncSelectorResult(queryState, {
+    enabled,
     refetch,
-  };
+  });
   resultRef.current = result;
 
   hookDeps.useEffect(() => {
@@ -487,7 +490,7 @@ export function useAsyncSelector<
           if (cancelledRef.current) return;
 
           selectRangeCmdsRef.current = cmds;
-          setQueryState((previous) => ({
+          const nextState = setQueryState((previous) => ({
             ...previous,
             data: value,
             dataUpdatedAt: Date.now(),
@@ -500,6 +503,10 @@ export function useAsyncSelector<
             isPlaceholderData: false,
             status: "success",
           }));
+          resultRef.current = createUseAsyncSelectorResult(nextState, {
+            enabled,
+            refetch,
+          });
           promiseController.resolve(value);
           isRunningRef.current = false;
           inFlightResultRef.current = null;
@@ -513,7 +520,7 @@ export function useAsyncSelector<
           if (cancelledRef.current) return;
 
           const typedError = error as TError;
-          setQueryState((previous) => ({
+          const nextState = setQueryState((previous) => ({
             ...previous,
             error: typedError,
             errorUpdatedAt: Date.now(),
@@ -526,6 +533,10 @@ export function useAsyncSelector<
             isPlaceholderData: false,
             status: "error",
           }));
+          resultRef.current = createUseAsyncSelectorResult(nextState, {
+            enabled,
+            refetch,
+          });
           promiseController.reject(error);
           isRunningRef.current = false;
           inFlightResultRef.current = null;
@@ -633,9 +644,9 @@ export function useAsyncSelector<
       isRunningRef.current = false;
       unsubscribe();
     };
-  }, [db, input.selector, argsKey, canFetch]);
+  }, [db, input.selector, argsKey, canFetch, enabled, refetch]);
 
-  if (isError && input.throwOnError) {
+  if (result.isError && input.throwOnError) {
     const shouldThrow =
       typeof input.throwOnError === "function"
         ? input.throwOnError(queryState.error as TError, result)

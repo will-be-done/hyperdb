@@ -126,18 +126,12 @@ describe("useAsyncSelector", () => {
       selector,
       args: { projectId: "project-1" },
       defaultValue: [],
-      gcTime: 30_000,
     });
 
     expect(result).toEqual(["task-1"]);
-    expect(mocks.initCachedSelector).toHaveBeenCalledWith(
-      mocks.db,
-      selector,
-      { projectId: "project-1" },
-      {
-        gcTime: 30_000,
-      },
-    );
+    expect(mocks.initCachedSelector).toHaveBeenCalledWith(mocks.db, selector, {
+      projectId: "project-1",
+    });
   });
 
   it("returns default value for disabled sync selectors without creating cache entries", () => {
@@ -275,6 +269,33 @@ describe("useAsyncSelector", () => {
     expect(result.isEnabled).toBe(false);
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
     expect(mocks.runSelectorMaybeAsync).not.toHaveBeenCalled();
+    expect(mocks.db.subscribe).not.toHaveBeenCalled();
+  });
+
+  it("resolves refetch with the freshly fetched selector result", async () => {
+    const pending = deferred<string[]>();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    mocks.runSelectorMaybeAsync.mockReturnValue(pending.promise);
+
+    const result = useAsyncSelector({
+      selector,
+      args: {},
+      initialData: ["stale"],
+      subscribed: false,
+    });
+
+    const refetchPromise = result.refetch();
+    pending.resolve(["fresh"]);
+    await flushPromises();
+    const refetchResult = await refetchPromise;
+
+    expect(refetchResult.data).toEqual(["fresh"]);
+    expect(refetchResult.status).toBe("success");
+    expect(refetchResult.isSuccess).toBe(true);
+    expect(refetchResult.isFetching).toBe(false);
+    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
   });
 
