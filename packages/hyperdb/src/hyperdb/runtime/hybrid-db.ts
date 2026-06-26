@@ -10,6 +10,7 @@ import {
   getCurrentSelectEventForDB,
   type HyperDBTracerOption,
 } from "../core/tracer";
+import type { DBTransactionMode } from "../core/driver";
 import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
@@ -38,6 +39,12 @@ type HybridDBTxState = {
   releaseLock: () => void;
 };
 
+type HybridReadonlyTxState = {
+  primaryTx?: HyperDBTx;
+  rollbacked: RefVar<boolean>;
+  txCounter: RefVar<number>;
+};
+
 const createHybridDBState = (): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
   lock: new AwaitLock(),
@@ -49,6 +56,11 @@ const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
   rollbacked: refVar(false),
   txCounter: refVar(1),
   releaseLock,
+});
+
+const createHybridReadonlyTxState = (): HybridReadonlyTxState => ({
+  rollbacked: refVar(false),
+  txCounter: refVar(1),
 });
 
 export type HybridDBOptions = {
@@ -86,7 +98,7 @@ export class HybridDB implements HyperDB {
   primary: HyperDB;
   cache: HyperDB;
   traits: Trait[] = [];
-  private state: HybridDBState;
+  state: HybridDBState;
 
   constructor(primary: HyperDB, cache: HyperDB, options: HybridDBOptions = {}) {
     this.primary = primary;
@@ -101,6 +113,10 @@ export class HybridDB implements HyperDB {
     });
     db.state = this.state;
     return db;
+  }
+
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.primary.canUseReadonlyTransactionsForSelectors();
   }
 
   getTraits(): Trait[] {
@@ -124,22 +140,24 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.loadTables(tables);
-        yield* this.cache.loadTables(tables);
-        this.state.cachedIntervals.clear();
-      }.bind(this),
-    );
+    const { cache, primary, state } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.loadTables(tables);
+      yield* cache.loadTables(tables);
+      state.cachedIntervals.clear();
+    });
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    if (mode === "readonly") {
+      return new HybridDBReadonlyTx(this);
+    }
+
     const release = yield* acquireHybridLock(this.state);
     let primaryTx: HyperDBTx | undefined;
     try {
-      primaryTx = yield* this.primary.beginTx();
-      const cacheTx = yield* this.cache.beginTx();
+      primaryTx = yield* this.primary.beginTx("readwrite");
+      const cacheTx = yield* this.cache.beginTx("readwrite");
       return new HybridDBTx(this, primaryTx, cacheTx, release);
     } catch (error) {
       if (primaryTx) {
@@ -163,14 +181,152 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    const { cache, primary, state } = this;
+    const selectEvent = getCurrentSelectEventForDB(this);
+    return yield* withHybridLock(this.state, function* () {
+      return yield* hybridIntervalScan(
+        primary,
+        cache,
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+      );
+    });
+  }
+
+  *insert<TTable extends TableDefinition>(
+    table: TTable,
+    records: ExtractSchema<TTable>[],
+  ): Generator<DBCmd, void> {
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.insert(table, records);
+      yield* cache.insert(table, records);
+    });
+  }
+
+  *upsert<TTable extends TableDefinition>(
+    table: TTable,
+    records: ExtractSchema<TTable>[],
+  ): Generator<DBCmd, void> {
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.upsert(table, records);
+      yield* cache.upsert(table, records);
+    });
+  }
+
+  *delete<TTable extends TableDefinition>(
+    table: TTable,
+    ids: string[],
+  ): Generator<DBCmd, void> {
+    const { cache, primary } = this;
+    yield* withHybridLock(this.state, function* () {
+      yield* primary.delete(table, ids);
+      yield* cache.delete(table, ids);
+    });
+  }
+
+  mergeTxCoverage(intervals: HybridIntervalCache): void {
+    mergeCoverageMaps(this.state.cachedIntervals, intervals);
+  }
+}
+
+class HybridDBReadonlyTx implements HyperDBTx {
+  private hybridDB: HybridDB;
+  private state: HybridReadonlyTxState;
+  private traits: Trait[];
+
+  constructor(
+    hybridDB: HybridDB,
+    state: HybridReadonlyTxState = createHybridReadonlyTxState(),
+    traits: Trait[] = [],
+  ) {
+    this.hybridDB = hybridDB;
+    this.state = state;
+    this.traits = traits;
+  }
+
+  withTraits(...traits: Trait[]): HyperDBTx {
+    return new HybridDBReadonlyTx(this.hybridDB, this.state, [
+      ...this.traits,
+      ...traits,
+    ]);
+  }
+
+  getTraits(): Trait[] {
+    return [...this.traits, ...this.hybridDB.getTraits()];
+  }
+
+  getId(): string {
+    return this.hybridDB.getId();
+  }
+
+  getDBName(): string | undefined {
+    return this.hybridDB.getDBName?.();
+  }
+
+  getTracer(): HyperDBTracerOption | undefined {
+    return this.hybridDB.getTracer?.();
+  }
+
+  getOptions(): CodecOptions {
+    return this.hybridDB.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
+  }
+
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
+  *loadTables(): Generator<DBCmd, void> {
+    throw new Error("Not supported");
+  }
+
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
+    this.throwIfDone();
+    this.state.txCounter.val++;
+    return this;
+  }
+
+  *intervalScan<
+    TTable extends TableDefinition,
+    K extends keyof ExtractIndexes<TTable>,
+  >(
+    table: TTable,
+    indexName: K,
+    clauses: WhereClause[],
+    selectOptions?: SelectOptions,
+  ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfDone();
+    const { cache, state } = this.hybridDB;
+    const selectEvent = getCurrentSelectEventForDB(this);
+    const getPrimaryForRead = function* (
+      this: HybridDBReadonlyTx,
+    ): Generator<DBCmd, HyperDB> {
+      if (this.state.primaryTx) return this.state.primaryTx;
+
+      const { primary } = this.hybridDB;
+      const tx = primary.canUseReadonlyTransactionsForSelectors()
+        ? yield* primary.beginTx("readonly")
+        : undefined;
+
+      this.state.primaryTx = tx;
+      return tx ?? primary;
+    }.bind(this);
+
     return yield* withHybridLock(
-      this.state,
+      state,
       function* () {
         return yield* hybridIntervalScan(
-          this.primary,
-          this.cache,
-          this.state.cachedIntervals,
-          getCurrentSelectEventForDB(this),
+          getPrimaryForRead,
+          cache,
+          state.cachedIntervals,
+          selectEvent,
           table,
           indexName,
           clauses,
@@ -181,46 +337,45 @@ export class HybridDB implements HyperDB {
   }
 
   *insert<TTable extends TableDefinition>(
-    table: TTable,
-    records: ExtractSchema<TTable>[],
+    _table: TTable,
+    _records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.insert(table, records);
-        yield* this.cache.insert(table, records);
-      }.bind(this),
-    );
+    throw new Error("Cannot write through a readonly transaction");
   }
 
   *upsert<TTable extends TableDefinition>(
-    table: TTable,
-    records: ExtractSchema<TTable>[],
+    _table: TTable,
+    _records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.upsert(table, records);
-        yield* this.cache.upsert(table, records);
-      }.bind(this),
-    );
+    throw new Error("Cannot write through a readonly transaction");
   }
 
   *delete<TTable extends TableDefinition>(
-    table: TTable,
-    ids: string[],
+    _table: TTable,
+    _ids: string[],
   ): Generator<DBCmd, void> {
-    yield* withHybridLock(
-      this.state,
-      function* () {
-        yield* this.primary.delete(table, ids);
-        yield* this.cache.delete(table, ids);
-      }.bind(this),
-    );
+    throw new Error("Cannot write through a readonly transaction");
   }
 
-  mergeTxCoverage(intervals: HybridIntervalCache): void {
-    mergeCoverageMaps(this.state.cachedIntervals, intervals);
+  *commit(): Generator<DBCmd, void> {
+    yield* this.rollback();
+  }
+
+  *rollback(): Generator<DBCmd, void> {
+    this.throwIfDone();
+    this.state.txCounter.val--;
+    if (this.state.txCounter.val !== 0) return;
+
+    this.state.rollbacked.val = true;
+    if (this.state.primaryTx) {
+      yield* this.state.primaryTx.rollback();
+    }
+  }
+
+  private throwIfDone(): void {
+    if (this.state.rollbacked.val) {
+      throw new Error("Cannot modify a rollbacked tx");
+    }
   }
 }
 
@@ -277,11 +432,17 @@ class HybridDBTx implements HyperDBTx {
     return this.hybridDB.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
     this.state.txCounter.val++;
     return this;

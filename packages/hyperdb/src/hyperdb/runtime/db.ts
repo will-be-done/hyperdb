@@ -2,7 +2,11 @@
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
 import type { HyperDB } from "../core/contracts";
-import type { BaseDBDriverOperations, DBDriver } from "../core/driver";
+import type {
+  BaseDBDriverOperations,
+  DBDriver,
+  DBTransactionMode,
+} from "../core/driver";
 import type {
   Row,
   SelectOptions,
@@ -165,6 +169,10 @@ export class DB implements HyperDB {
     return db;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.driver.canUseReadonlyTransactionsForSelectors();
+  }
+
   getTraits(): Trait[] {
     return this.traits;
   }
@@ -198,8 +206,8 @@ export class DB implements HyperDB {
     yield* this.driver.loadTables(tables);
   }
 
-  *beginTx(): Generator<DBCmd, DBTx> {
-    const tx = yield* this.driver.beginTx();
+  *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, DBTx> {
+    const tx = yield* this.driver.beginTx(mode);
     return new DBTx(this, tx);
   }
 

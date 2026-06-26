@@ -9,6 +9,7 @@ import type {
 import { runCommandGenerator } from "../commands/runner";
 import type { DBCmd } from "../commands/async";
 import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
+import type { DBTransactionMode } from "../core/driver";
 // import { collectAll } from "../commands/async";
 import type {
   ExtractIndexes,
@@ -147,6 +148,10 @@ export class SubscribableDBTx implements HyperDBTx {
     return this.subDb.getOptions?.() ?? DEFAULT_CODEC_OPTIONS;
   }
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
@@ -158,7 +163,9 @@ export class SubscribableDBTx implements HyperDBTx {
     ]);
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
+  *beginTx(
+    _mode: DBTransactionMode = "readwrite",
+  ): Generator<DBCmd, HyperDBTx> {
     this.state.txCounter.val++;
 
     return this;
@@ -456,6 +463,7 @@ export class SubscribableDB implements HyperDB {
   private state: SubscribableDBState;
 
   constructor(db: HyperDB);
+  constructor(db: HyperDB, state: SubscribableDBState, traits?: Trait[]);
   constructor(
     db: HyperDB,
     state: SubscribableDBState = createSubscribableDBState(),
@@ -505,8 +513,12 @@ export class SubscribableDB implements HyperDB {
     return this.db.loadTables(tables);
   }
 
-  *beginTx(): Generator<DBCmd, HyperDBTx> {
-    return new SubscribableDBTx(this, yield* this.delegateDB().beginTx());
+  *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    return new SubscribableDBTx(this, yield* this.delegateDB().beginTx(mode));
+  }
+
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return this.delegateDB().canUseReadonlyTransactionsForSelectors();
   }
 
   withTraits(...traits: Trait[]): HyperDB {

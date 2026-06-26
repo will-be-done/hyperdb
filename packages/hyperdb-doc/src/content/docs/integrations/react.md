@@ -66,31 +66,70 @@ function Tasks({ projectId }: { projectId: string }) {
 
 Options:
 
-| Option         | Description                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `selector`     | The selector to run                                                                              |
-| `args`         | Its arguments (also the cache key)                                                               |
-| `defaultValue` | Value returned before the first result / when disabled                                           |
-| `enabled`      | Set `false` to skip running; returns `defaultValue`                                              |
-| `gcTime`       | Override the cache [garbage-collection time](/database/selectors-reactivity/#garbage-collection) |
+| Option         | Description                                            |
+| -------------- | ------------------------------------------------------ |
+| `selector`     | The selector to run                                    |
+| `args`         | Its arguments (also the cache key)                     |
+| `defaultValue` | Value returned before the first result / when disabled |
+| `enabled`      | Set `false` to skip running; returns `defaultValue`    |
 
 ### `useAsyncSelector`
 
-For asynchronous drivers (IndexedDB, async SQLite). Same shape, but the result
-arrives asynchronously, so it returns `defaultValue` (or `undefined`) until the
-first run resolves, and re-runs on relevant changes.
+For asynchronous drivers (IndexedDB, async SQLite). It accepts the same
+`selector` and `args` identity as `useSyncSelector`, but returns a
+React Query-style result object so loading, error, and manual refetch states are
+explicit.
 
 Each run starts synchronously. If the selector completes from memory or cache,
 the result is applied in the same tick; if a command yields a promise, that run
 continues asynchronously.
 
 ```tsx
-const tasks = useAsyncSelector({
+const {
+  data: tasks = [],
+  error,
+  isFetching,
+  isLoading,
+  isError,
+  refetch,
+  status,
+} = useAsyncSelector({
   selector: projectTasks,
   args: { projectId },
   defaultValue: [],
 });
 ```
+
+Options:
+
+| Option                 | Description                                                                |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `selector`             | The selector to run                                                        |
+| `args`                 | Its arguments (also the reactive identity)                                 |
+| `enabled`              | Set `false` to skip automatic runs; call `refetch()` to run manually       |
+| `defaultValue`         | Compatibility alias for placeholder data before the first resolved run     |
+| `initialData`          | Initial successful data for the result                                     |
+| `initialDataUpdatedAt` | Timestamp for `initialData`                                                |
+| `placeholderData`      | Temporary data while the selector is still pending                         |
+| `subscribed`           | Set `false` to avoid automatic runs and DB subscriptions for this instance |
+| `throwOnError`         | Throw render-phase errors to an error boundary when `true` or a predicate  |
+
+Returns:
+
+| Field                                                 | Description                                                                     |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `data`                                                | Last successful selector result, placeholder data, initial data, or `undefined` |
+| `status`                                              | `"pending"`, `"success"`, or `"error"`                                          |
+| `fetchStatus`                                         | `"fetching"` or `"idle"` (`"paused"` is reserved for query compatibility)       |
+| `error`                                               | Last selector error, or `null`                                                  |
+| `dataUpdatedAt` / `errorUpdatedAt`                    | Timestamps for the last success or error                                        |
+| `isPending` / `isSuccess` / `isError`                 | Status booleans                                                                 |
+| `isFetching` / `isLoading` / `isRefetching`           | Fetching booleans, matching React Query naming                                  |
+| `isLoadingError` / `isRefetchError`                   | Distinguish first-load failures from refresh failures                           |
+| `isPlaceholderData` / `isStale` / `isEnabled`         | Extra query-state booleans                                                      |
+| `failureCount` / `failureReason` / `errorUpdateCount` | Failure counters and reason                                                     |
+| `promise`                                             | Promise for the current run's data                                              |
+| `refetch(options)`                                    | Manually rerun the selector; pass `{ throwOnError: true }` to reject on error   |
 
 ## Writing
 
@@ -141,7 +180,7 @@ const handleClick = () => {
 | ------------------------ | ------------------------------ | ---------------------------- |
 | `useDB()`                | the `SubscribableDB`           | accessing the DB directly    |
 | `useSyncSelector(opts)`  | the selector result            | reactive read, sync drivers  |
-| `useAsyncSelector(opts)` | the result or default          | reactive read, async drivers |
+| `useAsyncSelector(opts)` | React Query-style result       | reactive read, async drivers |
 | `useDispatch()`          | `(action) => TReturn`          | write, sync drivers          |
 | `useAsyncDispatch()`     | `(action) => Promise<TReturn>` | write, async drivers         |
 | `useSelect()`            | `(gen) => TReturn`             | one-off read, sync drivers   |

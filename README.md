@@ -37,12 +37,16 @@ state libraries start to strain:
   to persistent storage on a miss, then cache the covered index range for next
   time. Cache fills, write-through mutations, and transactions are serialized
   per HybridDB instance so async selectors and actions do not overlap against
-  the in-memory cache tier.
+  the in-memory cache tier. Drivers explicitly report whether selector readonly
+  transactions are supported; enabled drivers use `beginTx("readonly")` for
+  scoped reuse. With an IndexedDB primary, that readonly transaction starts
+  only when the persistent tier is actually read.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
   fast path when a run completes from memory, then promotes to async only if a
-  command yields a promise.
+  command yields a promise. Its async React API returns a React Query-style
+  object with `data`, `status`, `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.

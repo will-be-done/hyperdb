@@ -58,8 +58,6 @@ initCachedSelector(db, projectTasks, { projectId: "p1" }, { gcTime: 30_000 });
 initCachedSelector(db, projectTasks, { projectId: "p1" }, { gcTime: 0 });
 ```
 
-In React, pass `gcTime` to [`useSyncSelector`](/integrations/react/).
-
 ## Memoization controls
 
 Selectors take a `memoization` option:

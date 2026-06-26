@@ -81,6 +81,10 @@ class FakeAsyncDriverTx implements DBDriverTX {
 class FakeAsyncDriver implements DBDriver {
   private readonly driver = new BptreeInmemDriver();
 
+  canUseReadonlyTransactionsForSelectors(): boolean {
+    return false;
+  }
+
   *loadTables(tables: Parameters<DBDriver["loadTables"]>[0]) {
     yield* unwrap(Promise.resolve());
     yield* this.driver.loadTables(tables);

@@ -114,7 +114,9 @@ later reads. Empty misses are cached too. Limited B-tree reads cache the covered
 prefix or suffix when the runtime can prove the returned rows are enough to
 answer the same limited query from memory. With an IndexedDB primary, this means
 no readonly IndexedDB transaction is opened until the selector actually falls
-through to the persisted tier.
+through to the persisted tier. If the persistent tier is read, readonly
+transaction reuse stays scoped to that selector run, so concurrent selector runs
+do not share one IndexedDB transaction.
 
 ```ts
 import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
@@ -138,6 +140,10 @@ Writes go to both tiers in the same operation. That means cached rows stay
 current immediately, while uncached ranges still load lazily on first access.
 Transactions open transactions against both tiers; scan coverage discovered
 inside a transaction is published to the outer cache only after commit.
+Drivers explicitly report whether selector-scoped readonly transactions are
+supported. When they are, HyperDB uses `beginTx("readonly")`; HybridDB keeps
+that context lazy until a selector misses the cache and reads the persistent
+tier.
 
 HybridDB serializes cache fills, write-through mutations, coverage updates, and
 transaction lifetimes per instance. This keeps async selector misses and actions

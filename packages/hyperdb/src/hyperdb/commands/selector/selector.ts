@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { SubscribableDB, Op } from "../../runtime/subscribable-db";
 import { execAsync, execMaybeAsync, execSync } from "../../core/executor";
+import type { DBCmd } from "../async";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import type { Row } from "../../core/primitives";
@@ -348,6 +349,25 @@ type RunSelectorOptions = Pick<CommandRunnerOptions, "ops" | "childMemo">;
 const makeVisited = (options: RunSelectorOptions): ChildVisited | undefined =>
   options.childMemo ? new Map() : undefined;
 
+function* runCommandGeneratorWithReadonlyTransaction<TReturn>(
+  db: HyperDB,
+  gen: Generator<unknown, TReturn, unknown>,
+  options: CommandRunnerOptions,
+): Generator<DBCmd, TReturn, unknown> {
+  const tx = db.canUseReadonlyTransactionsForSelectors()
+    ? yield* db.beginTx("readonly")
+    : undefined;
+  const runnerDB = tx ?? db;
+
+  try {
+    return yield* runCommandGenerator(runnerDB, gen, options);
+  } finally {
+    if (tx) {
+      yield* tx.rollback();
+    }
+  }
+}
+
 export function runSelector<TReturn>(
   db: HyperDB,
   gen: () => Generator<unknown, TReturn, unknown>,
@@ -358,7 +378,11 @@ export function runSelector<TReturn>(
 
   const visited = makeVisited(options);
   const result = execSync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
+    runCommandGeneratorWithReadonlyTransaction(db, gen(), {
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
   if (options.childMemo && visited) {
     pruneChildMemo(options.childMemo, visited);
@@ -376,7 +400,11 @@ export async function runSelectorAsync<TReturn>(
 
   const visited = makeVisited(options);
   const result = await execAsync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
+    runCommandGeneratorWithReadonlyTransaction(db, gen(), {
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
   if (options.childMemo && visited) {
     pruneChildMemo(options.childMemo, visited);
@@ -394,7 +422,11 @@ export function runSelectorMaybeAsync<TReturn>(
 
   const visited = makeVisited(options);
   const result = execMaybeAsync(
-    runCommandGenerator(db, gen(), { ...options, selectRangeCmds, visited }),
+    runCommandGeneratorWithReadonlyTransaction(db, gen(), {
+      ...options,
+      selectRangeCmds,
+      visited,
+    }),
   );
 
   if (result instanceof Promise) {
