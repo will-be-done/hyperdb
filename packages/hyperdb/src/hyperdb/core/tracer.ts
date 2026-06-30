@@ -350,6 +350,7 @@ export const withDriverTraceContextTrait = <
   const current = getDriverTraceContextForDB(db);
   if (
     current?.runId === context.runId &&
+    current.parentRunId === context.parentRunId &&
     current.name === context.name &&
     current.kind === context.kind
   ) {

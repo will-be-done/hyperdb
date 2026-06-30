@@ -545,6 +545,28 @@ describe("useAsyncSelector", () => {
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
   });
 
+  it("does not create an active sync cache snapshot when unsubscribed", () => {
+    mocks.db = Object.assign(createMockDB(), {
+      cache: {
+        beginTx: vi.fn(),
+        intervalScan: vi.fn(),
+      },
+    }) as unknown as MockDB;
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+
+    useAsyncSelector({
+      selector,
+      args: {},
+      defaultValue: [],
+      subscribed: false,
+    });
+
+    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.db.subscribe).not.toHaveBeenCalled();
+  });
+
   it("applies fully synchronous async selector runs without waiting for a promise turn", () => {
     const cmd = { table: "tasks", range: "sync" };
     const selector = vi.fn(function* selector(_args: { projectId: string }) {

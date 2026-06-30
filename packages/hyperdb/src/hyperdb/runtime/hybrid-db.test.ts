@@ -368,6 +368,51 @@ describe("HybridDB", () => {
     );
   });
 
+  it("throws for preloadTables inside HybridDB transactions", async () => {
+    const { hybrid } = await createDBs();
+    const writeTx = await execAsync(hybrid.beginTx());
+    try {
+      await expect(
+        execAsync(
+          writeTx.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(writeTx.rollback());
+    }
+
+    const readonlyTx = await execAsync(hybrid.beginTx("readonly"));
+    try {
+      await expect(
+        execAsync(
+          readonlyTx.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(readonlyTx.rollback());
+    }
+
+    const subscribable = new SubscribableDB(hybrid);
+    const subscribableTx = await execAsync(subscribable.beginTx());
+    try {
+      await expect(
+        execAsync(
+          subscribableTx.preloadTables([
+            { table: tasksTable, scanIndex: "byIds" },
+          ]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(subscribableTx.rollback());
+    }
+  });
+
   it("allows direct cache selector reads while a HybridDB write transaction is active", async () => {
     const { db, cache } = await createDBs();
     const original = createTask(1);

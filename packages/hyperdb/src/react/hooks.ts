@@ -460,7 +460,8 @@ export function useAsyncSelector<
     ? hookDeps.stableSerializeSelectorArgs(input.args)
     : undefined;
   const syncSnapshotStore = hookDeps.useMemo(() => {
-    const cacheDB = enabled ? getSubscribableHybridCacheDB(db) : undefined;
+    const cacheDB =
+      enabled && subscribed ? getSubscribableHybridCacheDB(db) : undefined;
     if (!cacheDB) {
       return createInactiveSyncSelectorSnapshotStore<
         SelectorReturn<TSelector>
@@ -473,7 +474,7 @@ export function useAsyncSelector<
       initCachedSelector: hookDeps.initCachedSelector,
       selector: input.selector,
     });
-  }, [db, input.selector, argsKey, enabled]);
+  }, [db, input.selector, argsKey, enabled, subscribed]);
   const syncSnapshot = hookDeps.useSyncExternalStore(
     syncSnapshotStore.subscribe,
     syncSnapshotStore.getSnapshot,

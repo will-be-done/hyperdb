@@ -5,9 +5,11 @@ import {
   initSelector,
   initCachedSelector,
   preloadSelector,
+  runCachedSelectorMaybeAsync,
   select,
   selectAsync,
 } from "./selector";
+import { unwrap } from "../async";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
@@ -104,6 +106,15 @@ const createTestDB = (
   const testDb = new SubscribableDB(new DB(new BptreeInmemDriver()));
   execSync(testDb.loadTables(tables));
   return testDb;
+};
+
+const deferred = <T>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+
+  return { promise, resolve };
 };
 
 const makeGroupRows = (
@@ -736,6 +747,73 @@ describe("selector", () => {
       { id: "matching", projectId: "project-1", orderToken: "a" },
     ]);
     expect(runCount).toBe(2);
+  });
+
+  test("async cached selector refresh stays invalidated when revision changes mid-flight", async () => {
+    const asyncRefreshTasksTable = defineTable("asyncRefreshTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      orderToken: v.string(),
+    }).index("projectOrder", ["projectId", "orderToken"]);
+    const testDb = createTestDB(asyncRefreshTasksTable);
+    const refreshGate = deferred<void>();
+    let runCount = 0;
+
+    const projectTasks = selector({
+      name: "asyncRefreshProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* projectTasks({ projectId }) {
+        runCount++;
+        const rows = yield* selectFrom(
+          asyncRefreshTasksTable,
+          "projectOrder",
+        ).where((q) => q.eq("projectId", projectId));
+
+        if (runCount === 2) {
+          yield* unwrap(refreshGate.promise);
+        }
+
+        return rows;
+      },
+    });
+
+    expect(
+      runCachedSelectorMaybeAsync(testDb, projectTasks, {
+        projectId: "project-1",
+      }),
+    ).toEqual([]);
+
+    execSync(
+      testDb.insert(asyncRefreshTasksTable, [
+        { id: "first", projectId: "project-1", orderToken: "a" },
+      ]),
+    );
+
+    const refresh = runCachedSelectorMaybeAsync(testDb, projectTasks, {
+      projectId: "project-1",
+    });
+    expect(refresh).toBeInstanceOf(Promise);
+
+    execSync(
+      testDb.insert(asyncRefreshTasksTable, [
+        { id: "second", projectId: "project-1", orderToken: "b" },
+      ]),
+    );
+
+    refreshGate.resolve();
+    await expect(refresh).resolves.toEqual([
+      { id: "first", projectId: "project-1", orderToken: "a" },
+    ]);
+
+    expect(
+      runCachedSelectorMaybeAsync(testDb, projectTasks, {
+        projectId: "project-1",
+      }),
+    ).toEqual([
+      { id: "first", projectId: "project-1", orderToken: "a" },
+      { id: "second", projectId: "project-1", orderToken: "b" },
+    ]);
+    expect(runCount).toBe(3);
   });
 
   test("cached object-form selector reuse is recorded as cached in the trace", async () => {

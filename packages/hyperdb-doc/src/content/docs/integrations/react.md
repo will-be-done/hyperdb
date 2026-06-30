@@ -90,7 +90,7 @@ HybridDB selector run in an effect to preload any missing persistent ranges.
 That keeps the render snapshot synchronous while `fetchStatus` reports the
 background preload/refetch. The background HybridDB run also uses selector root
 memoization, so revisiting the same selector args can be reported as cached for
-the HybridDB itself in the devtool. If a HybridDB write transaction is active,
+the HybridDB itself in the devtools. If a HybridDB write transaction is active,
 the synchronous cache snapshot still reads the last committed cache state and
 does not expose uncommitted transaction writes.
 

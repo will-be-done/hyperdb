@@ -731,6 +731,7 @@ const copySelectRangeCmds = (
 const refreshSelectorCacheEntryMaybeAsync = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
 ): TReturn | Promise<TReturn> => {
+  const revision = entry.db.getRevision();
   const result = runSelectorMaybeAsync(
     entry.db,
     entry.gen,
@@ -742,8 +743,13 @@ const refreshSelectorCacheEntryMaybeAsync = <TReturn>(
 
   if (result instanceof Promise) {
     return result.then((value) => {
+      if (entry.db.getRevision() !== revision) {
+        entry.needsRerun = true;
+        return value;
+      }
+
       entry.currentResult = value;
-      entry.currentRevision = entry.db.getRevision();
+      entry.currentRevision = revision;
       entry.needsRerun = false;
       return value;
     });
@@ -874,6 +880,8 @@ export function runCachedSelectorMaybeAsync<
     const result = refreshSelectorCacheEntryMaybeAsync(entry);
     if (result instanceof Promise) {
       return result.then((value) => {
+        if (!entry) return value;
+
         copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
         scheduleSelectorCacheEntryGc(
           entry as SelectorCacheEntry<unknown>,
@@ -891,10 +899,11 @@ export function runCachedSelectorMaybeAsync<
   const entrySelectRangeCmds: SelectRangeCmd[] = [];
   const childMemo: ChildMemo = new Map();
   const gen = () => selector(cachedArgs);
+  const revision = db.getRevision();
   const result = runSelectorMaybeAsync(db, gen, entrySelectRangeCmds, {
     childMemo,
   });
-  const storeEntry = (value: SelectorReturn<TSelector>) => {
+  const storeEntry = (value: SelectorReturn<TSelector>, needsRerun = false) => {
     entry = {
       argsKey,
       args: cachedArgs,
@@ -902,10 +911,11 @@ export function runCachedSelectorMaybeAsync<
       selector,
       gen,
       currentResult: value,
-      currentRevision: db.getRevision(),
+      currentRevision: needsRerun ? revision : db.getRevision(),
       selectRangeCmds: entrySelectRangeCmds,
       childMemo,
       subscribers: new Set(),
+      needsRerun,
     };
     byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
     copySelectRangeCmds(selectRangeCmds, entrySelectRangeCmds);
@@ -915,7 +925,9 @@ export function runCachedSelectorMaybeAsync<
   };
 
   if (result instanceof Promise) {
-    return result.then(storeEntry);
+    return result.then((value) =>
+      storeEntry(value, db.getRevision() !== revision),
+    );
   }
 
   return storeEntry(result);

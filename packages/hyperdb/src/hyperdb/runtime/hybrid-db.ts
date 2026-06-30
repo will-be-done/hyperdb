@@ -369,7 +369,11 @@ class HybridDBReadonlyTx implements HyperDBTx {
 
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
-  ): Generator<DBCmd, void> {}
+  ): Generator<DBCmd, void> {
+    throw new Error(
+      "preloadTables is not supported inside HybridDB transactions",
+    );
+  }
 
   *beginTx(
     _mode: DBTransactionMode = "readwrite",
@@ -532,7 +536,11 @@ class HybridDBTx implements HyperDBTx {
 
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
-  ): Generator<DBCmd, void> {}
+  ): Generator<DBCmd, void> {
+    throw new Error(
+      "preloadTables is not supported inside HybridDB transactions",
+    );
+  }
 
   *beginTx(
     _mode: DBTransactionMode = "readwrite",

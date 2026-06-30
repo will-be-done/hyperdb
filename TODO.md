@@ -50,3 +50,6 @@ DB:
 3. Allow disable/enable logging of sqlite/idb. Disabled by default
 4. Renamer upsert -> put ?
 5. Is there any bulk insert for indexeddb?
+6. Check if OR queries keep ordering
+7. In-mem tx for fast action
+8. k-way indexxedb OR merging

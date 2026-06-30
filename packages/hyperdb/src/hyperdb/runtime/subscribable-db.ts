@@ -238,8 +238,11 @@ export class SubscribableDBTx implements HyperDBTx {
   }
 
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
-    _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
-  ): Generator<DBCmd, void> {}
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {
+    this.throwIfDone();
+    yield* this.delegateTx().preloadTables(specs);
+  }
 
   private delegateTx(): HyperDBTx {
     return this.traits.length > 0
