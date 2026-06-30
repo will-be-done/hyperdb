@@ -6,9 +6,18 @@ import { AsyncDB } from "../test-utils/async-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
-import { select, selectAsync } from "../commands/selector/selector";
+import {
+  createSelector,
+  getSubscribableHybridCacheDB,
+  initCachedSelector,
+  preloadSelector,
+  runCachedSelectorMaybeAsync,
+  select,
+  selectAsync,
+} from "../commands/selector/selector";
 import { selectFrom } from "../commands/selector/builder";
 import { unwrap } from "../commands/async";
+import { execAsync } from "../core/executor";
 import {
   hyperDBTraceStore,
   traceRootsRuntimeTable,
@@ -30,6 +39,7 @@ const tasksTable = defineTable("hybridTasks", {
   projectId: v.string(),
 })
   .index("byValue", ["value"])
+  .index("byIds", ["id"])
   .index("byTitle", ["title"], { type: "hash" })
   .index("byProjectValue", ["projectId", "value"]);
 
@@ -200,6 +210,230 @@ describe("HybridDB", () => {
     );
 
     expect(lastSelectSource()).toBe("in-mem");
+  });
+
+  it("makes HybridDB selector results available to direct in-memory cache reads", async () => {
+    const { hybrid, primary, cache, primaryScanSpy } = await createDBs();
+    const tasks = [createTask(1), createTask(2), createTask(3)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    await expect(selectAsync(hybrid, selectByValue(1, 3))).resolves.toEqual(
+      tasks,
+    );
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+
+    primaryScanSpy.mockClear();
+
+    expect(select(cache, selectByValue(1, 3))).toEqual(tasks);
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("records HybridDB root selector reuse as cached", async () => {
+    const { hybrid, primary } = await createDBs();
+    const db = new SubscribableDB(hybrid);
+    const tasks = [createTask(1), createTask(2), createTask(3)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+    const selector = createSelector();
+    const projectTasks = selector({
+      name: "cachedHybridProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* cachedHybridProjectTasks({ projectId }) {
+        return yield* selectFrom(tasksTable, "byProjectValue")
+          .where((q) => q.eq("projectId", projectId))
+          .order("asc");
+      },
+    });
+
+    await expect(
+      Promise.resolve(
+        runCachedSelectorMaybeAsync(db, projectTasks, { projectId: "a" }),
+      ),
+    ).resolves.toEqual(tasks);
+    hyperDBTraceStore.clear();
+
+    await expect(
+      Promise.resolve(
+        runCachedSelectorMaybeAsync(db, projectTasks, { projectId: "a" }),
+      ),
+    ).resolves.toEqual(tasks);
+
+    hyperDBTraceStore.flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
+    expect(trace.name).toBe("cachedHybridProjectTasks");
+    expect(trace.frames[0]?.cached).toBe(true);
+  });
+
+  it("primes the in-memory selector cache when preloading a HybridDB selector", async () => {
+    const { hybrid, primary } = await createDBs();
+    const db = new SubscribableDB(hybrid);
+    const tasks = [createTask(1), createTask(2), createTask(3)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+    const selector = createSelector();
+    let runCount = 0;
+    const projectTasks = selector({
+      name: "preloadedHybridProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* preloadedHybridProjectTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(tasksTable, "byProjectValue")
+          .where((q) => q.eq("projectId", projectId))
+          .order("asc");
+      },
+    });
+
+    await expect(
+      preloadSelector(db, projectTasks, { projectId: "a" }),
+    ).resolves.toEqual(tasks);
+    expect(runCount).toBe(1);
+
+    const cacheDB = getSubscribableHybridCacheDB(db);
+    expect(cacheDB).toBeDefined();
+    const cached = initCachedSelector(cacheDB!, projectTasks, {
+      projectId: "a",
+    });
+
+    expect(cached.getSnapshot()).toEqual(tasks);
+    expect(runCount).toBe(1);
+  });
+
+  it("reuses HybridDB root selector cache on repeated selector preloads", async () => {
+    const { hybrid, primary } = await createDBs();
+    const db = new SubscribableDB(hybrid);
+    const tasks = [createTask(1), createTask(2), createTask(3)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+    const selector = createSelector();
+    let runCount = 0;
+    const projectTasks = selector({
+      name: "reusedPreloadedHybridProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* reusedPreloadedHybridProjectTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(tasksTable, "byProjectValue")
+          .where((q) => q.eq("projectId", projectId))
+          .order("asc");
+      },
+    });
+
+    await expect(
+      preloadSelector(db, projectTasks, { projectId: "a" }),
+    ).resolves.toEqual(tasks);
+    expect(runCount).toBe(1);
+
+    await expect(
+      preloadSelector(db, projectTasks, { projectId: "a" }),
+    ).resolves.toEqual(tasks);
+
+    expect(runCount).toBe(1);
+  });
+
+  it("preloads whole tables and serves other indexes from cache", async () => {
+    const { db, hybrid, primary, primaryScanSpy } = await createDBs();
+    const subscribable = new SubscribableDB(hybrid);
+    const tasks = [
+      createTask(1, "same"),
+      createTask(2, "same"),
+      createTask(3, "other"),
+      createTask(4, "other"),
+    ];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    await execAsync(
+      subscribable.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+    );
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+
+    primaryScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "byProjectValue", [
+        { eq: [{ col: "projectId", val: "a" }] },
+      ]),
+    ).resolves.toEqual(tasks.slice(0, 3));
+    await expect(
+      db.intervalScan(tasksTable, "byTitle", [
+        { eq: [{ col: "title", val: "same" }] },
+      ]),
+    ).resolves.toEqual(tasks.slice(0, 2));
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("requires a btree scan index for whole-table preloads", async () => {
+    const { hybrid } = await createDBs();
+
+    await expect(
+      execAsync(
+        hybrid.preloadTables([{ table: tasksTable, scanIndex: "byId" }]),
+      ),
+    ).rejects.toThrow(
+      "HybridDB preload scan index must be a btree index: byId for table: hybridTasks",
+    );
+  });
+
+  it("throws for preloadTables inside HybridDB transactions", async () => {
+    const { hybrid } = await createDBs();
+    const writeTx = await execAsync(hybrid.beginTx());
+    try {
+      await expect(
+        execAsync(
+          writeTx.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(writeTx.rollback());
+    }
+
+    const readonlyTx = await execAsync(hybrid.beginTx("readonly"));
+    try {
+      await expect(
+        execAsync(
+          readonlyTx.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(readonlyTx.rollback());
+    }
+
+    const subscribable = new SubscribableDB(hybrid);
+    const subscribableTx = await execAsync(subscribable.beginTx());
+    try {
+      await expect(
+        execAsync(
+          subscribableTx.preloadTables([
+            { table: tasksTable, scanIndex: "byIds" },
+          ]),
+        ),
+      ).rejects.toThrow(
+        "preloadTables is not supported inside HybridDB transactions",
+      );
+    } finally {
+      await execAsync(subscribableTx.rollback());
+    }
+  });
+
+  it("allows direct cache selector reads while a HybridDB write transaction is active", async () => {
+    const { db, cache } = await createDBs();
+    const original = createTask(1);
+    const updated = { ...original, value: 2, title: "updated" };
+    await db.insert(tasksTable, [original]);
+
+    const tx = await db.beginTx();
+    await tx.upsert(tasksTable, [updated]);
+
+    expect(select(cache, selectByValue(1, 1))).toEqual([original]);
+    expect(select(cache, selectByValue(2, 2))).toEqual([]);
+    await expect(
+      tx.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 2 }] },
+      ]),
+    ).resolves.toEqual([updated]);
+
+    await tx.commit();
+
+    expect(select(cache, selectByValue(1, 1))).toEqual([]);
+    expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
   });
 
   it("records sources through SubscribableDB-wrapped HybridDB scans", async () => {

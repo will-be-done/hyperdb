@@ -9,6 +9,33 @@ import type {
 import type { SelectOptions, Trait, WhereClause } from "./primitives";
 import type { HyperDBTracerOption } from "./tracer";
 
+export type HybridPreloadTableSpec<
+  TTable extends TableDefinition = TableDefinition,
+> = {
+  table: TTable;
+  scanIndex: Extract<keyof ExtractIndexes<TTable>, string | number>;
+  coverageIndexes?: readonly Extract<
+    keyof ExtractIndexes<TTable>,
+    string | number
+  >[];
+};
+
+export type HybridPreloadTableSpecInput = {
+  table: TableDefinition;
+  scanIndex: string | number;
+  coverageIndexes?: readonly (string | number)[];
+};
+
+export type ValidateHybridPreloadTableSpecs<
+  TSpecs extends readonly HybridPreloadTableSpecInput[],
+> = {
+  readonly [K in keyof TSpecs]: TSpecs[K] extends { table: infer TTable }
+    ? TTable extends TableDefinition
+      ? HybridPreloadTableSpec<TTable>
+      : never
+    : never;
+};
+
 export interface HyperDB {
   intervalScan<
     TTable extends TableDefinition,
@@ -42,6 +69,9 @@ export interface HyperDB {
   beginTx(mode?: DBTransactionMode): Generator<DBCmd, HyperDBTx>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
+  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void>;
 }
 
 export interface HyperDBTx extends HyperDB {

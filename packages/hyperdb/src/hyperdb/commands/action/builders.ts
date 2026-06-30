@@ -3,7 +3,13 @@ import { runCommandGenerator } from "../runner";
 import { execAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import type { Trait } from "../../core/primitives";
-import { defaultTraceOptions, type TraceOptions } from "../../core/tracer";
+import {
+  defaultTraceOptions,
+  driverTraceContextFromFrameMeta,
+  getDriverTraceContextForDB,
+  withDriverTraceContextTrait,
+  type TraceOptions,
+} from "../../core/tracer";
 import {
   assertValid,
   v,
@@ -11,7 +17,10 @@ import {
   type Validator,
 } from "../../schema/values";
 import type { ExtractSchema, TableDefinition } from "../../schema/table";
-import { wrapGeneratorWithTraceMeta } from "../../tracing/metadata";
+import {
+  getGeneratorTraceMeta,
+  wrapGeneratorWithTraceMeta,
+} from "../../tracing/metadata";
 import {
   deleteType,
   getCurrentTraitsType,
@@ -278,7 +287,14 @@ export function syncDispatch<TReturn>(
   db: HyperDB,
   action: Generator<unknown, TReturn, unknown>,
 ): TReturn {
-  const tx = execSync(db.beginTx());
+  const actionDB = withDriverTraceContextTrait(
+    db,
+    driverTraceContextFromFrameMeta(
+      getGeneratorTraceMeta(action),
+      getDriverTraceContextForDB(db),
+    ),
+  );
+  const tx = execSync(actionDB.beginTx());
 
   let isCommitted = false;
   try {
@@ -301,7 +317,14 @@ export async function asyncDispatch<TReturn>(
   db: HyperDB,
   action: Generator<unknown, TReturn, unknown>,
 ): Promise<TReturn> {
-  const tx = await execAsync(db.beginTx());
+  const actionDB = withDriverTraceContextTrait(
+    db,
+    driverTraceContextFromFrameMeta(
+      getGeneratorTraceMeta(action),
+      getDriverTraceContextForDB(db),
+    ),
+  );
+  const tx = await execAsync(actionDB.beginTx());
 
   let isCommitted = false;
   try {

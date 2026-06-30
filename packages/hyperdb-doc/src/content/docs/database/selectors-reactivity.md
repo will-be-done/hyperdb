@@ -43,12 +43,56 @@ The cache is keyed by the database, the selector identity, and a stable
 serialization of the args. Argument key order doesn't matter:
 `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` resolve to the same cache entry.
 
+## Preloading a selector
+
+`preloadSelector` runs a selector through the root selector cache without
+creating a React subscription. Use it in route loaders or hover prefetches when
+you know the selector args a screen is about to render.
+
+```ts
+import { preloadSelector } from "@will-be-done/hyperdb";
+
+await preloadSelector(db, projectTasks, { projectId: "p1" });
+```
+
+Preloaded entries stay range-aware while they remain in the selector cache. If a
+later mutation misses the ranges the selector read, another preload with the same
+args reuses the cached result even though the DB revision changed. If a mutation
+does touch those ranges and nothing is subscribed, the entry is marked stale and
+re-runs lazily on the next preload or cached selector read.
+
+With a `SubscribableDB(new HybridDB(primary, cache))`, the preload does two
+things: it runs the selector against the HybridDB so missing persistent ranges
+are loaded into the in-memory cache, then it primes the in-memory selector cache
+entry that React reads synchronously. A later `useAsyncSelector` with the same
+selector identity and args can start from that warmed snapshot.
+
+```ts
+const categories = await preloadSelector(db, projectCategoriesByProjectId, {
+  projectId,
+});
+
+await Promise.all(
+  categories.map((category) =>
+    preloadSelector(db, projectCategoryCardsForDisplayChildren, {
+      projectCategoryId: category.id,
+    }),
+  ),
+);
+```
+
+Match the render args exactly. The selector identity plus serialized args are
+the cache key, so `{ limited: true }` and an omitted `limited` property are
+different entries.
+
 ## Garbage collection
 
 When the last subscriber of a cache entry unsubscribes, the entry is retained for
-`gcTime` milliseconds (default 3000) before being dropped. This lets a value
+`gcTime` milliseconds (default 30000) before being dropped. This lets a value
 survive brief gaps, such as a component unmounting and remounting, without
-recomputing.
+recomputing. While retained, the entry remains subscribed to DB changes so
+non-overlapping mutations can advance its revision without a re-run, and
+overlapping mutations can mark it stale for the next read.
 
 ```ts
 // keep an unused entry around for 30s

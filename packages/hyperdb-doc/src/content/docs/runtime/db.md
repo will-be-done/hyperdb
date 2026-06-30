@@ -73,10 +73,10 @@ This is the mechanism the [selector cache](/database/selectors-reactivity/) uses
 
 ### Lifecycle hooks
 
-You can run extra commands inside the same transaction whenever rows change.
-Each hook is a generator and may itself read and write. This is how the
-[sync engine](/guides/sync-engine/) records change-tracking rows alongside every
-mutation.
+You can run extra commands from lifecycle hooks. Mutation hooks run inside the
+same transaction as the change that triggered them. Scan hooks run after a
+successful index scan, and if that scan is inside a transaction, commands yielded
+by the hook use that same transaction.
 
 ```ts
 const off = db.afterChange(function* (db, table, traits, ops) {
@@ -92,14 +92,20 @@ db.afterUpsert(function* (db, table, traits, ops) {
 db.afterDelete(function* (db, table, traits, ops) {
   /* DeleteOp[] */
 });
+
+db.afterScan(function* (db, table, indexName, clauses, selectOptions, results) {
+  // runs after a successful intervalScan/selectFrom scan
+});
 ```
 
 `InsertOp` / `UpsertOp` / `DeleteOp` carry the affected rows (upserts and deletes
 include the previous value), so a hook has everything it needs to derive a diff.
+`afterScan` receives the table, index name, where clauses, select options, and
+the returned rows.
 
-Because hooks run within the transaction, anything they write commits
+Because mutation hooks run within the transaction, anything they write commits
 atomically with the change that triggered them, and a throw rolls the whole
-thing back.
+thing back. An `afterScan` throw fails the scan that triggered it.
 
 ## `HybridDB`
 
@@ -126,24 +132,44 @@ import { AsyncSqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
 const primary = new DB(new AsyncSqlDriver(sqlite, sqliteDb));
 const cache = new DB(new BptreeInmemDriver());
 
-const db = new SubscribableDB(new HybridDB(primary, cache));
+const hybrid = new HybridDB(primary, cache);
+const db = new SubscribableDB(hybrid);
 
-await execAsync(db.loadTables([tasksTable]));
+await execAsync(db.loadTables([tasksTable, projectsTable]));
+await execAsync(
+  db.preloadTables([
+    { table: tasksTable, scanIndex: "byIds" },
+    { table: projectsTable, scanIndex: "byIds" },
+  ]),
+);
 ```
 
 The trade-off is async reads. A selector may fall through to disk, so use
 `selectAsync`, `asyncDispatch`, `useAsyncSelector`, and `useAsyncDispatch` with a
 hybrid runtime. Once a working set is cached, repeated reads are served from the
 in-memory tier.
+Use `preloadTables` when you know a whole table should be resident from startup
+or before a workflow begins. `scanIndex` must be a B-tree index that can scan the
+whole table, commonly an explicit `.index("byIds", ["id"])`; the built-in
+`byId` index is a hash index for exact id lookups, not full-table scans. After a
+table preload finishes, HybridDB marks that table's index ranges as cached, so
+later selectors over other indexes can read from memory. `preloadTables` is part
+of the `HyperDB` contract and is safe to call through wrappers such as
+`SubscribableDB`; DBs that do not have a preload layer implement it as a no-op.
 
 Writes go to both tiers in the same operation. That means cached rows stay
 current immediately, while uncached ranges still load lazily on first access.
 Transactions open transactions against both tiers; scan coverage discovered
 inside a transaction is published to the outer cache only after commit.
+Non-transaction reads of the in-memory cache continue to see the last committed
+cache snapshot while a write transaction is active; they do not see uncommitted
+transaction writes.
 Drivers explicitly report whether selector-scoped readonly transactions are
 supported. When they are, HyperDB uses `beginTx("readonly")`; HybridDB keeps
 that context lazy until a selector misses the cache and reads the persistent
-tier.
+tier. If the browser finishes that readonly transaction between selector scans,
+the current scan reopens it once. Selector and action execution context is
+carried as a trait so persistent drivers can include run names in their logs.
 
 HybridDB serializes cache fills, write-through mutations, coverage updates, and
 transaction lifetimes per instance. This keeps async selector misses and actions

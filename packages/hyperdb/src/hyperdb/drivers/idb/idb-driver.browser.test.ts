@@ -5,7 +5,7 @@ import {
   insert,
 } from "../../commands/action/builders";
 import { selectFrom } from "../../commands/selector/builder";
-import { selectAsync } from "../../commands/selector/selector";
+import { createSelector, selectAsync } from "../../commands/selector/selector";
 import { execAsync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import { DB } from "../../runtime/db";
@@ -241,12 +241,12 @@ describe("IdbDriver", () => {
       const messages = logSpy.mock.calls.map(([message]) => String(message));
       expect(
         messages.some((message) =>
-          /IDB transaction start .* mode readwrite/.test(message),
+          /IDB transaction start .* tx \d+ .* mode readwrite/.test(message),
         ),
       ).toBe(true);
       expect(
         messages.some((message) =>
-          /IDB transaction commit .* mode readwrite/.test(message),
+          /IDB transaction commit .* tx \d+ .* mode readwrite/.test(message),
         ),
       ).toBe(true);
       expect(
@@ -257,6 +257,87 @@ describe("IdbDriver", () => {
       expect(
         messages.some((message) =>
           /IDB scan .* table idbTasks .* using index byProjectRank .* 2 rows/.test(
+            message,
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("includes selector context and transaction ids in readonly logs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const selector = createSelector()({
+      name: "readIdbProjectTasks",
+      args: {},
+      *handler() {
+        return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    });
+
+    try {
+      const db = await createDB();
+      await execAsync(db.loadTables([tasksTable]));
+      await execAsync(
+        db.insert(tasksTable, [
+          { id: "task-1", title: "First", projectId: "project-1", rank: 1 },
+        ]),
+      );
+
+      await selectAsync(db, selector({}));
+
+      const messages = logSpy.mock.calls.map(([message]) => String(message));
+      expect(
+        messages.some((message) =>
+          /IDB transaction start .* tx \d+ .* selector readIdbProjectTasks .* mode readonly/.test(
+            message,
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        messages.some((message) =>
+          /IDB scan .* tx \d+ .* selector readIdbProjectTasks .* table idbTasks .* using index byProjectRank .* 1 rows/.test(
+            message,
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("includes action context and transaction ids in write logs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const createIdbTask = action({
+      name: "createIdbTask",
+      args: {},
+      *handler() {
+        yield* insert(tasksTable, [
+          { id: "task-1", title: "First", projectId: "project-1", rank: 1 },
+        ]);
+      },
+    });
+
+    try {
+      const db = await createDB();
+      await execAsync(db.loadTables([tasksTable]));
+
+      await asyncDispatch(db, createIdbTask({}));
+
+      const messages = logSpy.mock.calls.map(([message]) => String(message));
+      expect(
+        messages.some((message) =>
+          /IDB transaction start .* tx \d+ .* action createIdbTask .* mode readwrite/.test(
+            message,
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        messages.some((message) =>
+          /IDB insert .* tx \d+ .* action createIdbTask .* table idbTasks .* 1 rows/.test(
             message,
           ),
         ),
@@ -455,6 +536,77 @@ describe("IdbDriver", () => {
       getAllSpy?.mockRestore();
       txSpy.mockRestore();
       logSpy.mockRestore();
+    }
+  });
+
+  it("retries when opening an object store sees a finished readonly transaction", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+    await execAsync(
+      db.insert(tasksTable, [
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]),
+    );
+
+    const objectStoreSpy = vi.spyOn(IDBTransaction.prototype, "objectStore");
+    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    const finishedError = new DOMException(
+      "Failed to execute 'objectStore' on 'IDBTransaction': The transaction has finished.",
+      "InvalidStateError",
+    );
+
+    try {
+      objectStoreSpy.mockImplementationOnce(() => {
+        throw finishedError;
+      });
+
+      await expect(
+        selectAsync(
+          db,
+          (function* () {
+            return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+              q.eq("projectId", "project-1"),
+            );
+          })(),
+        ),
+      ).resolves.toEqual([
+        {
+          id: "task-1",
+          title: "First",
+          projectId: "project-1",
+          rank: 1,
+        },
+      ]);
+
+      expect(
+        txSpy.mock.calls.filter(([, mode]) => mode === "readonly").length,
+      ).toBeGreaterThanOrEqual(2);
+      expect(
+        logSpy.mock.calls
+          .map(([message]) => String(message))
+          .some((message) =>
+            /IDB transaction reopen .* mode readonly/.test(message),
+          ),
+      ).toBe(true);
+      expect(
+        errorSpy.mock.calls
+          .map(([message]) => String(message))
+          .some((message) => /FAILED IDB scan/.test(message)),
+      ).toBe(false);
+    } finally {
+      objectStoreSpy.mockRestore();
+      txSpy.mockRestore();
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 

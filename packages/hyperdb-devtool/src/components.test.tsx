@@ -470,6 +470,18 @@ describe("HyperDBDevtools", () => {
     expect(html).not.toContain("Clear");
   });
 
+  it("renders the stored rows fetched sort field", () => {
+    stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        key === "hyperdb-devtools-sort-field" ? "rowsFetched" : null,
+      setItem: () => {},
+    });
+
+    const html = renderToString(<HyperDBDevtoolsPanel db={createDB()} />);
+
+    expect(html).toContain("rows fetched");
+  });
+
   it("formats select events as SQL-like queries", () => {
     const event: SelectCommandEvent = {
       id: "cmd-1",

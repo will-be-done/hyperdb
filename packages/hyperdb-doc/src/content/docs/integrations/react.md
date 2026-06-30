@@ -84,6 +84,42 @@ Each run starts synchronously. If the selector completes from memory or cache,
 the result is applied in the same tick; if a command yields a promise, that run
 continues asynchronously.
 
+When the context database wraps a `HybridDB`, `useAsyncSelector` reads the
+HybridDB in-memory cache through React's `useSyncExternalStore` and starts the
+HybridDB selector run in an effect to preload any missing persistent ranges.
+That keeps the render snapshot synchronous while `fetchStatus` reports the
+background preload/refetch. The background HybridDB run also uses selector root
+memoization, so revisiting the same selector args can be reported as cached for
+the HybridDB itself in the devtools. If a HybridDB write transaction is active,
+the synchronous cache snapshot still reads the last committed cache state and
+does not expose uncommitted transaction writes.
+
+For route loaders or intent prefetches, use `preloadSelector` with the same
+`SubscribableDB`, selector, and args the component will render. With HybridDB it
+warms the persistent ranges and primes the in-memory selector snapshot that
+`useAsyncSelector` reads on render.
+
+```ts
+import { preloadSelector, type SubscribableDB } from "@will-be-done/hyperdb";
+
+export async function preloadProjectRoute(
+  db: SubscribableDB,
+  projectId: string,
+) {
+  const categories = await preloadSelector(db, projectCategoriesByProjectId, {
+    projectId,
+  });
+
+  await Promise.all(
+    categories.map((category) =>
+      preloadSelector(db, projectCategoryCardsForDisplayChildren, {
+        projectCategoryId: category.id,
+      }),
+    ),
+  );
+}
+```
+
 ```tsx
 const {
   data: tasks = [],

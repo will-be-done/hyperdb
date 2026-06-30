@@ -43,12 +43,22 @@ const normalizedLimit = (maxTraces: number): number => {
 const traceSortIndex = (
   sortField: TraceSortField,
   dbKey: string | undefined,
-): "byStartedAt" | "byDurationMs" | "byDbStartedAt" | "byDbDurationMs" => {
+):
+  | "byStartedAt"
+  | "byDurationMs"
+  | "byRowsFetched"
+  | "byDbStartedAt"
+  | "byDbDurationMs"
+  | "byDbRowsFetched" => {
   if (dbKey !== undefined) {
-    return sortField === "duration" ? "byDbDurationMs" : "byDbStartedAt";
+    if (sortField === "duration") return "byDbDurationMs";
+    if (sortField === "rowsFetched") return "byDbRowsFetched";
+    return "byDbStartedAt";
   }
 
-  return sortField === "duration" ? "byDurationMs" : "byStartedAt";
+  if (sortField === "duration") return "byDurationMs";
+  if (sortField === "rowsFetched") return "byRowsFetched";
+  return "byStartedAt";
 };
 
 function* selectTraceRows({
@@ -158,7 +168,11 @@ export const traceStoreTraces = selector({
   args: {
     maxTraces: v.number(),
     kind: v.union(v.literal("all"), v.literal("selector"), v.literal("action")),
-    sortField: v.union(v.literal("created"), v.literal("duration")),
+    sortField: v.union(
+      v.literal("created"),
+      v.literal("duration"),
+      v.literal("rowsFetched"),
+    ),
     sortDir: v.union(v.literal("asc"), v.literal("desc")),
   },
   handler: function* ({ maxTraces, kind, sortField, sortDir }) {
@@ -180,7 +194,11 @@ export const traceStoreTraceSelection = selector({
     kind: v.union(v.literal("all"), v.literal("selector"), v.literal("action")),
     dbKey: v.optional(v.string()),
     skipCached: v.boolean(),
-    sortField: v.union(v.literal("created"), v.literal("duration")),
+    sortField: v.union(
+      v.literal("created"),
+      v.literal("duration"),
+      v.literal("rowsFetched"),
+    ),
     sortDir: v.union(v.literal("asc"), v.literal("desc")),
     selectedTraceId: v.optional(v.string()),
     autoSelectFirst: v.optional(v.boolean()),

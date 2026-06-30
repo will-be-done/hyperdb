@@ -19,8 +19,11 @@ import {
 import type { Op } from "../runtime/ops";
 import {
   anonymousTraceMeta,
+  driverTraceContextFromFrameMeta,
+  getDriverTraceContextForDB,
   getTracerForDB,
   withCurrentSelectEventTrait,
+  withDriverTraceContextTrait,
   withTraceContextTrait,
   type HyperDBTracer,
   type TraceContext,
@@ -29,7 +32,7 @@ import {
 import {
   getCommandFramePath,
   getGeneratorTraceMeta,
-  wrapGeneratorWithExistingTraceMeta,
+  wrapGeneratorWithExistingTracePath,
 } from "../tracing/metadata";
 
 export type ChildMemoEntry = {
@@ -211,17 +214,25 @@ export function* runCommandGenerator<TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   options: CommandRunnerOptions = {},
 ): Generator<DBCmd, TReturn, unknown> {
-  const tracer = options.traceContext?.tracer ?? getTracerForDB(db);
+  const generatorMeta = getGeneratorTraceMeta(gen);
+  const driverTraceContext = driverTraceContextFromFrameMeta(
+    generatorMeta,
+    getDriverTraceContextForDB(db),
+  );
+  const driverScopedDB = withDriverTraceContextTrait(db, driverTraceContext);
+  const tracer = options.traceContext?.tracer ?? getTracerForDB(driverScopedDB);
   const traceContext =
     options.traceContext ??
     (options.skipRootTrace
       ? undefined
       : tracer?.startRootTrace(
-          getGeneratorTraceMeta(gen) ?? anonymousTraceMeta(),
-          db,
+          generatorMeta ?? anonymousTraceMeta(),
+          driverScopedDB,
         ));
   const ownsTraceContext = traceContext !== undefined && !options.traceContext;
-  const scopedDB = traceContext ? withTraceContextTrait(db, traceContext) : db;
+  const scopedDB = traceContext
+    ? withTraceContextTrait(driverScopedDB, traceContext)
+    : driverScopedDB;
 
   try {
     let result = gen.next();
@@ -330,14 +341,14 @@ export function* runCommandGenerator<TReturn>(
               ? new Map()
               : options.visited
             : undefined;
-          // Re-wrap the freshly created body with the selector frame's own meta
-          // so its scans nest under this frame instead of spawning a duplicate.
-          const selectorMeta =
+          // Re-wrap the freshly created body with the current trace path so its
+          // scans stay under any active callback/action/selector frames.
+          const selectorPath =
             traceContext && tracer && traceFrame
-              ? tracer.getCurrentTraceFrameMeta(traceContext)
+              ? [...traceContext.frameMetas]
               : undefined;
-          const body = selectorMeta
-            ? wrapGeneratorWithExistingTraceMeta(cmd.makeBody(), selectorMeta)
+          const body = selectorPath
+            ? wrapGeneratorWithExistingTracePath(cmd.makeBody(), selectorPath)
             : cmd.makeBody();
 
           const value = yield* runCommandGenerator(db, body, {

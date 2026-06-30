@@ -80,6 +80,15 @@ const bigintHashErrorTable = defineTable("bigintHashError", {
 
 describe("db", async () => {
   for (const [driverName, createDriver] of createDriverFactories()) {
+    it("preloadTables is a no-op for plain DB - " + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable]);
+
+      await expect(
+        db.preloadTables([{ table: tasksTable, scanIndex: "ids" }]),
+      ).resolves.toBeUndefined();
+    });
+
     it("insert, delete, upsert - " + driverName, async () => {
       const db = new AsyncDB(new DB(await createDriver()));
       await db.loadTables([tasksTable, taskTemplatesTable]);
@@ -142,6 +151,50 @@ describe("db", async () => {
           },
         ]),
       ).toEqual([]);
+    });
+
+    it("orders OR scan clauses by index order - " + driverName, async () => {
+      const db = new AsyncDB(new DB(await createDriver()));
+      await db.loadTables([tasksTable]);
+
+      await db.insert(tasksTable, [
+        {
+          id: "3",
+          title: "Task 3",
+          state: "done",
+          projectId: "1",
+          orderToken: "c",
+          type: "task",
+          lastToggledAt: 3,
+        },
+        {
+          id: "1",
+          title: "Task 1",
+          state: "done",
+          projectId: "1",
+          orderToken: "a",
+          type: "task",
+          lastToggledAt: 1,
+        },
+        {
+          id: "2",
+          title: "Task 2",
+          state: "todo",
+          projectId: "1",
+          orderToken: "b",
+          type: "task",
+          lastToggledAt: 2,
+        },
+      ]);
+
+      const rows = await db.intervalScan(
+        tasksTable,
+        "ids",
+        [{ eq: [{ col: "id", val: "3" }] }, { eq: [{ col: "id", val: "1" }] }],
+        { order: "asc" },
+      );
+
+      expect(rows.map((row) => row.id)).toEqual(["1", "3"]);
     });
   }
 

@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { HyperDB, HyperDBTx } from "../core/contracts";
+import type {
+  HyperDB,
+  HyperDBTx,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import type {
   Row,
   SelectOptions,
@@ -16,7 +21,13 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
-import { getTraceContextForDB, type HyperDBTracerOption } from "../core/tracer";
+import {
+  createTraceFrameMeta,
+  getTraceContextForDB,
+  type HyperDBTracerOption,
+  type TraceContext,
+} from "../core/tracer";
+import { wrapGeneratorWithExistingTracePath } from "../tracing/metadata";
 import { refVar, type RefVar } from "../utils";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
@@ -53,6 +64,74 @@ type AfterChangeSub = (
   ops: Op[],
 ) => Generator<unknown, void, unknown>;
 
+export type AfterScanCallback = (
+  db: HyperDB,
+  table: TableDefinition,
+  indexName: string,
+  clauses: WhereClause[],
+  selectOptions: SelectOptions | undefined,
+  results: Row[],
+) => Generator<unknown, unknown, unknown>;
+
+const wrapAfterScanCallbackGenerator = (
+  cb: AfterScanCallback,
+  gen: Generator<unknown, unknown, unknown>,
+  table: TableDefinition,
+  indexName: string,
+  clauses: WhereClause[],
+  selectOptions: SelectOptions | undefined,
+  results: Row[],
+  traceContext: TraceContext | undefined,
+): Generator<unknown, unknown, unknown> => {
+  if (!traceContext) return gen;
+
+  const afterScanMeta = createTraceFrameMeta(
+    "unknown",
+    cb.name || "afterScan",
+    {
+      tableName: table.tableName,
+      indexName,
+      clauses,
+      selectOptions,
+      resultCount: results.length,
+    },
+  );
+
+  return wrapGeneratorWithExistingTracePath(gen, [
+    ...traceContext.frameMetas,
+    afterScanMeta,
+  ]);
+};
+
+function* runAfterScanSubscribers(
+  db: HyperDB,
+  subscribers: AfterScanCallback[],
+  table: TableDefinition,
+  indexName: string,
+  clauses: WhereClause[],
+  selectOptions: SelectOptions | undefined,
+  results: Row[],
+): Generator<DBCmd, void> {
+  const traceContext = getTraceContextForDB(db);
+  for (const cb of subscribers) {
+    const gen = cb(db, table, indexName, clauses, selectOptions, results);
+    yield* runCommandGenerator(
+      db,
+      wrapAfterScanCallbackGenerator(
+        cb,
+        gen,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+        results,
+        traceContext,
+      ),
+      { allowWrites: true, traceContext },
+    );
+  }
+}
+
 function appendOps(target: Op[], ops: Op[]) {
   for (const op of ops) {
     target.push(op);
@@ -87,6 +166,7 @@ type SubscribableDBState = {
   afterUpsertSubscribers: AfterUpsertSub[];
   afterDeleteSubscribers: AfterDeleteSub[];
   afterChangeSubscribers: AfterChangeSub[];
+  afterScanSubscribers: AfterScanCallback[];
   revision: RefVar<number>;
 };
 
@@ -96,6 +176,7 @@ const createSubscribableDBState = (): SubscribableDBState => ({
   afterUpsertSubscribers: [],
   afterDeleteSubscribers: [],
   afterChangeSubscribers: [],
+  afterScanSubscribers: [],
   revision: refVar(0),
 });
 
@@ -156,6 +237,19 @@ export class SubscribableDBTx implements HyperDBTx {
     throw new Error("Not supported");
   }
 
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {
+    this.throwIfDone();
+    yield* this.delegateTx().preloadTables(specs);
+  }
+
+  private delegateTx(): HyperDBTx {
+    return this.traits.length > 0
+      ? (this.txDb.withTraits(...this.traits) as HyperDBTx)
+      : this.txDb;
+  }
+
   withTraits(...traits: Trait[]): HyperDBTx {
     return new SubscribableDBTx(this.subDb, this.txDb, this.state, [
       ...this.traits,
@@ -182,10 +276,24 @@ export class SubscribableDBTx implements HyperDBTx {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
 
-    const txDb =
-      this.traits.length > 0 ? this.txDb.withTraits(...this.traits) : this.txDb;
+    const results = yield* this.delegateTx().intervalScan(
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    );
 
-    return yield* txDb.intervalScan(table, indexName, clauses, selectOptions);
+    yield* runAfterScanSubscribers(
+      this,
+      this.subDb.afterScanSubscribers,
+      table,
+      String(indexName),
+      clauses,
+      selectOptions,
+      results as Row[],
+    );
+
+    return results;
   }
 
   *insert<TTable extends TableDefinition<any>>(
@@ -210,7 +318,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      yield* this.txDb.insert(table, records);
+      yield* this.delegateTx().insert(table, records);
     } catch (error) {
       if (traceContext && mutationEvent) {
         traceContext.tracer.endMutationEventError(
@@ -300,7 +408,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      for (const oldRecord of yield* this.txDb.intervalScan(
+      for (const oldRecord of yield* this.delegateTx().intervalScan(
         table,
         table.idIndexName,
         upsertRecords.map((r) => ({ eq: [{ col: "id", val: r.id }] })),
@@ -308,7 +416,7 @@ export class SubscribableDBTx implements HyperDBTx {
         previousRecords.set(oldRecord.id, oldRecord);
       }
 
-      yield* this.txDb.upsert(table, upsertRecords);
+      yield* this.delegateTx().upsert(table, upsertRecords);
     } catch (error) {
       if (traceContext && mutationEvent) {
         traceContext.tracer.endMutationEventError(
@@ -376,7 +484,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : undefined;
 
     try {
-      for (const oldRecord of yield* this.txDb.intervalScan(
+      for (const oldRecord of yield* this.delegateTx().intervalScan(
         table,
         table.idIndexName,
         ids.map((id) => ({ eq: [{ col: "id", val: id }] })),
@@ -384,7 +492,7 @@ export class SubscribableDBTx implements HyperDBTx {
         deleteOps.push({ type: "delete", table, oldValue: oldRecord });
       }
 
-      yield* this.txDb.delete(table, ids);
+      yield* this.delegateTx().delete(table, ids);
       appendOps(this.operations, deleteOps);
     } catch (error) {
       if (traceContext && mutationEvent) {
@@ -433,6 +541,9 @@ export class SubscribableDBTx implements HyperDBTx {
 
     yield* this.txDb.commit();
     this.state.committed.val = true;
+
+    // if (this.operations.length === 0) return;
+
     const traits = this.getTraits();
     const revision = this.subDb.incrementRevision();
     const subscribers = [...this.subDb.subscribers];
@@ -494,6 +605,10 @@ export class SubscribableDB implements HyperDB {
     return this.state.afterChangeSubscribers;
   }
 
+  get afterScanSubscribers(): AfterScanCallback[] {
+    return this.state.afterScanSubscribers;
+  }
+
   getRevision(): number {
     return this.state.revision.val;
   }
@@ -511,6 +626,12 @@ export class SubscribableDB implements HyperDB {
 
   loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
     return this.db.loadTables(tables);
+  }
+
+  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {
+    return this.delegateDB().preloadTables(specs);
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
@@ -580,6 +701,14 @@ export class SubscribableDB implements HyperDB {
     };
   }
 
+  afterScan(cb: AfterScanCallback): () => void {
+    this.afterScanSubscribers.push(cb);
+
+    return () => {
+      removeSubscriber(this.afterScanSubscribers, cb);
+    };
+  }
+
   subscribe(cb: Subscriber): () => void {
     this.subscribers.push(cb);
 
@@ -598,15 +727,39 @@ export class SubscribableDB implements HyperDB {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     if (clauses && clauses.length === 0) {
-      return [];
+      const results: ExtractSchema<TTable>[] = [];
+
+      yield* runAfterScanSubscribers(
+        this,
+        this.afterScanSubscribers,
+        table,
+        String(indexName),
+        clauses,
+        selectOptions,
+        results as Row[],
+      );
+
+      return results;
     }
 
-    return yield* this.delegateDB().intervalScan(
+    const results = yield* this.delegateDB().intervalScan(
       table,
       indexName,
       clauses,
       selectOptions,
     );
+
+    yield* runAfterScanSubscribers(
+      this,
+      this.afterScanSubscribers,
+      table,
+      String(indexName),
+      clauses,
+      selectOptions,
+      results as Row[],
+    );
+
+    return results;
   }
 
   *insert<TTable extends TableDefinition<any>>(

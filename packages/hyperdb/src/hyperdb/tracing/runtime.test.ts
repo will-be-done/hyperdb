@@ -133,6 +133,12 @@ const tasksTable = defineTable("devtoolTasks", {
   projectId: v.string(),
 }).index("projectState", ["projectId", "state"]);
 
+const preloadedEntitiesTable = defineTable("devtoolPreloadedEntities", {
+  id: v.string(),
+  entityId: v.string(),
+  tableName: v.string(),
+}).index("byEntityAndTable", ["entityId", "tableName"]);
+
 const task = (overrides: Partial<Task> = {}): Task => ({
   id: "task-1",
   title: "Task 1",
@@ -341,6 +347,61 @@ describe("devtool runtime tracing", () => {
     ).toEqual(["running", "fast", "slow"]);
   });
 
+  it("returns traces ordered by fetched rows through HyperDB indexes", () => {
+    const commandEvent = (id: string, resultCount: number) => ({
+      id,
+      frameId: "frame",
+      kind: "select" as const,
+      tableName: "tasks",
+      index: "projectState",
+      where: [],
+      bounds: [],
+      startedAt: 0,
+      status: "success" as const,
+      resultCount,
+    });
+
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "few",
+        name: "few",
+        commandEvents: [commandEvent("few-select", 2)],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "many",
+        name: "many",
+        commandEvents: [
+          commandEvent("many-select-1", 6),
+          commandEvent("many-select-2", 4),
+        ],
+      }),
+    );
+    hyperDBTraceStore.addTrace(
+      trace({
+        id: "none",
+        name: "none",
+        commandEvents: [],
+      }),
+    );
+
+    expect(
+      select(
+        hyperDBTraceStore.getDB(),
+        (function* () {
+          const rows = yield* selectFrom(
+            traceRootsRuntimeTable,
+            "byRowsFetched",
+          )
+            .order("desc")
+            .limit(10);
+          return hyperDBTraceStore.resolveTraceRows(rows);
+        })(),
+      ).map((item) => item.name),
+    ).toEqual(["many", "few", "none"]);
+  });
+
   it("filters traces by DB through HyperDB indexes and cached state in memory", () => {
     hyperDBTraceStore.addTrace(
       trace({
@@ -508,6 +569,76 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.frameId).toBe(
       trace.frames[0]?.children[0]?.id,
     );
+  });
+
+  it("records selectors called from afterScan under the callback frame", async () => {
+    const db = createDB();
+    execSync(db.loadTables([preloadedEntitiesTable]));
+    execSync(db.insert(tasksTable, [task()]));
+
+    const preloadEntities = selector({
+      name: "preloadEntities",
+      args: {
+        ids: v.array(v.string()),
+        tableName: v.string(),
+      },
+      handler: function* preloadEntities({ ids, tableName }) {
+        if (ids.length === 0) return;
+
+        yield* selectFrom(preloadedEntitiesTable, "byEntityAndTable").where(
+          (q) => q.eq("entityId", ids[0]!).eq("tableName", tableName),
+        );
+      },
+    });
+
+    db.afterScan(
+      function* preloadRelatedRecordsAfterScan(
+        _db,
+        table,
+        _indexName,
+        _clauses,
+        _selectOptions,
+        results,
+      ) {
+        if (table !== tasksTable || results.length === 0) return;
+
+        yield* preloadEntities({
+          ids: results.map((row) => row.id),
+          tableName: table.tableName,
+        });
+      },
+    );
+
+    const readTasks = selector({
+      name: "readTasks",
+      args: {},
+      handler: function* readTasks() {
+        return yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+      },
+    });
+
+    expect(select(db, readTasks({}))).toEqual([task()]);
+
+    hyperDBTraceStore.flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
+    const rootFrame = trace.frames[0]!;
+    const afterScanFrame = rootFrame.children.find(
+      (frame) => frame.name === "preloadRelatedRecordsAfterScan",
+    )!;
+    const preloadFrame = afterScanFrame.children.find(
+      (frame) => frame.name === "preloadEntities",
+    )!;
+
+    expect(trace.name).toBe("readTasks");
+    expect(afterScanFrame).toBeDefined();
+    expect(preloadFrame).toBeDefined();
+    expect(trace.commandEvents).toHaveLength(2);
+    expect(trace.commandEvents.map((event) => event.frameId)).toEqual([
+      rootFrame.id,
+      preloadFrame.id,
+    ]);
   });
 
   it("skips root and child traces for object selectors with skipTrace true", async () => {

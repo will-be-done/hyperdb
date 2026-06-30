@@ -53,6 +53,10 @@ selector frames, the index ranges scanned, and the mutations performed. Cache
 hits are recorded too, so you can see when a selector was reused instead of
 recomputed.
 
+The trace list can be sorted by creation time, duration, or rows fetched. The
+rows fetched sort uses the total rows returned by all select events in a trace,
+which makes broad scans and high-fanout selectors easier to spot.
+
 The details pane keeps the active tab while you move between traces, so you can
 compare Overview, Queries, Mutations, or Call Tree output without reselecting
 the same tab each time.

@@ -37,16 +37,34 @@ state libraries start to strain:
   to persistent storage on a miss, then cache the covered index range for next
   time. Cache fills, write-through mutations, and transactions are serialized
   per HybridDB instance so async selectors and actions do not overlap against
-  the in-memory cache tier. Drivers explicitly report whether selector readonly
-  transactions are supported; enabled drivers use `beginTx("readonly")` for
-  scoped reuse. With an IndexedDB primary, that readonly transaction starts
-  only when the persistent tier is actually read.
+  the in-memory cache tier. The committed cache snapshot remains synchronously
+  readable while a write transaction is active, so React can keep showing cached
+  data without seeing uncommitted writes. Drivers explicitly report whether
+  selector readonly transactions are supported; enabled drivers use
+  `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
+  readonly transaction starts only when the persistent tier is actually read,
+  and is reopened once if the browser finishes it between scans. IDB operation
+  logs include transaction ids and selector/action names when a run context is
+  available. When a workflow should start warm, call `db.preloadTables(...)`
+  with a B-tree full-scan index such as `byIds` to load whole tables into the
+  cache and mark their indexes as resident when the DB is a HybridDB wrapper, or
+  call `preloadSelector(...)` with the same selector args a route will render to
+  warm the selector result too. Retained selector cache entries keep tracking DB
+  changes until GC: unrelated mutations advance the cached revision without a
+  re-run, while mutations inside the selector's read ranges mark unused entries
+  stale so they re-run lazily on the next preload or read.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
   fast path when a run completes from memory, then promotes to async only if a
-  command yields a promise. Its async React API returns a React Query-style
-  object with `data`, `status`, `error`, fetching flags, and `refetch()`.
+  command yields a promise. With `HybridDB`, React reads the in-memory cache
+  through `useSyncExternalStore` while the persistent tier preloads missing
+  ranges in the background, so cached data can stay visible during refreshes;
+  the background HybridDB run still participates in selector root memoization.
+  `preloadSelector(...)` uses the same cache bridge outside React, so route
+  loaders can warm HybridDB and the in-memory selector snapshot in one call.
+  Its async React API returns a React Query-style object with `data`, `status`,
+  `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
@@ -79,8 +97,8 @@ The React devtool ships separately. It traces every selector run and mutation
 into a browsable call tree, so you can see which index a slow view scanned. For
 HybridDB reads, select nodes are labeled `in-mem` or `persist` to show whether
 the returned rows came from the memory cache or the primary persistent store.
-When you switch traces, the active detail tab stays selected so comparison stays
-focused:
+You can sort traces by creation time, duration, or rows fetched, and when you
+switch traces, the active detail tab stays selected so comparison stays focused:
 
 ```bash
 npm install @will-be-done/hyperdb-devtool
@@ -139,6 +157,10 @@ export const createTask = action({
 });
 ```
 
+Queries can also return OR branches with `or(...)` or arrays from `where`.
+When combined with `.order(...)`, those branches are merged into the index order
+before rows are returned.
+
 ```ts
 // 4. Create a database (in-memory + reactive)
 import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
@@ -155,6 +177,10 @@ export const db = new SubscribableDB(
 // Or execAsync() for async driver
 execSync(db.loadTables([tasksTable]));
 ```
+
+`SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
+`afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
+for successful index scans.
 
 ```tsx
 import {

@@ -315,8 +315,13 @@ persistent backends. IndexedDB reports selector readonly transaction support,
 so selector reads use `beginTx("readonly")`; when multiple scans happen inside
 one selector run while the browser keeps a readonly transaction active, the
 driver reuses it instead of opening one transaction per scan. Concurrent
-selector runs get separate readonly transactions, and an inactive readonly
-transaction is reopened once for the current scan.
+selector runs get separate readonly transactions, and an inactive or finished
+readonly transaction is reopened once for the current scan.
+
+IDB operation logs include a per-driver transaction id (`tx 3`) and, when the
+operation comes from an object selector or action, the run context
+(`selector readTasks` or `action createTask`). This makes scan, reopen, commit,
+and failure logs easier to correlate in browser consoles.
 
 ## Sync vs. async, in practice
 

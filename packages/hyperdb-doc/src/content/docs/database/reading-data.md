@@ -80,6 +80,8 @@ range) are explained in detail in [Indexes](/database/indexes/).
 
 To express an OR, return an array of query branches from `where`, or use the
 `or(...)` helper. Each branch is scanned and the results are combined.
+With `.order(...)`, the combined rows are ordered by the index globally, not by
+the order of the OR branches.
 
 ```ts
 import { selectFrom, or } from "@will-be-done/hyperdb";
@@ -101,6 +103,10 @@ one query:
 ```ts
 selectFrom(tasksTable, "byId").where((q) => ids.map((id) => q.eq("id", id)));
 ```
+
+When reads go through a [`SubscribableDB`](/runtime/db/), `afterScan` lifecycle
+hooks can observe each successful scan with the table, index, where clauses,
+select options, and returned rows.
 
 ### `order` and `limit`
 

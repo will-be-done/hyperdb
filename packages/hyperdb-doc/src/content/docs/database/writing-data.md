@@ -128,7 +128,8 @@ export const moveTask = action({
 When you dispatch against a [`SubscribableDB`](/runtime/db/), the commit bumps a
 revision and notifies subscribers with the exact rows that changed. This is what
 drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` /
-`afterChange` hooks.
+`afterChange` mutation hooks. `SubscribableDB` also exposes `afterScan` for
+successful reads.
 
 ## Bulk writes
 

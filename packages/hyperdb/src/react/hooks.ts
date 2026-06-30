@@ -7,7 +7,9 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  getSubscribableHybridCacheDB,
   initCachedSelector,
+  runCachedSelectorMaybeAsync,
   runSelectorAsync,
   runSelectorMaybeAsync,
   select,
@@ -25,6 +27,7 @@ import {
   stableSerializeSelectorArgs,
 } from "../hyperdb/commands/selector/selector-memo";
 import type { SelectRangeCmd } from "../hyperdb/commands/selector/commands";
+import { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
 
 type SyncSelectorEnabledOptions<TSelector extends AnyObjectSelector> = {
   selector: TSelector;
@@ -148,9 +151,32 @@ type AsyncSelectorState<TData, TError> = {
   status: AsyncSelectorStatus;
 };
 
+type SyncSelectorSnapshotStore<TData> = {
+  enabled: boolean;
+  getSnapshot: () => TData | undefined;
+  publish: (value: TData) => void;
+  subscribe: (callback: () => void) => () => void;
+};
+
+type CachedSelectorStore<TData> = {
+  getSnapshot: () => TData;
+  refresh: () => void;
+  setSnapshot: (value: TData) => void;
+  subscribe: (callback: () => void) => () => void;
+};
+
 const createDisabledStore = <TReturn>(defaultValue: TReturn) => ({
   subscribe: () => () => {},
   getSnapshot: () => defaultValue,
+});
+
+const createInactiveSyncSelectorSnapshotStore = <
+  TData,
+>(): SyncSelectorSnapshotStore<TData> => ({
+  enabled: false,
+  getSnapshot: () => undefined,
+  publish: () => undefined,
+  subscribe: () => () => undefined,
 });
 
 const isPromiseLike = <T>(value: T | PromiseLike<T>): value is PromiseLike<T> =>
@@ -297,6 +323,58 @@ const createUseAsyncSelectorResult = <TData, TError>(
   };
 };
 
+const createSyncCacheSelectorSnapshotStore = <
+  TSelector extends AnyObjectSelector,
+>(options: {
+  cacheDB: SubscribableDB;
+  initCachedSelector: typeof initCachedSelector;
+  selector: TSelector;
+  args: SelectorArgs<TSelector>;
+}): SyncSelectorSnapshotStore<SelectorReturn<TSelector>> => {
+  const subscribers = new Set<() => void>();
+  const cachedSelector = options.initCachedSelector(
+    options.cacheDB,
+    options.selector,
+    options.args,
+  ) as CachedSelectorStore<SelectorReturn<TSelector>>;
+
+  return {
+    enabled: true,
+    getSnapshot: cachedSelector.getSnapshot,
+    publish: (value) => {
+      cachedSelector.setSnapshot(value);
+      for (const subscriber of subscribers) {
+        subscriber();
+      }
+    },
+    subscribe: (callback) => {
+      subscribers.add(callback);
+      const unsubscribe = cachedSelector.subscribe(callback);
+
+      return () => {
+        subscribers.delete(callback);
+        unsubscribe();
+      };
+    },
+  };
+};
+
+const createVisibleAsyncSelectorState = <TData, TError>(
+  queryState: AsyncSelectorState<TData, TError>,
+  syncStore: SyncSelectorSnapshotStore<TData>,
+): AsyncSelectorState<TData, TError> => {
+  if (!syncStore.enabled) {
+    return queryState;
+  }
+
+  return {
+    ...queryState,
+    data: syncStore.getSnapshot(),
+    isPlaceholderData: false,
+    status: queryState.status === "pending" ? "success" : queryState.status,
+  };
+};
+
 const defaultHookDeps = {
   useCallback,
   useEffect,
@@ -306,6 +384,7 @@ const defaultHookDeps = {
   useSyncExternalStore,
   useDB,
   initCachedSelector,
+  runCachedSelectorMaybeAsync,
   runSelectorAsync,
   runSelectorMaybeAsync,
   select,
@@ -380,6 +459,27 @@ export function useAsyncSelector<
   const argsKey = enabled
     ? hookDeps.stableSerializeSelectorArgs(input.args)
     : undefined;
+  const syncSnapshotStore = hookDeps.useMemo(() => {
+    const cacheDB =
+      enabled && subscribed ? getSubscribableHybridCacheDB(db) : undefined;
+    if (!cacheDB) {
+      return createInactiveSyncSelectorSnapshotStore<
+        SelectorReturn<TSelector>
+      >();
+    }
+
+    return createSyncCacheSelectorSnapshotStore({
+      args: input.args,
+      cacheDB,
+      initCachedSelector: hookDeps.initCachedSelector,
+      selector: input.selector,
+    });
+  }, [db, input.selector, argsKey, enabled, subscribed]);
+  const syncSnapshot = hookDeps.useSyncExternalStore(
+    syncSnapshotStore.subscribe,
+    syncSnapshotStore.getSnapshot,
+    syncSnapshotStore.getSnapshot,
+  );
   const promiseControllerRef = hookDeps.useRef(
     createPromiseController<SelectorReturn<TSelector>>(),
   );
@@ -393,6 +493,7 @@ export function useAsyncSelector<
   );
   const queryStateRef = hookDeps.useRef(queryState);
   const selectRangeCmdsRef = hookDeps.useRef<SelectRangeCmd[]>([]);
+  const syncSnapshotStoreRef = hookDeps.useRef(syncSnapshotStore);
   const isRunningRef = hookDeps.useRef(false);
   const rerunRequestedRef = hookDeps.useRef(false);
   const cancelledRef = hookDeps.useRef(false);
@@ -416,6 +517,7 @@ export function useAsyncSelector<
     ) => Promise<UseAsyncSelectorResult<SelectorReturn<TSelector>, TError>>
   >(() => Promise.resolve(resultRef.current));
   genRef.current = () => input.selector(input.args);
+  syncSnapshotStoreRef.current = syncSnapshotStore;
 
   const setQueryState = hookDeps.useCallback(
     (
@@ -436,7 +538,11 @@ export function useAsyncSelector<
     [],
   );
 
-  const result = createUseAsyncSelectorResult(queryState, {
+  const visibleQueryState = createVisibleAsyncSelectorState(queryState, {
+    ...syncSnapshotStore,
+    getSnapshot: () => syncSnapshot,
+  });
+  const result = createUseAsyncSelectorResult(visibleQueryState, {
     enabled,
     refetch,
   });
@@ -490,6 +596,7 @@ export function useAsyncSelector<
           if (cancelledRef.current) return;
 
           selectRangeCmdsRef.current = cmds;
+          syncSnapshotStoreRef.current.publish(value);
           const nextState = setQueryState((previous) => ({
             ...previous,
             data: value,
@@ -503,10 +610,16 @@ export function useAsyncSelector<
             isPlaceholderData: false,
             status: "success",
           }));
-          resultRef.current = createUseAsyncSelectorResult(nextState, {
-            enabled,
-            refetch,
-          });
+          resultRef.current = createUseAsyncSelectorResult(
+            createVisibleAsyncSelectorState(
+              nextState,
+              syncSnapshotStoreRef.current,
+            ),
+            {
+              enabled,
+              refetch,
+            },
+          );
           promiseController.resolve(value);
           isRunningRef.current = false;
           inFlightResultRef.current = null;
@@ -533,10 +646,16 @@ export function useAsyncSelector<
             isPlaceholderData: false,
             status: "error",
           }));
-          resultRef.current = createUseAsyncSelectorResult(nextState, {
-            enabled,
-            refetch,
-          });
+          resultRef.current = createUseAsyncSelectorResult(
+            createVisibleAsyncSelectorState(
+              nextState,
+              syncSnapshotStoreRef.current,
+            ),
+            {
+              enabled,
+              refetch,
+            },
+          );
           promiseController.reject(error);
           isRunningRef.current = false;
           inFlightResultRef.current = null;
@@ -553,11 +672,14 @@ export function useAsyncSelector<
             do {
               rerunRequestedRef.current = false;
               const cmds: SelectRangeCmd[] = [];
-              const value = hookDeps.runSelectorMaybeAsync(
-                db,
-                genRef.current,
-                cmds,
-              );
+              const value = syncSnapshotStoreRef.current.enabled
+                ? hookDeps.runCachedSelectorMaybeAsync(
+                    db,
+                    input.selector,
+                    input.args,
+                    cmds,
+                  )
+                : hookDeps.runSelectorMaybeAsync(db, genRef.current, cmds);
 
               if (isPromiseLike(value)) {
                 void Promise.resolve(value).then(

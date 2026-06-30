@@ -10,11 +10,9 @@ import "./index.css";
 const { db, persistence } = await initStore(getStoredMode());
 
 createRoot(document.getElementById("root")!).render(
-  <StrictMode>
-    <DBProvider value={db}>
-      <PersistenceProvider value={persistence}>
-        <App />
-      </PersistenceProvider>
-    </DBProvider>
-  </StrictMode>,
+  <DBProvider value={db}>
+    <PersistenceProvider value={persistence}>
+      <App />
+    </PersistenceProvider>
+  </DBProvider>,
 );
