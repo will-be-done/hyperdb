@@ -5,10 +5,7 @@ import {
   insert,
 } from "../../commands/action/builders";
 import { selectFrom } from "../../commands/selector/builder";
-import {
-  createSelector,
-  selectAsync,
-} from "../../commands/selector/selector";
+import { createSelector, selectAsync } from "../../commands/selector/selector";
 import { execAsync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
 import { DB } from "../../runtime/db";

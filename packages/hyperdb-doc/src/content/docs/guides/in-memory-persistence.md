@@ -162,19 +162,20 @@ local-first client (one user's data), but it's the opposite of the
 the rows a selector touches. Don't hydrate an unbounded server table this way.
 :::
 
-:::note[Load on demand: a hybrid mode (in development)]
-Eager hydration is the simplest model, but not the only one. A hybrid mode,
-currently in development, flips it around: instead of loading everything up front, a read
-checks the in-memory tier first and, on a miss, runs the _same_ query against the
-persistent tier and caches the result back into memory for next time.
+:::note[Load on demand: HybridDB]
+Eager hydration is the simplest model, but not the only one. `HybridDB` flips it
+around: instead of loading everything up front, a read checks the in-memory tier
+first and, on a miss, runs the _same_ query against the persistent tier and
+caches the result back into memory for next time.
 
 The trade-off is that selectors and dispatch become async (a read may need to
 fall through to disk), but startup stays quick and memory stays low, because
 data is pulled in lazily, on demand. Writes still commit synchronously for any
-rows already cached, so if you preload the working set, actions stay synchronous
-while other rows load on first access. This guide uses the eager model;
-reach for hybrid mode when the dataset is too large to hold fully in memory or
-when startup time matters more than synchronous reads.
+rows already cached, so you can call `db.preloadTables(...)` through the normal
+`SubscribableDB` wrapper for the tables or working set you want resident before
+a workflow begins. This guide uses the eager model; reach for hybrid mode when
+the dataset is too large to hold fully in memory or when startup time matters
+more than synchronous reads.
 :::
 
 ## 4. Mirror every change to disk

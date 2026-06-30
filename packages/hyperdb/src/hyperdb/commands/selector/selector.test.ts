@@ -4,13 +4,14 @@ import {
   createSelector,
   initSelector,
   initCachedSelector,
+  preloadSelector,
   select,
   selectAsync,
 } from "./selector";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
-import { selectFrom } from "./builder";
+import { or, selectFrom } from "./builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
 import {
@@ -320,7 +321,7 @@ describe("selector", () => {
     );
   });
 
-  test("cached object-form selectors share one DB subscription for same args", () => {
+  test("cached object-form selectors share one DB subscription for same args while retained", () => {
     const cachedTasksTable = defineTable("cachedSelectorTasks", {
       id: v.string(),
       projectId: v.string(),
@@ -355,7 +356,7 @@ describe("selector", () => {
     expect(testDb.subscribers).toHaveLength(1);
 
     unsubscribeSecond();
-    expect(testDb.subscribers).toHaveLength(0);
+    expect(testDb.subscribers).toHaveLength(1);
   });
 
   test("cached object-form selector freezes args when enabled", () => {
@@ -640,6 +641,103 @@ describe("selector", () => {
     unsubscribe();
   });
 
+  test("preloaded selector skips rerun after non-invalidating revision changes", async () => {
+    const preloadTasksTable = defineTable("preloadInvalidationTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      orderToken: v.string(),
+    }).index("projectOrder", ["projectId", "orderToken"]);
+    const testDb = createTestDB(preloadTasksTable);
+    let runCount = 0;
+
+    const projectTasks = selector({
+      name: "preloadInvalidationProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* projectTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(preloadTasksTable, "projectOrder").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    await expect(
+      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+    ).resolves.toEqual([]);
+    expect(runCount).toBe(1);
+    expect(testDb.subscribers).toHaveLength(1);
+
+    execSync(
+      testDb.insert(preloadTasksTable, [
+        { id: "other", projectId: "project-2", orderToken: "a" },
+      ]),
+    );
+
+    await expect(
+      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+    ).resolves.toEqual([]);
+    expect(runCount).toBe(1);
+
+    execSync(
+      testDb.insert(preloadTasksTable, [
+        { id: "matching", projectId: "project-1", orderToken: "a" },
+      ]),
+    );
+
+    expect(runCount).toBe(1);
+    await expect(
+      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+    ).resolves.toEqual([
+      { id: "matching", projectId: "project-1", orderToken: "a" },
+    ]);
+    expect(runCount).toBe(2);
+  });
+
+  test("unsubscribed cached selector refreshes after missed revision changes", () => {
+    const missedRevisionTasksTable = defineTable("missedRevisionTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      orderToken: v.string(),
+    }).index("projectOrder", ["projectId", "orderToken"]);
+    const testDb = createTestDB(missedRevisionTasksTable);
+    let runCount = 0;
+
+    const projectTasks = selector({
+      name: "missedRevisionProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* projectTasks({ projectId }) {
+        runCount++;
+        return yield* selectFrom(
+          missedRevisionTasksTable,
+          "projectOrder",
+        ).where((q) => q.eq("projectId", projectId));
+      },
+    });
+
+    const first = initCachedSelector(testDb, projectTasks, {
+      projectId: "project-1",
+    });
+
+    expect(first.getSnapshot()).toEqual([]);
+    expect(runCount).toBe(1);
+    expect(testDb.subscribers).toHaveLength(0);
+
+    execSync(
+      testDb.insert(missedRevisionTasksTable, [
+        { id: "matching", projectId: "project-1", orderToken: "a" },
+      ]),
+    );
+
+    const second = initCachedSelector(testDb, projectTasks, {
+      projectId: "project-1",
+    });
+
+    expect(second.getSnapshot()).toEqual([
+      { id: "matching", projectId: "project-1", orderToken: "a" },
+    ]);
+    expect(runCount).toBe(2);
+  });
+
   test("cached object-form selector reuse is recorded as cached in the trace", async () => {
     const deactivateTrace = hyperDBTraceStore.activate();
     hyperDBTraceStore.clear();
@@ -800,7 +898,7 @@ describe("selector", () => {
     expect(runCount).toBe(1);
 
     cachedAgain.subscribe(() => {})();
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(31_000);
 
     initCachedSelector(testDb, defaultGcTasks, {
       projectId: "project-1",
@@ -838,7 +936,7 @@ describe("selector", () => {
     );
     first.subscribe(() => {})();
 
-    expect(testDb.subscribers).toHaveLength(0);
+    expect(testDb.subscribers).toHaveLength(1);
 
     const second = initCachedSelector(
       testDb,
@@ -852,7 +950,7 @@ describe("selector", () => {
     expect(testDb.subscribers).toHaveLength(1);
 
     unsubscribeSecond();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(2000);
 
     initCachedSelector(testDb, gcTasks, { projectId: "project-1" });
 
@@ -1926,5 +2024,33 @@ describe("selector", () => {
       "two",
     ]);
     expect(snapshots).toEqual([["one", "three", "two"]]);
+  });
+
+  test("selectFrom orders OR query branches by index order", () => {
+    const itemsTable = defineTable("orOrderedSelectorItems", {
+      id: v.string(),
+      title: v.string(),
+    }).index("byIds", ["id"]);
+
+    const testDb = createTestDB(itemsTable);
+    execSync(
+      testDb.insert(itemsTable, [
+        { id: "3", title: "three" },
+        { id: "1", title: "one" },
+        { id: "2", title: "two" },
+      ]),
+    );
+
+    const ids = select(
+      testDb,
+      (function* () {
+        const rows = yield* selectFrom(itemsTable, "byIds")
+          .where((q) => or(q.eq("id", "3"), q.eq("id", "1")))
+          .order("asc");
+        return rows.map((row) => row.id);
+      })(),
+    );
+
+    expect(ids).toEqual(["1", "3"]);
   });
 });

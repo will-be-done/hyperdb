@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { execAsync } from "../core/executor";
-import type { HyperDB, HyperDBTx } from "../core/contracts";
+import type {
+  HyperDB,
+  HyperDBTx,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import type { SelectOptions, WhereClause } from "../core/primitives";
 import type {
   ExtractIndexes,
@@ -68,6 +73,12 @@ export class AsyncDB {
 
   loadTables(tables: TableDefinition<any, any, any>[]): Promise<void> {
     return execAsync(this.db.loadTables(tables));
+  }
+
+  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Promise<void> {
+    return execAsync(this.db.preloadTables(specs));
   }
 
   async beginTx(): Promise<AsyncDBTx> {

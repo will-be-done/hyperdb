@@ -1,7 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { execSync } from "../core/executor";
-import type { HyperDB, HyperDBTx } from "../core/contracts";
+import type {
+  HyperDB,
+  HyperDBTx,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import type { SelectOptions, WhereClause } from "../core/primitives";
 import type {
   ExtractIndexes,
@@ -68,6 +73,12 @@ export class SyncDB {
 
   loadTables(tables: TableDefinition<any, any, any>[]): void {
     return execSync(this.db.loadTables(tables));
+  }
+
+  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): void {
+    return execSync(this.db.preloadTables(specs));
   }
 
   beginTx(): SyncDBTx {

@@ -1,6 +1,10 @@
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
-import type { HyperDBTx } from "../core/contracts";
+import type {
+  HyperDBTx,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import type {
   DBDriverOperationOptions,
   DBDriverTX,
@@ -145,6 +149,10 @@ export class DBTx implements HyperDBTx {
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
+
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {}
 
   withTraits(...traits: Trait[]): HyperDBTx {
     return new DBTx(

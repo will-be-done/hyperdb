@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { SubscribableDB, Op } from "../../runtime/subscribable-db";
+import { SubscribableDB, type Op } from "../../runtime/subscribable-db";
 import { execAsync, execMaybeAsync, execSync } from "../../core/executor";
 import type { DBCmd } from "../async";
 import type { HyperDB } from "../../core/contracts";
@@ -522,20 +522,70 @@ type SelectorCacheEntry<TReturn> = {
   // revisions and can be reused when triggering ops miss their ranges.
   childMemo: ChildMemo;
   subscribers: Set<() => void>;
+  needsRerun?: boolean;
   dbUnsubscribe?: () => void;
-  gcTimer?: ReturnType<typeof setTimeout>;
+  gcExpiresAt?: number;
 };
 
 type SelectorCacheStore<TReturn> = {
   subscribe: (callback: () => void) => () => void;
   getSnapshot: () => TReturn;
+  refresh: () => void;
+  setSnapshot: (value: TReturn) => void;
 };
 
 const selectorCache = new WeakMap<
   SubscribableDB,
   WeakMap<object, Map<string, SelectorCacheEntry<unknown>>>
 >();
-const DEFAULT_SELECTOR_CACHE_GC_TIME = 3_000;
+const DEFAULT_SELECTOR_CACHE_GC_TIME = 30_000;
+const SELECTOR_CACHE_GC_TICK_MS = 1_000;
+const selectorGcEntries = new Set<SelectorCacheEntry<unknown>>();
+let selectorGcTicker: ReturnType<typeof setInterval> | undefined;
+
+const isHyperDBLike = (value: unknown): value is HyperDB =>
+  value !== null &&
+  typeof value === "object" &&
+  typeof (value as { intervalScan?: unknown }).intervalScan === "function" &&
+  typeof (value as { beginTx?: unknown }).beginTx === "function";
+
+const isSubscribableDBLike = (value: unknown): value is SubscribableDB =>
+  isHyperDBLike(value) &&
+  typeof (value as { subscribe?: unknown }).subscribe === "function" &&
+  typeof (value as { getRevision?: unknown }).getRevision === "function";
+
+const getHybridCacheDB = (db: SubscribableDB): HyperDB | undefined => {
+  const maybeRoot = db as unknown as { cache?: unknown; db?: unknown };
+  const maybeInner = maybeRoot.db as { cache?: unknown } | undefined;
+
+  if (isHyperDBLike(maybeInner?.cache)) {
+    return maybeInner.cache;
+  }
+
+  if (isHyperDBLike(maybeRoot.cache)) {
+    return maybeRoot.cache;
+  }
+
+  return undefined;
+};
+
+const subscribableCacheDBs = new WeakMap<HyperDB, SubscribableDB>();
+
+export const getSubscribableHybridCacheDB = (
+  db: SubscribableDB,
+): SubscribableDB | undefined => {
+  const cacheDB = getHybridCacheDB(db);
+  if (!cacheDB) return undefined;
+  if (isSubscribableDBLike(cacheDB)) return cacheDB;
+
+  let subscribable = subscribableCacheDBs.get(cacheDB);
+  if (!subscribable) {
+    subscribable = new SubscribableDB(cacheDB);
+    subscribableCacheDBs.set(cacheDB, subscribable);
+  }
+
+  return subscribable;
+};
 
 const getSelectorCacheMap = (
   db: SubscribableDB,
@@ -556,18 +606,57 @@ const getSelectorCacheMap = (
   return byArgs;
 };
 
+const stopSelectorCacheGcTickerIfIdle = () => {
+  if (selectorGcEntries.size > 0 || !selectorGcTicker) return;
+
+  clearInterval(selectorGcTicker);
+  selectorGcTicker = undefined;
+};
+
+const runSelectorCacheGc = () => {
+  const now = Date.now();
+
+  for (const entry of selectorGcEntries) {
+    if (entry.subscribers.size > 0) {
+      selectorGcEntries.delete(entry);
+      entry.gcExpiresAt = undefined;
+      continue;
+    }
+
+    if (entry.gcExpiresAt !== undefined && entry.gcExpiresAt <= now) {
+      deleteSelectorCacheEntry(entry);
+    }
+  }
+
+  stopSelectorCacheGcTickerIfIdle();
+};
+
+const ensureSelectorCacheGcTicker = () => {
+  if (selectorGcTicker) return;
+
+  selectorGcTicker = setInterval(runSelectorCacheGc, SELECTOR_CACHE_GC_TICK_MS);
+  (selectorGcTicker as { unref?: () => void }).unref?.();
+};
+
+const cancelSelectorCacheEntryGc = (entry: SelectorCacheEntry<unknown>) => {
+  if (!selectorGcEntries.delete(entry)) return;
+
+  entry.gcExpiresAt = undefined;
+  stopSelectorCacheGcTickerIfIdle();
+};
+
 const deleteSelectorCacheEntry = (entry: SelectorCacheEntry<unknown>) => {
   entry.dbUnsubscribe?.();
   entry.dbUnsubscribe = undefined;
-  if (entry.gcTimer) {
-    clearTimeout(entry.gcTimer);
-    entry.gcTimer = undefined;
-  }
+  selectorGcEntries.delete(entry);
+  entry.gcExpiresAt = undefined;
 
   const byArgs = selectorCache.get(entry.db)?.get(entry.selector);
   if (byArgs?.get(entry.argsKey) === entry) {
     byArgs.delete(entry.argsKey);
   }
+
+  stopSelectorCacheGcTickerIfIdle();
 };
 
 const getSelectorTraceName = (selector: object): string => {
@@ -629,7 +718,241 @@ const rerunSelectorCacheEntry = <TReturn>(
     },
   );
   entry.currentRevision = entry.db.getRevision();
+  entry.needsRerun = false;
 };
+
+const copySelectRangeCmds = (
+  target: SelectRangeCmd[],
+  source: SelectRangeCmd[],
+) => {
+  target.splice(0, target.length, ...source);
+};
+
+const refreshSelectorCacheEntryMaybeAsync = <TReturn>(
+  entry: SelectorCacheEntry<TReturn>,
+): TReturn | Promise<TReturn> => {
+  const result = runSelectorMaybeAsync(
+    entry.db,
+    entry.gen,
+    entry.selectRangeCmds,
+    {
+      childMemo: entry.childMemo,
+    },
+  );
+
+  if (result instanceof Promise) {
+    return result.then((value) => {
+      entry.currentResult = value;
+      entry.currentRevision = entry.db.getRevision();
+      entry.needsRerun = false;
+      return value;
+    });
+  }
+
+  entry.currentResult = result;
+  entry.currentRevision = entry.db.getRevision();
+  entry.needsRerun = false;
+  return result;
+};
+
+const scheduleSelectorCacheEntryGc = (
+  entry: SelectorCacheEntry<unknown>,
+  gcTime: number,
+) => {
+  if (entry.subscribers.size > 0) return;
+
+  if (gcTime <= 0) {
+    deleteSelectorCacheEntry(entry);
+    return;
+  }
+
+  entry.gcExpiresAt = Date.now() + gcTime;
+  selectorGcEntries.add(entry);
+  ensureSelectorCacheGcTicker();
+};
+
+const primeCachedSelector = <TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  value: SelectorReturn<TSelector>,
+  selectRangeCmds: SelectRangeCmd[],
+  options: {
+    freezeArgs?: boolean;
+    gcTime?: number;
+  } = {},
+) => {
+  if (!getSelectorMemoization(selector).root) {
+    return;
+  }
+
+  const argsKey = stableSerializeSelectorArgs(args);
+  const freezeArgs =
+    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+  const cachedArgs = freezeArgs ? deepFreeze(args) : args;
+  const byArgs = getSelectorCacheMap(db, selector);
+  runSelectorCacheGc();
+  let entry = byArgs.get(argsKey) as
+    | SelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
+  const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
+
+  if (!entry) {
+    entry = {
+      argsKey,
+      args: cachedArgs,
+      db,
+      selector,
+      gen: () => selector(cachedArgs),
+      currentResult: value,
+      currentRevision: db.getRevision(),
+      selectRangeCmds: [...selectRangeCmds],
+      childMemo: new Map(),
+      subscribers: new Set(),
+    };
+    byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
+    ensureSelectorCacheEntrySubscribed(entry);
+    scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+    return;
+  }
+
+  cancelSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>);
+
+  entry.currentResult = value;
+  entry.currentRevision = db.getRevision();
+  copySelectRangeCmds(entry.selectRangeCmds, selectRangeCmds);
+  entry.childMemo = new Map();
+  entry.needsRerun = false;
+  ensureSelectorCacheEntrySubscribed(entry);
+  scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+
+  for (const subscriber of entry.subscribers) {
+    subscriber();
+  }
+};
+
+export function runCachedSelectorMaybeAsync<
+  TSelector extends AnyObjectSelector,
+>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  selectRangeCmds: SelectRangeCmd[] = [],
+  options: {
+    freezeArgs?: boolean;
+    gcTime?: number;
+  } = {},
+): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> {
+  if (!getSelectorMemoization(selector).root) {
+    return runSelectorMaybeAsync(db, () => selector(args), selectRangeCmds);
+  }
+
+  const argsKey = stableSerializeSelectorArgs(args);
+  const freezeArgs =
+    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+  const cachedArgs = freezeArgs ? deepFreeze(args) : args;
+  const byArgs = getSelectorCacheMap(db, selector);
+  runSelectorCacheGc();
+  let entry = byArgs.get(argsKey) as
+    | SelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
+  const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
+
+  if (entry) {
+    cancelSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>);
+
+    if (!entry.needsRerun && entry.currentRevision === db.getRevision()) {
+      traceSelectorCacheHit(entry as SelectorCacheEntry<unknown>);
+      copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
+      scheduleSelectorCacheEntryGc(
+        entry as SelectorCacheEntry<unknown>,
+        gcTime,
+      );
+      return entry.currentResult;
+    }
+
+    const result = refreshSelectorCacheEntryMaybeAsync(entry);
+    if (result instanceof Promise) {
+      return result.then((value) => {
+        copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
+        scheduleSelectorCacheEntryGc(
+          entry as SelectorCacheEntry<unknown>,
+          gcTime,
+        );
+        return value;
+      });
+    }
+
+    copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
+    scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+    return result;
+  }
+
+  const entrySelectRangeCmds: SelectRangeCmd[] = [];
+  const childMemo: ChildMemo = new Map();
+  const gen = () => selector(cachedArgs);
+  const result = runSelectorMaybeAsync(db, gen, entrySelectRangeCmds, {
+    childMemo,
+  });
+  const storeEntry = (value: SelectorReturn<TSelector>) => {
+    entry = {
+      argsKey,
+      args: cachedArgs,
+      db,
+      selector,
+      gen,
+      currentResult: value,
+      currentRevision: db.getRevision(),
+      selectRangeCmds: entrySelectRangeCmds,
+      childMemo,
+      subscribers: new Set(),
+    };
+    byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
+    copySelectRangeCmds(selectRangeCmds, entrySelectRangeCmds);
+    ensureSelectorCacheEntrySubscribed(entry);
+    scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+    return value;
+  };
+
+  if (result instanceof Promise) {
+    return result.then(storeEntry);
+  }
+
+  return storeEntry(result);
+}
+
+export async function preloadSelector<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  options: {
+    freezeArgs?: boolean;
+    gcTime?: number;
+    cacheDB?: SubscribableDB | false;
+  } = {},
+): Promise<SelectorReturn<TSelector>> {
+  const selectRangeCmds: SelectRangeCmd[] = [];
+  const value = await Promise.resolve(
+    runCachedSelectorMaybeAsync(db, selector, args, selectRangeCmds, options),
+  );
+  const cacheDB =
+    options.cacheDB === undefined
+      ? getSubscribableHybridCacheDB(db)
+      : options.cacheDB || undefined;
+
+  if (cacheDB) {
+    primeCachedSelector(
+      cacheDB,
+      selector,
+      args,
+      value,
+      selectRangeCmds,
+      options,
+    );
+  }
+
+  return value;
+}
 
 const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
   db: SubscribableDB,
@@ -676,6 +999,13 @@ const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
       return unsubscribe;
     },
     getSnapshot: () => currentResult,
+    refresh: () => {
+      rerun();
+    },
+    setSnapshot: (value) => {
+      currentResult = value;
+      currentRevision = db.getRevision();
+    },
   };
 };
 
@@ -688,6 +1018,12 @@ const ensureSelectorCacheEntrySubscribed = <TReturn>(
     if (!isNeedToRerunRange(entry.selectRangeCmds, ops)) {
       entry.currentRevision = revision;
       traceSelectorCacheHit(entry as SelectorCacheEntry<unknown>);
+      return;
+    }
+
+    if (entry.subscribers.size === 0) {
+      entry.currentRevision = revision;
+      entry.needsRerun = true;
       return;
     }
 
@@ -716,6 +1052,7 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
     options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
   const cachedArgs = freezeArgs ? deepFreeze(args) : args;
   const byArgs = getSelectorCacheMap(db, selector);
+  runSelectorCacheGc();
   let entry = byArgs.get(argsKey) as
     | SelectorCacheEntry<SelectorReturn<TSelector>>
     | undefined;
@@ -739,12 +1076,9 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
     };
     byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
   } else {
-    if (entry.gcTimer) {
-      clearTimeout(entry.gcTimer);
-      entry.gcTimer = undefined;
-    }
+    cancelSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>);
 
-    if (entry.currentRevision !== db.getRevision()) {
+    if (entry.needsRerun || entry.currentRevision !== db.getRevision()) {
       rerunSelectorCacheEntry(entry);
     } else {
       traceSelectorCacheHit(entry as SelectorCacheEntry<unknown>);
@@ -754,14 +1088,11 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
   return {
     subscribe: (callback: () => void) => {
       entry.subscribers.add(callback);
-      if (entry.gcTimer) {
-        clearTimeout(entry.gcTimer);
-        entry.gcTimer = undefined;
-      }
+      cancelSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>);
 
       ensureSelectorCacheEntrySubscribed(entry);
 
-      if (entry.currentRevision !== db.getRevision()) {
+      if (entry.needsRerun || entry.currentRevision !== db.getRevision()) {
         rerunSelectorCacheEntry(entry);
         callback();
       }
@@ -771,22 +1102,22 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
 
         if (entry.subscribers.size > 0) return;
 
-        entry.dbUnsubscribe?.();
-        entry.dbUnsubscribe = undefined;
-
         const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
-        if (gcTime > 0) {
-          entry.gcTimer = setTimeout(() => {
-            deleteSelectorCacheEntry(entry as SelectorCacheEntry<unknown>);
-          }, gcTime);
-          (entry.gcTimer as { unref?: () => void }).unref?.();
-          return;
-        }
-
-        deleteSelectorCacheEntry(entry as SelectorCacheEntry<unknown>);
+        scheduleSelectorCacheEntryGc(
+          entry as SelectorCacheEntry<unknown>,
+          gcTime,
+        );
       };
     },
     getSnapshot: () => entry.currentResult,
+    refresh: () => {
+      rerunSelectorCacheEntry(entry);
+    },
+    setSnapshot: (value) => {
+      entry.currentResult = value;
+      entry.currentRevision = entry.db.getRevision();
+      entry.needsRerun = false;
+    },
   };
 }
 

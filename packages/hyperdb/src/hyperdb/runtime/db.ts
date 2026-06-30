@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { convertWhereToBound } from "../core/query/bounds";
 import type { DBCmd } from "../commands/async";
-import type { HyperDB } from "../core/contracts";
+import type {
+  HyperDB,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import type {
   BaseDBDriverOperations,
   DBDriver,
@@ -214,6 +218,10 @@ export class DB implements HyperDB {
     this.state.tables = tables;
     yield* this.driver.loadTables(tables);
   }
+
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {}
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, DBTx> {
     const tx = yield* this.driver.beginTx(mode, {

@@ -86,6 +86,17 @@ export const wrapGeneratorWithExistingTraceMeta = <TReturn>(
   return traced;
 };
 
+export const wrapGeneratorWithExistingTracePath = <TReturn>(
+  gen: Generator<unknown, TReturn, unknown>,
+  path: TraceFrameMeta[],
+): Generator<unknown, TReturn, unknown> => {
+  let traced = gen;
+  for (let index = path.length - 1; index >= 0; index -= 1) {
+    traced = wrapGeneratorWithExistingTraceMeta(traced, path[index]!);
+  }
+  return traced;
+};
+
 export const wrapGeneratorWithTraceMeta = <TReturn>(
   gen: Generator<unknown, TReturn, unknown>,
   kind: TraceKind,

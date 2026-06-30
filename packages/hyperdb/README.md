@@ -32,14 +32,21 @@ state libraries start to strain:
 - **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
   primary store with an in-memory cache: reads check memory first, fall through
   to persistent storage on a miss, then cache the covered index range for next
-  time.
+  time. When a workflow should start warm, call `db.preloadTables(...)` with
+  a B-tree full-scan index such as `byIds` to load whole tables into the cache
+  and mark their indexes as resident when the DB is a HybridDB wrapper, or call
+  `preloadSelector(...)` with the same selector args a route will render to warm
+  the selector result too.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
   fast path when a run completes from memory, then promotes to async only if a
   command yields a promise. With `HybridDB`, React reads the in-memory cache
   through `useSyncExternalStore` while the persistent tier preloads missing
-  ranges in the background, so cached data can stay visible during refreshes.
+  ranges in the background, so cached data can stay visible during refreshes;
+  the background HybridDB run still participates in selector root memoization.
+  `preloadSelector(...)` uses the same cache bridge outside React, so route
+  loaders can warm HybridDB and the in-memory selector snapshot in one call.
   Its async React API returns a React Query-style object with `data`, `status`,
   `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
@@ -126,6 +133,10 @@ export const createTask = action({
   },
 });
 ```
+
+Queries can also return OR branches with `or(...)` or arrays from `where`.
+When combined with `.order(...)`, those branches are merged into the index order
+before rows are returned.
 
 ```ts
 // 4. Create a database (in-memory + reactive)

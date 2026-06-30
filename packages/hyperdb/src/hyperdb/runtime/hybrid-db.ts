@@ -1,6 +1,11 @@
 import type { DBCmd } from "../commands/async";
 import { unwrap } from "../commands/async";
-import type { HyperDB, HyperDBTx } from "../core/contracts";
+import type {
+  HyperDB,
+  HyperDBTx,
+  HybridPreloadTableSpecInput,
+  ValidateHybridPreloadTableSpecs,
+} from "../core/contracts";
 import {
   type SelectOptions,
   type Trait,
@@ -24,6 +29,8 @@ import { refVar, type RefVar } from "../utils";
 import {
   createHybridIntervalCache,
   hybridIntervalScan,
+  intervalFromClauses,
+  mergeCoverage,
   mergeCoverageMaps,
   type HybridIntervalCache,
 } from "./hybrid-db-intervals";
@@ -147,6 +154,49 @@ export class HybridDB implements HyperDB {
       yield* primary.loadTables(tables);
       yield* cache.loadTables(tables);
       state.cachedIntervals.clear();
+    });
+  }
+
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {
+    const { cache, primary, state } = this;
+    const traceContext = getDriverTraceContextForDB(this);
+
+    yield* withHybridLock(state, function* () {
+      for (const spec of specs) {
+        const table = spec.table;
+        const scanIndex = String(spec.scanIndex);
+        const scanIndexConfig = table.indexes[scanIndex];
+        if (!scanIndexConfig) {
+          throw new Error(
+            `Index not found: ${scanIndex} for table: ${table.tableName}`,
+          );
+        }
+        if (scanIndexConfig.type !== "btree") {
+          throw new Error(
+            `HybridDB preload scan index must be a btree index: ${scanIndex} for table: ${table.tableName}`,
+          );
+        }
+
+        const rows = yield* withDriverTraceContextTrait(
+          primary,
+          traceContext,
+        ).intervalScan(table, scanIndex, [{}]);
+
+        if (rows.length > 0) {
+          yield* withDriverTraceContextTrait(cache, traceContext).upsert(
+            table,
+            rows,
+          );
+        }
+
+        for (const indexName of spec.coverageIndexes ??
+          Object.keys(table.indexes)) {
+          const target = intervalFromClauses(table, String(indexName), [{}]);
+          mergeCoverage(state.cachedIntervals, target.key, target.intervals);
+        }
+      }
     });
   }
 
@@ -317,6 +367,10 @@ class HybridDBReadonlyTx implements HyperDBTx {
     throw new Error("Not supported");
   }
 
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {}
+
   *beginTx(
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
@@ -475,6 +529,10 @@ class HybridDBTx implements HyperDBTx {
   *loadTables(): Generator<DBCmd, void> {
     throw new Error("Not supported");
   }
+
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+    _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
+  ): Generator<DBCmd, void> {}
 
   *beginTx(
     _mode: DBTransactionMode = "readwrite",

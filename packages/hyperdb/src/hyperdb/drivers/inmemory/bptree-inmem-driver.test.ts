@@ -203,7 +203,9 @@ describe("BptreeInmemDriver B+ tree forked transactions", () => {
       "can't run while transaction is in progress",
     );
     expect(() =>
-      execSync(driver.insert(forkedTxTable.tableName, [indexCases[0].inserted])),
+      execSync(
+        driver.insert(forkedTxTable.tableName, [indexCases[0].inserted]),
+      ),
     ).toThrow("can't run while transaction is in progress");
     expect(() =>
       execSync(driver.upsert(forkedTxTable.tableName, [updated])),

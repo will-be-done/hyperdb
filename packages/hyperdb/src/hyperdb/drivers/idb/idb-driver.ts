@@ -827,11 +827,11 @@ async function performScan(
       logIdbOperation(
         "scan",
         startedAt,
-          {
-            txId,
-            traceContext: options.traceContext,
-            tableName,
-            indexName,
+        {
+          txId,
+          traceContext: options.traceContext,
+          tableName,
+          indexName,
         },
         error,
       );

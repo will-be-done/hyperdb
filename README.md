@@ -45,14 +45,24 @@ state libraries start to strain:
   readonly transaction starts only when the persistent tier is actually read,
   and is reopened once if the browser finishes it between scans. IDB operation
   logs include transaction ids and selector/action names when a run context is
-  available.
+  available. When a workflow should start warm, call `db.preloadTables(...)`
+  with a B-tree full-scan index such as `byIds` to load whole tables into the
+  cache and mark their indexes as resident when the DB is a HybridDB wrapper, or
+  call `preloadSelector(...)` with the same selector args a route will render to
+  warm the selector result too. Retained selector cache entries keep tracking DB
+  changes until GC: unrelated mutations advance the cached revision without a
+  re-run, while mutations inside the selector's read ranges mark unused entries
+  stale so they re-run lazily on the next preload or read.
 - **Synchronous on the frontend.** Against the in-memory driver, selectors and
   actions execute **synchronously** (no `await`, no microtask hop), so a click
   updates the store and the UI in the same tick. `useAsyncSelector` keeps this
   fast path when a run completes from memory, then promotes to async only if a
   command yields a promise. With `HybridDB`, React reads the in-memory cache
   through `useSyncExternalStore` while the persistent tier preloads missing
-  ranges in the background, so cached data can stay visible during refreshes.
+  ranges in the background, so cached data can stay visible during refreshes;
+  the background HybridDB run still participates in selector root memoization.
+  `preloadSelector(...)` uses the same cache bridge outside React, so route
+  loaders can warm HybridDB and the in-memory selector snapshot in one call.
   Its async React API returns a React Query-style object with `data`, `status`,
   `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
@@ -147,6 +157,10 @@ export const createTask = action({
 });
 ```
 
+Queries can also return OR branches with `or(...)` or arrays from `where`.
+When combined with `.order(...)`, those branches are merged into the index order
+before rows are returned.
+
 ```ts
 // 4. Create a database (in-memory + reactive)
 import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
@@ -163,6 +177,10 @@ export const db = new SubscribableDB(
 // Or execAsync() for async driver
 execSync(db.loadTables([tasksTable]));
 ```
+
+`SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
+`afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
+for successful index scans.
 
 ```tsx
 import {

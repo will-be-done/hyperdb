@@ -464,6 +464,182 @@ describe("SubscribableDB", async () => {
         expect(intervalResults[0]).toEqual(tasks[0]);
       });
 
+      it("should run afterScan callbacks for successful scans", async () => {
+        const db = new DB(await createDriver());
+        const subscribableDB = new SubscribableDB(db);
+        const traitedDB = subscribableDB.withTraits({
+          type: "traited",
+        }) as SubscribableDB;
+
+        const asyncDB = new AsyncDB(subscribableDB);
+        const traitedAsyncDB = new AsyncDB(traitedDB);
+        await asyncDB.loadTables([tasksTable]);
+
+        const tasks: Task[] = [
+          {
+            id: "task-1",
+            title: "Task 1",
+            state: "todo",
+            projectId: "project-1",
+            orderToken: "a",
+          },
+          {
+            id: "task-2",
+            title: "Task 2",
+            state: "done",
+            projectId: "project-1",
+            orderToken: "b",
+          },
+        ];
+        await asyncDB.insert(tasksTable, tasks);
+
+        const clauses = [{ eq: [{ col: "projectId", val: "project-1" }] }];
+        const selectOptions = { limit: 1, order: "asc" as const };
+        const calls: {
+          db: unknown;
+          table: unknown;
+          indexName: string;
+          clauses: unknown;
+          selectOptions: unknown;
+          results: unknown;
+        }[] = [];
+
+        const unsubscribe = subscribableDB.afterScan(
+          function* (db, table, indexName, clauses, selectOptions, results) {
+            calls.push({
+              db,
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              results,
+            });
+          },
+        );
+
+        expect(
+          await asyncDB.intervalScan(
+            tasksTable,
+            "projectIdState",
+            clauses,
+            selectOptions,
+          ),
+        ).toEqual([tasks[1]]);
+
+        unsubscribe();
+        await asyncDB.intervalScan(tasksTable, "projectIdState", clauses);
+
+        traitedDB.afterScan(
+          function* (db, table, indexName, clauses, selectOptions, results) {
+            calls.push({
+              db,
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              results,
+            });
+          },
+        );
+
+        expect(
+          await traitedAsyncDB.intervalScan(tasksTable, "projectIdState", []),
+        ).toEqual([]);
+
+        expect(calls).toEqual([
+          {
+            db: subscribableDB,
+            table: tasksTable,
+            indexName: "projectIdState",
+            clauses,
+            selectOptions,
+            results: [tasks[1]],
+          },
+          {
+            db: traitedDB,
+            table: tasksTable,
+            indexName: "projectIdState",
+            clauses: [],
+            selectOptions: undefined,
+            results: [],
+          },
+        ]);
+      });
+
+      it("should allow afterScan callbacks to use action commands inside transactions", async () => {
+        const db = new DB(await createDriver());
+        const subscribableDB = new SubscribableDB(db);
+
+        const asyncDB = new AsyncDB(subscribableDB);
+        await asyncDB.loadTables([tasksTable, taskAuditsTable]);
+
+        const tasks: Task[] = [
+          {
+            id: "task-1",
+            title: "Task 1",
+            state: "todo",
+            projectId: "project-1",
+            orderToken: "a",
+          },
+          {
+            id: "task-2",
+            title: "Task 2",
+            state: "done",
+            projectId: "project-1",
+            orderToken: "b",
+          },
+        ];
+        await asyncDB.insert(tasksTable, tasks);
+
+        let didWriteAuditRows = false;
+        subscribableDB.afterScan(
+          function* (
+            _db,
+            table,
+            _indexName,
+            _clauses,
+            _selectOptions,
+            results,
+          ) {
+            if (table !== tasksTable || didWriteAuditRows) return;
+
+            didWriteAuditRows = true;
+            yield* insert(
+              taskAuditsTable,
+              (results as Task[]).map((task) => ({
+                id: `audit-${task.id}`,
+                taskId: task.id,
+                phase: "inserted",
+                title: task.title,
+              })),
+            );
+          },
+        );
+
+        const tx = await asyncDB.beginTx();
+        await tx.intervalScan(tasksTable, "projectIdState", [
+          { eq: [{ col: "projectId", val: "project-1" }] },
+        ]);
+        await tx.commit();
+
+        expect(
+          await asyncDB.intervalScan(taskAuditsTable, "byTaskId", [{}]),
+        ).toEqual([
+          {
+            id: "audit-task-1",
+            taskId: "task-1",
+            phase: "inserted",
+            title: "Task 1",
+          },
+          {
+            id: "audit-task-2",
+            taskId: "task-2",
+            phase: "inserted",
+            title: "Task 2",
+          },
+        ]);
+      });
+
       it("should allow after callbacks to use action commands", async () => {
         const db = new DB(await createDriver());
         const subscribableDB = new SubscribableDB(db);
