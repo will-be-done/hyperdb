@@ -39,8 +39,9 @@ check the matching docs below and also check the root `README.md`.
 
 - `src/content/docs/start/introduction.md`: High-level product introduction.
   Explains what HyperDB is, the shared frontend/backend data layer, Convex
-  inspiration, main capabilities, use cases, current server storage limits,
-  installation commands, package entry points, and next-step links.
+  inspiration, HybridDB as the durable frontend runtime shape, main
+  capabilities, use cases, current server storage limits, installation
+  commands, package entry points, and next-step links.
 - `src/content/docs/start/why.md`: Motivation and positioning. Covers the
   data-structure problem, notification problem, backend problem, synchronous
   frontend behavior, why browser SQLite is not the default answer, IndexedDB and
@@ -55,6 +56,10 @@ check the matching docs below and also check the root `README.md`.
   builders, writing a selector and action, creating an in-memory
   `SubscribableDB`, reading/writing outside React, using React hooks, adding the
   devtool, and where to go next.
+- `src/content/docs/start/llm-cheat-sheet.md`: Compact pasteable HyperDB
+  reference for LLM context. Covers what HyperDB does, public package entry
+  points, core imports, schema/selector/action/runtime/React patterns, docs
+  URLs, and rules of thumb.
 
 ## Database
 

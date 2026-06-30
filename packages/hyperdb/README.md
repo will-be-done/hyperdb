@@ -37,18 +37,15 @@ state libraries start to strain:
   and mark their indexes as resident when the DB is a HybridDB wrapper, or call
   `preloadSelector(...)` with the same selector args a route will render to warm
   the selector result too.
-- **Synchronous on the frontend.** Against the in-memory driver, selectors and
-  actions execute **synchronously** (no `await`, no microtask hop), so a click
-  updates the store and the UI in the same tick. `useAsyncSelector` keeps this
-  fast path when a run completes from memory, then promotes to async only if a
-  command yields a promise. With `HybridDB`, React reads the in-memory cache
-  through `useSyncExternalStore` while the persistent tier preloads missing
-  ranges in the background, so cached data can stay visible during refreshes;
-  the background HybridDB run still participates in selector root memoization.
-  `preloadSelector(...)` uses the same cache bridge outside React, so route
-  loaders can warm HybridDB and the in-memory selector snapshot in one call.
-  Its async React API returns a React Query-style object with `data`, `status`,
-  `error`, fetching flags, and `refetch()`.
+- **Hybrid-first React reads.** `HybridDB` is the recommended frontend shape for
+  durable local state: IndexedDB or async SQLite as the primary store, an
+  in-memory B-tree cache for hot ranges, and React reading through
+  `useAsyncSelector`. Cached results stay visible while missing ranges load in
+  the background, and writes go through `useAsyncDispatch` / `asyncDispatch` so
+  both tiers commit together. `preloadSelector(...)` uses the same cache bridge
+  outside React, so route loaders can warm HybridDB and the in-memory selector
+  snapshot in one call. The async React API returns a React Query-style object
+  with `data`, `status`, `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
@@ -92,7 +89,10 @@ export const tasksTable = defineTable("tasks", {
   projectId: v.string(),
   title: v.string(),
   orderToken: v.string(),
-}).index("byProjectOrder", ["projectId", "orderToken"]);
+})
+  .index("byProjectOrder", ["projectId", "orderToken"])
+  // B-tree full-table scan index used by HybridDB preloading.
+  .index("byIds", ["id"]);
 
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
@@ -139,45 +139,54 @@ When combined with `.order(...)`, those branches are merged into the index order
 before rows are returned.
 
 ```ts
-// 4. Create a database (in-memory + reactive)
-import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
+// 4. Create a HybridDB (persistent primary + in-memory cache)
+import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
+import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
-export const db = new SubscribableDB(
-  new DB(new BptreeInmemDriver(), {
+export async function createAppDB() {
+  const primary = new DB(await openIndexedDBDriver("my-app"), {
     runtimeRowsValidation: process.env.NODE_ENV === "development",
     freezeArgs: process.env.NODE_ENV === "development",
     freezeRows: process.env.NODE_ENV === "development",
-  }),
-);
-// Or execAsync() for async driver
-execSync(db.loadTables([tasksTable]));
+  });
+  const cache = new DB(new BptreeInmemDriver());
+  const db = new SubscribableDB(new HybridDB(primary, cache));
+
+  await execAsync(db.loadTables([tasksTable]));
+  await execAsync(
+    db.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+  );
+
+  return db;
+}
 ```
 
 ```tsx
 import {
   DBProvider,
-  useSyncSelector,
-  useDispatch,
+  useAsyncSelector,
+  useAsyncDispatch,
 } from "@will-be-done/hyperdb/react";
+import type { SubscribableDB } from "@will-be-done/hyperdb";
 import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
-import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
 function Tasks({ projectId }: { projectId: string }) {
-  const tasks = useSyncSelector({
+  const { data: tasks = [], isFetching } = useAsyncSelector({
     selector: projectTasks,
     args: { projectId },
     defaultValue: [],
   });
-  const dispatch = useDispatch();
+  const dispatch = useAsyncDispatch();
 
   return (
     <>
       <button
+        disabled={isFetching}
         onClick={() =>
-          dispatch(
+          void dispatch(
             createTask({
               id: crypto.randomUUID(),
               projectId,
@@ -197,7 +206,7 @@ function Tasks({ projectId }: { projectId: string }) {
   );
 }
 
-export function App() {
+export function App({ db }: { db: SubscribableDB }) {
   return (
     <DBProvider value={db}>
       <Tasks projectId="p1" />

@@ -7,12 +7,18 @@ sidebar:
 
 HyperDB is a universal database for TypeScript. It gives you typed schemas,
 indexed queries, generator-based selectors and actions, pluggable storage
-drivers, React hooks, and an in-app devtool.
+drivers, HybridDB caching, React hooks, and an in-app devtool.
 
 The defining idea is a shared data layer for the frontend and backend. Your
 schema, selectors, and actions are written once and can run in the browser (over
 in-memory B+trees, IndexedDB, or WebAssembly SQLite) _and_ on the server (over
 native SQLite). Only the storage driver differs per environment.
+
+For durable frontend apps, the main runtime shape is `HybridDB`: a persistent
+primary store such as IndexedDB or async SQLite, plus an in-memory B-tree cache
+for hot ranges. React reads that hybrid runtime with `useAsyncSelector`, keeping
+cached data visible while missing ranges load from persistence, and writes with
+`useAsyncDispatch` so both tiers commit together.
 
 It was inspired by [Convex](https://www.convex.dev/): you model your data with
 validators, read it with functions instead of raw SQL, and let the runtime keep
@@ -31,9 +37,12 @@ both the client and server.
   shifting an array.
 - Selectors & actions: reads and writes are expressed as generator
   functions that _describe_ what to do. The runtime executes them, which makes
-  the same code work synchronously or asynchronously. Against the in-memory
-  driver it runs fully synchronously: a dispatch updates the store and the
-  UI in the same tick, with no `await` in the hot path.
+  the same code work synchronously against pure in-memory storage or
+  asynchronously against durable stores such as IndexedDB and SQLite.
+- Hybrid persistence: `HybridDB` checks an in-memory cache first, falls through
+  to the persistent primary store only for missing index ranges, then records
+  coverage so repeated reads stay fast. You can preload whole tables or specific
+  selectors before a route renders.
 - JavaScript selectors and actions: selectors and actions are ordinary JS, with loops,
   conditionals, and function calls. HyperDB gives you fast indexed lookups and
   inserts underneath, not a query language to learn, and the same mental model on
@@ -46,8 +55,9 @@ both the client and server.
 - Isomorphic: write a slice of schema + selectors + actions once and import
   it on both the client and the server. A server can apply the same actions as a
   client while using a different driver.
-- React + devtools: hooks (`useSyncSelector`, `useDispatch`, …) and a
-  devtool that traces every selector run and mutation.
+- React + devtools: hooks (`useAsyncSelector`, `useAsyncDispatch`,
+  `useSyncSelector`, …) and a devtool that traces every selector run and
+  mutation, including whether HybridDB reads came from `in-mem` or `persist`.
 
 ## When to use HyperDB
 
@@ -87,7 +97,7 @@ The core package ships several entry points:
 
 | Import path                              | Contents                                                                                  |
 | ---------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `SubscribableDB`, runtime helpers |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB`, runtime helpers |
 | `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                              |
 | `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                    |
 | `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                       |
@@ -100,4 +110,5 @@ exposing `HyperDBDevtools` from `@will-be-done/hyperdb-devtool/react`.
 ## Next steps
 
 Read [How HyperDB Works](/start/how-it-works/) for the mental model, then jump
-into the [Quickstart](/start/quickstart/).
+into the [Quickstart](/start/quickstart/). For the cache-first durable runtime,
+see [`HybridDB` in the runtime guide](/runtime/db/#hybriddb).

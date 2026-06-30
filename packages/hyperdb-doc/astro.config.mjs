@@ -30,6 +30,7 @@ export default defineConfig({
             { label: "Why HyperDB?", slug: "start/why" },
             { label: "How HyperDB Works", slug: "start/how-it-works" },
             { label: "Quickstart", slug: "start/quickstart" },
+            { label: "LLM Cheat Sheet", slug: "start/llm-cheat-sheet" },
           ],
         },
         {
