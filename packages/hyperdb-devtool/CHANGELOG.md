@@ -1,5 +1,16 @@
 # @will-be-done/hyperdb-devtool
 
+## 0.2.0
+
+### Minor Changes
+
+- efb7ce0: Add hybriddb + better selector + preloader
+
+### Patch Changes
+
+- Updated dependencies [efb7ce0]
+  - @will-be-done/hyperdb@0.2.0
+
 ## 0.1.0
 
 ### Minor Changes

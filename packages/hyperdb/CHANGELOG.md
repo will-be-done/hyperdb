@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.2.0
+
+### Minor Changes
+
+- efb7ce0: Add hybriddb + better selector + preloader
+
 ## 0.1.0
 
 ### Minor Changes
