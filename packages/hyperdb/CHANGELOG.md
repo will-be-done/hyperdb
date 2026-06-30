@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.1.0
+
+### Minor Changes
+
+- cb0c89d: add HybridDB runtime. Improve react hooks
+
 ## 0.0.4
 
 ### Patch Changes
