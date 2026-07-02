@@ -277,6 +277,7 @@ function validateHashBounds(
 }
 
 function createSortKeyRanges(
+  factory: IDBFactory,
   tableDef: TableDefinition,
   indexName: string,
   clauses: WhereClause[],
@@ -315,7 +316,7 @@ function createSortKeyRanges(
         : undefined;
 
     if (lowerSortKey !== undefined && upperSortKey !== undefined) {
-      const comparison = compareIdbKeys(lowerSortKey, upperSortKey);
+      const comparison = compareIdbKeys(factory, lowerSortKey, upperSortKey);
       if (
         comparison > 0 ||
         (comparison === 0 && (bound.gt !== undefined || bound.lt !== undefined))
@@ -459,18 +460,23 @@ function createNativeRecord(
   return createNativeRecordFromRow(tableDef, row);
 }
 
-function compareIdbKeys(left: IDBValidKey, right: IDBValidKey): number {
-  return indexedDB.cmp(left, right);
+function compareIdbKeys(
+  factory: IDBFactory,
+  left: IDBValidKey,
+  right: IDBValidKey,
+): number {
+  return factory.cmp(left, right);
 }
 
 function advanceRange(
+  factory: IDBFactory,
   range: OptionalKeyRange,
   lastKey: IDBValidKey,
   direction: IDBCursorDirection,
 ): MaybeKeyRange {
   if (direction === "prev" || direction === "prevunique") {
     if (range?.lower !== undefined) {
-      if (compareIdbKeys(range.lower, lastKey) >= 0) {
+      if (compareIdbKeys(factory, range.lower, lastKey) >= 0) {
         return null;
       }
 
@@ -480,7 +486,7 @@ function advanceRange(
   }
 
   if (range?.upper !== undefined) {
-    if (compareIdbKeys(lastKey, range.upper) >= 0) {
+    if (compareIdbKeys(factory, lastKey, range.upper) >= 0) {
       return null;
     }
 
@@ -490,6 +496,7 @@ function advanceRange(
 }
 
 async function getAllRecords<T>(
+  factory: IDBFactory,
   source: IDBObjectStore | IDBIndex,
   query: OptionalKeyRange,
   options: { limit?: number; direction?: IDBCursorDirection } = {},
@@ -499,7 +506,7 @@ async function getAllRecords<T>(
 
   if (typeof getAllRecordsFn === "function") {
     const results: T[] = [];
-    let currentQuery = query;
+    let currentQuery: MaybeKeyRange = query;
 
     while (true) {
       if (currentQuery === null) return results;
@@ -529,6 +536,7 @@ async function getAllRecords<T>(
       }
 
       currentQuery = advanceRange(
+        factory,
         query,
         records[records.length - 1].key,
         direction,
@@ -553,7 +561,7 @@ async function getAllRecords<T>(
   }
 
   const results: T[] = [];
-  let currentQuery = query;
+  let currentQuery: MaybeKeyRange = query;
 
   while (true) {
     if (currentQuery === null) return results;
@@ -595,7 +603,12 @@ async function getAllRecords<T>(
       return results;
     }
 
-    currentQuery = advanceRange(currentQuery, keys[keys.length - 1], "next");
+    currentQuery = advanceRange(
+      factory,
+      currentQuery,
+      keys[keys.length - 1],
+      "next",
+    );
   }
 }
 
@@ -773,6 +786,7 @@ async function performDelete(
 }
 
 async function performScan(
+  factory: IDBFactory,
   tx: IDBTransaction,
   tableDefinitions: Map<string, TableDefinition>,
   tableName: string,
@@ -821,6 +835,7 @@ async function performScan(
 
       if (isUnfilteredClauses(clauses) && selectOptions.limit === undefined) {
         const records = await getAllRecords<NativeStoredRecord>(
+          factory,
           store,
           undefined,
           {
@@ -840,7 +855,7 @@ async function performScan(
     }
 
     const index = store.index(indexName);
-    const ranges = createSortKeyRanges(tableDef, indexName, clauses);
+    const ranges = createSortKeyRanges(factory, tableDef, indexName, clauses);
     const canPushLimit = ranges.length === 1;
     const records: NativeStoredRecord[] = [];
 
@@ -854,7 +869,7 @@ async function performScan(
       if (remaining !== undefined && remaining <= 0) break;
 
       records.push(
-        ...(await getAllRecords<NativeStoredRecord>(index, range, {
+        ...(await getAllRecords<NativeStoredRecord>(factory, index, range, {
           direction,
           limit: remaining,
         })),
@@ -892,6 +907,7 @@ async function performScan(
 
 class IdbDriverTx implements DBDriverTX {
   private id: number;
+  private factory: IDBFactory;
   private tx: IDBTransaction;
   private tableDefinitions: Map<string, TableDefinition>;
   private onFinish: () => void;
@@ -904,6 +920,7 @@ class IdbDriverTx implements DBDriverTX {
 
   constructor(
     id: number,
+    factory: IDBFactory,
     tx: IDBTransaction,
     tableDefinitions: Map<string, TableDefinition>,
     onFinish: () => void,
@@ -911,6 +928,7 @@ class IdbDriverTx implements DBDriverTX {
     traceContext: DBDriverTraceContext | undefined,
   ) {
     this.id = id;
+    this.factory = factory;
     this.tx = tx;
     this.tableDefinitions = tableDefinitions;
     this.onFinish = onFinish;
@@ -1018,6 +1036,7 @@ class IdbDriverTx implements DBDriverTX {
 
     return yield* unwrapCb(async () =>
       performScan(
+        this.factory,
         this.tx,
         this.tableDefinitions,
         table,
@@ -1052,6 +1071,7 @@ class IdbDriverTx implements DBDriverTX {
 
 class IdbDriverReadonlyTx implements DBDriverTX {
   private active: ActiveReadonlyTransaction | undefined;
+  private factory: IDBFactory;
   private tableDefinitions: Map<string, TableDefinition>;
   private acquireRead: () => Promise<LockRelease>;
   private nextTransactionId: () => number;
@@ -1062,6 +1082,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
 
   constructor(
     active: ActiveReadonlyTransaction,
+    factory: IDBFactory,
     tableDefinitions: Map<string, TableDefinition>,
     acquireRead: () => Promise<LockRelease>,
     nextTransactionId: () => number,
@@ -1070,6 +1091,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     onDispose: (tx: IdbDriverReadonlyTx) => void,
   ) {
     this.active = active;
+    this.factory = factory;
     this.tableDefinitions = tableDefinitions;
     this.acquireRead = acquireRead;
     this.nextTransactionId = nextTransactionId;
@@ -1113,6 +1135,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
         const active = await this.getActive(options.traceContext);
         try {
           return await performScan(
+            this.factory,
             active.tx,
             this.tableDefinitions,
             table,
@@ -1315,6 +1338,7 @@ export class IdbDriver implements DBDriver {
       });
       return new IdbDriverTx(
         txId,
+        this.factory,
         tx,
         this.tableDefinitions,
         release,
@@ -1355,6 +1379,7 @@ export class IdbDriver implements DBDriver {
       });
       const readonlyTx = new IdbDriverReadonlyTx(
         active,
+        this.factory,
         this.tableDefinitions,
         () => this.lock.acquireRead(),
         () => this.createTransactionId(),
@@ -1574,7 +1599,11 @@ export class IdbDriver implements DBDriver {
   ): Promise<void> {
     const startedAt = nowMs();
     const store = tx.objectStore(tableStoreName(tableDef.tableName));
-    const records = await getAllRecords<NativeStoredRecord>(store, undefined);
+    const records = await getAllRecords<NativeStoredRecord>(
+      this.factory,
+      store,
+      undefined,
+    );
     const requests = records.map((record) =>
       requestToPromise(
         store.put(

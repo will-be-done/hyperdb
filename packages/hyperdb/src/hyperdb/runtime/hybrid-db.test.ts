@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DB } from "./db";
-import { HybridDB, type HybridDBDebugEvent } from "./hybrid-db";
+import {
+  HybridDB,
+  HybridDBCrashedError,
+  type HybridDBDebugEvent,
+} from "./hybrid-db";
 import { SubscribableDB } from "./subscribable-db";
 import { AsyncDB } from "../test-utils/async-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
@@ -566,9 +570,9 @@ describe("HybridDB", () => {
     resumePersistCommit.resolve();
   });
 
-  it("retries background persistence failures and keeps failed batches observable", async () => {
+  it("retries background persistence failures and crashes the DB after exhausting retries", async () => {
     const debugEvents: HybridDBDebugEvent[] = [];
-    const { db, primary } = await createDBs({
+    const { db, hybrid, primary } = await createDBs({
       debug: (event) => debugEvents.push(event),
     });
     const persistenceError = new Error("primary unavailable");
@@ -591,8 +595,9 @@ describe("HybridDB", () => {
       db.intervalScan(tasksTable, "byValue", [
         { eq: [{ col: "value", val: inserted.value }] },
       ]),
-    ).rejects.toThrow("primary unavailable");
+    ).rejects.toThrow(HybridDBCrashedError);
     expect(persistAttempts).toBe(3);
+    expect(hybrid.isCrashed).toBe(true);
 
     const persistenceFailureEvents = debugEvents.filter(
       (event) => event.type === "persistence-failure",
@@ -633,10 +638,57 @@ describe("HybridDB", () => {
       debugEvents.some((event) => event.type === "pending-persistence-wait"),
     ).toBe(true);
 
+    // Once crashed, every further read/write throws and no new persistence is
+    // attempted, even for cache-only operations.
     await expect(db.insert(tasksTable, [createTask(2)])).rejects.toThrow(
-      "primary unavailable",
+      HybridDBCrashedError,
     );
+    await expect(
+      db.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: inserted.id }] },
+      ]),
+    ).rejects.toThrow(HybridDBCrashedError);
+    await expect(db.beginTx()).rejects.toThrow(HybridDBCrashedError);
     expect(persistAttempts).toBe(3);
+  });
+
+  it("does not run queued persistence after the DB has crashed", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, hybrid, primary } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const persistenceError = new Error("primary unavailable");
+    const originalBeginTx = primary.beginTx.bind(primary);
+    let persistAttempts = 0;
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      if (mode === "readwrite" || mode === undefined) {
+        persistAttempts++;
+        throw persistenceError;
+      }
+      return yield* originalBeginTx(mode);
+    });
+
+    const firstTx = await db.beginTx();
+    await firstTx.insert(tasksTable, [createTask(1)]);
+    await firstTx.commit();
+
+    const secondTx = await db.beginTx();
+    await secondTx.insert(tasksTable, [createTask(2)]);
+    await secondTx.commit();
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 2 }] },
+      ]),
+    ).rejects.toThrow(HybridDBCrashedError);
+
+    expect(hybrid.isCrashed).toBe(true);
+    expect(persistAttempts).toBe(3);
+    expect(
+      debugEvents
+        .filter((event) => event.type === "persistence-failure")
+        .map((event) => event.batchId),
+    ).toEqual([1, 1, 1]);
   });
 
   it("uses parent cache coverage for exact id reads inside write transactions", async () => {

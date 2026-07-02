@@ -49,7 +49,27 @@ type HybridDBState = {
   pendingPersistence: Set<HybridPersistenceBatch>;
   persistenceTail: Promise<void>;
   nextPersistenceBatchId: number;
+  isCrashed: boolean;
+  crashError: unknown;
 };
+
+/**
+ * Thrown by every HybridDB read/write once background persistence has
+ * permanently failed (all retries exhausted). The HybridDB is considered
+ * crashed: its cache and primary may have diverged, so it refuses all further
+ * operations rather than serving stale in-memory data. The underlying
+ * persistence error is available via `cause`.
+ */
+export class HybridDBCrashedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "HybridDB is in a crashed state after background persistence permanently failed. " +
+        "No further reads or writes are allowed.",
+      { cause },
+    );
+    this.name = "HybridDBCrashedError";
+  }
+}
 
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
@@ -147,6 +167,8 @@ const createHybridDBState = (): HybridDBState => ({
   pendingPersistence: new Set(),
   persistenceTail: Promise.resolve(),
   nextPersistenceBatchId: 1,
+  isCrashed: false,
+  crashError: undefined,
 });
 
 const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
@@ -404,6 +426,7 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     yield* this.waitForPendingPersistence();
     yield* withHybridLock(this.state, function* () {
@@ -416,6 +439,7 @@ export class HybridDB implements HyperDB {
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     const traceContext = getDriverTraceContextForDB(this);
 
@@ -458,6 +482,7 @@ export class HybridDB implements HyperDB {
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    this.throwIfCrashed();
     if (mode === "readonly") {
       return new HybridDBReadonlyTx(this);
     }
@@ -485,6 +510,7 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
@@ -531,6 +557,7 @@ export class HybridDB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -550,6 +577,7 @@ export class HybridDB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -569,6 +597,7 @@ export class HybridDB implements HyperDB {
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -588,6 +617,22 @@ export class HybridDB implements HyperDB {
     mergeCoverageMaps(this.state.cachedIntervals, intervals);
   }
 
+  get isCrashed(): boolean {
+    return this.state.isCrashed;
+  }
+
+  throwIfCrashed(): void {
+    if (this.state.isCrashed) {
+      throw new HybridDBCrashedError(this.state.crashError);
+    }
+  }
+
+  private markPersistenceCrash(error: unknown): void {
+    if (this.state.isCrashed) return;
+    this.state.isCrashed = true;
+    this.state.crashError = error;
+  }
+
   enqueuePersistence(
     writes: HybridPendingWrite[],
     traceContext: ReturnType<typeof getDriverTraceContextForDB>,
@@ -599,49 +644,64 @@ export class HybridDB implements HyperDB {
     const persistWithRetry = (attempt: number): Promise<void> =>
       execAsync(persistWrites(primary, writes)).catch((error) => {
         const willRetry = attempt < hybridPersistenceMaxAttempts;
-        const retryDelayMs = willRetry
-          ? persistenceRetryDelayMs(attempt)
-          : undefined;
+        const retryDelayMs = persistenceRetryDelayMs(attempt);
         this.emitPersistenceFailureDebugEvent(batchId, writes, {
           error,
           attempt,
           maxAttempts: hybridPersistenceMaxAttempts,
-          retryDelayMs,
+          retryDelayMs: willRetry ? retryDelayMs : undefined,
           willRetry,
         });
 
-        if (!willRetry) throw error;
+        if (!willRetry) {
+          this.markPersistenceCrash(error);
+          throw error;
+        }
 
         return waitForPersistenceRetry(retryDelayMs).then(() =>
           persistWithRetry(attempt + 1),
         );
       });
-    const promise = this.state.persistenceTail.then(() => persistWithRetry(1));
+    // Chain after the previous batch settles (success OR failure) so a failed
+    // batch never blocks later batches from attempting their own persistence.
+    const promise = this.state.persistenceTail.then(() => {
+      this.throwIfCrashed();
+      return persistWithRetry(1);
+    });
     const batch: HybridPersistenceBatch = {
       id: batchId,
       writes,
       promise,
     };
     this.state.pendingPersistence.add(batch);
-    this.state.persistenceTail = promise;
+    this.state.persistenceTail = promise.catch(() => {
+      // Swallow here only for scheduling; the batch promise keeps the rejection.
+    });
 
     void promise.then(
       () => {
         this.state.pendingPersistence.delete(batch);
       },
       () => {
-        // Keep the rejected batch observable to later waiters.
+        // A rejected batch means persistence permanently failed and the DB is
+        // now crashed; drop the batch so waiters fail fast via throwIfCrashed
+        // instead of awaiting a promise that will never resolve.
+        this.state.pendingPersistence.delete(batch);
       },
     );
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const pending = [...this.state.pendingPersistence].map(
       (batch) => batch.promise,
     );
     if (pending.length > 0) {
-      yield* unwrap(Promise.all(pending).then(() => undefined));
+      // allSettled: a rejected batch means a crash, surfaced as
+      // HybridDBCrashedError by throwIfCrashed rather than the raw error.
+      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
     }
+    this.throwIfCrashed();
   }
 
   *waitForPendingPersistenceForScan(
@@ -651,6 +711,7 @@ export class HybridDB implements HyperDB {
     selectOptions: SelectOptions | undefined,
     target: IntervalTarget,
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const pending: Promise<void>[] = [];
     const reasons: HybridDBPendingPersistenceWaitReason[] = [];
 
@@ -674,8 +735,9 @@ export class HybridDB implements HyperDB {
         selectOptions,
         reasons,
       });
-      yield* unwrap(Promise.all(pending).then(() => undefined));
+      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
     }
+    this.throwIfCrashed();
   }
 
   private emitDebugEvent(event: HybridDBDebugEvent): void {
@@ -821,6 +883,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     this.state.txCounter.val++;
     return this;
   }
@@ -835,6 +898,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const { hybridDB } = this;
     const { cache, state } = hybridDB;
     const selectEvent = getCurrentSelectEventForDB(this);
@@ -1003,6 +1067,7 @@ class HybridDBTx implements HyperDBTx {
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     this.state.txCounter.val++;
     return this;
   }
@@ -1017,6 +1082,7 @@ class HybridDBTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const { hybridDB } = this;
     const ownPendingIds = new Set(
@@ -1067,6 +1133,7 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).insert(
       table,
@@ -1087,6 +1154,7 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const previousRecords = yield* this.getCachedRowsById(
       table,
@@ -1113,6 +1181,7 @@ class HybridDBTx implements HyperDBTx {
     ids: string[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const previousRecords = yield* this.getCachedRowsById(table, ids);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).delete(
@@ -1136,6 +1205,10 @@ class HybridDBTx implements HyperDBTx {
     if (this.state.txCounter.val !== 0) return;
 
     try {
+      // Checked inside the try so the finally still releases the lock. A
+      // crashed DB must not publish new cache/coverage state or enqueue
+      // persistence that can never reach the primary.
+      this.hybridDB.throwIfCrashed();
       yield* this.cacheTx.commit();
       mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,

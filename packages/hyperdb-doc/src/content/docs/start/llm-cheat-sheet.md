@@ -263,6 +263,12 @@ fell through to persistence, waited for pending persistence, or retried a
 failed background flush. Use a callback for structured `HybridDBDebugEvent`
 objects.
 
+If a background flush keeps failing past its bounded retries, HybridDB enters a
+permanent crashed state: `hybrid.isCrashed` becomes `true` and every subsequent
+read, write, or transaction (including cache-only reads) throws
+`HybridDBCrashedError` with the persistence error as its `cause`. Recover by
+creating a new `HybridDB` and reloading tables.
+
 ## React Pattern
 
 ```tsx

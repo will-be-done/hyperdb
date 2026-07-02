@@ -171,8 +171,12 @@ uses `upsert` for inserted and updated rows, so repeated persistence attempts
 can safely write the latest row value. If a background flush fails, HybridDB
 retries it with bounded backoff before giving up; while it is unresolved, scans
 and root operations that need that batch continue to wait on the queued flush.
-After the retry limit is reached, that rejected batch remains observable through
-the same wait paths instead of being dropped.
+If the retry limit is reached, the cache and the primary can no longer be
+trusted to agree, so HybridDB enters a permanent **crashed** state: every
+subsequent read, write, or transaction — including cache-only reads — throws a
+`HybridDBCrashedError` (whose `cause` is the underlying persistence error), and
+no further persistence is attempted. Check `hybrid.isCrashed` to detect this;
+recover by constructing a fresh `HybridDB` and reloading tables.
 
 While a persistent flush is pending, cached scan intervals still read from the
 in-memory cache immediately. If a scan would fall through to the persistent

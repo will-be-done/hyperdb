@@ -353,9 +353,17 @@ export class SqlDriver implements DBDriver {
         }
 
         this.createTable(tableDef);
-        this.dropStaleSortKeyIndexes(tableDef);
+        const indexUniqueness = this.getGeneratedIndexUniqueness(
+          tableDef.tableName,
+        );
+        const reencodedColumns = this.reencodedSortKeyColumns(
+          tableDef,
+          indexUniqueness,
+        );
+        this.dropStaleSortKeyIndexes(tableDef, indexUniqueness);
         this.dropStaleSortKeyColumns(tableDef);
         this.addMissingSortKeyColumns(tableDef);
+        this.resetSortKeyColumns(tableDef, reencodedColumns);
         this.backfillSortKeyColumns(tableDef);
         this.createIndexes(tableDef);
         this.tableDefinitions.set(tableDef.tableName, tableDef);
@@ -417,23 +425,71 @@ export class SqlDriver implements DBDriver {
     );
   }
 
-  private dropStaleSortKeyIndexes(tableDef: TableDefinition<any>): void {
+  private dropStaleSortKeyIndexes(
+    tableDef: TableDefinition<any>,
+    indexUniqueness: Map<string, boolean>,
+  ): void {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
-    const indexUniqueness = this.getGeneratedIndexUniqueness(
-      tableDef.tableName,
-    );
     for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
       if (expectedIndexes.has(indexName)) {
-        const tableIndexName = indexName
-          .slice(`idx_${tableDef.tableName}_`.length)
-          .replace(/_sort_key$/, "");
+        const tableIndexName = this.tableIndexNameFromGenerated(
+          tableDef.tableName,
+          indexName,
+        );
         const expectedUnique =
           tableDef.indexes[tableIndexName]?.type === "uniqhash";
         if (unique === expectedUnique) continue;
       }
 
       this.db.exec(dropIndexSQL(indexName));
+    }
+  }
+
+  private tableIndexNameFromGenerated(
+    tableName: string,
+    generatedIndexName: string,
+  ): string {
+    return generatedIndexName
+      .slice(`idx_${tableName}_`.length)
+      .replace(/_sort_key$/, "");
+  }
+
+  // Sort-key columns whose encoding changed because the index flipped between
+  // uniqhash (value only) and hash/btree (value + id). Their existing values
+  // are encoded with the old shape, so they must be recomputed for every row
+  // rather than left to the NULL-only backfill.
+  private reencodedSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    indexUniqueness: Map<string, boolean>,
+  ): string[] {
+    const columns: string[] = [];
+    for (const [indexName, unique] of indexUniqueness) {
+      if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
+      const tableIndexName = this.tableIndexNameFromGenerated(
+        tableDef.tableName,
+        indexName,
+      );
+      const indexDef = tableDef.indexes[tableIndexName];
+      if (!indexDef) continue;
+      const expectedUnique = indexDef.type === "uniqhash";
+      if (unique !== expectedUnique) {
+        columns.push(sqliteIndexSortKeyColumn(tableIndexName));
+      }
+    }
+    return columns;
+  }
+
+  private resetSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    sortKeyColumns: string[],
+  ): void {
+    const existingColumns = this.getTableColumns(tableDef.tableName);
+    for (const sortKeyColumn of sortKeyColumns) {
+      if (!existingColumns.has(sortKeyColumn)) continue;
+      this.db.exec(
+        `UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`,
+      );
     }
   }
 

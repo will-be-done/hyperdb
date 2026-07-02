@@ -48,7 +48,10 @@ state libraries start to strain:
   can keep showing cached data without seeing uncommitted writes. Pass
   `debug: true` or a debug callback to `HybridDB` to see why an uncached scan
   fell through to persistence, waited for pending persistence, or retried a
-  failed background flush.
+  failed background flush. If a background flush still fails after its bounded
+  retries, HybridDB enters a permanent crashed state (`hybrid.isCrashed`): every
+  further read, write, or transaction throws `HybridDBCrashedError` instead of
+  serving cache data that the primary never received.
   Drivers explicitly report whether
   selector readonly transactions are supported; enabled drivers use
   `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
