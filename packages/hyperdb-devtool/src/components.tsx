@@ -478,7 +478,8 @@ const SpanElement = (
       | "duration"
       | "rows"
       | "cached"
-      | "source";
+      | "in-mem"
+      | "persist";
   },
 ) => {
   const { tone, ...domProps } = props;
@@ -500,6 +501,7 @@ const Shell = styled(ShellElement)<ShellStyleProps>`
   --hdb-accent: #10b981;
   --hdb-blue: #38bdf8;
   --hdb-warn: #f59e0b;
+  --hdb-violet: #a78bfa;
   --hdb-danger: #f87171;
   --hdb-shadow: 0 -8px 50px rgba(0, 0, 0, 0.65);
 
@@ -519,6 +521,7 @@ const Shell = styled(ShellElement)<ShellStyleProps>`
         --hdb-accent: #059669;
         --hdb-blue: #0284c7;
         --hdb-warn: #d97706;
+        --hdb-violet: #7c3aed;
         --hdb-danger: #dc2626;
         --hdb-shadow: 0 -4px 30px rgba(15, 23, 42, 0.1);
       `
@@ -541,6 +544,7 @@ const Shell = styled(ShellElement)<ShellStyleProps>`
           --hdb-accent: #059669;
           --hdb-blue: #0284c7;
           --hdb-warn: #d97706;
+          --hdb-violet: #7c3aed;
           --hdb-danger: #dc2626;
           --hdb-shadow: 0 -4px 30px rgba(15, 23, 42, 0.1);
         }
@@ -1211,6 +1215,27 @@ const TraceListCachedBadge = styled("span")`
   line-height: 1;
 `;
 
+const TraceListInMemBadge = styled("span")`
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--hdb-accent);
+  color: var(--hdb-accent);
+  background: color-mix(in srgb, var(--hdb-accent) 10%, transparent);
+  font:
+    600 10px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  font-size: 9px;
+  line-height: 1;
+`;
+
 const RowMeta = styled("div")`
   display: flex;
   align-items: center;
@@ -1633,12 +1658,13 @@ const TreeLabel = styled("span")`
   color: var(--hdb-text);
 `;
 
-type CallTreeBadgeTone = "duration" | "rows" | "cached" | "source";
+type CallTreeBadgeTone = "duration" | "rows" | "cached" | "in-mem" | "persist";
 
 const treeBadgeColor = (tone: CallTreeBadgeTone): string => {
-  if (tone === "rows") return "var(--hdb-accent)";
+  if (tone === "rows") return "var(--hdb-violet)";
   if (tone === "cached") return "var(--hdb-blue)";
-  if (tone === "source") return "var(--hdb-warn)";
+  if (tone === "in-mem") return "var(--hdb-accent)";
+  if (tone === "persist") return "var(--hdb-warn)";
   return "var(--hdb-border)";
 };
 
@@ -2113,7 +2139,10 @@ export const getCallTreeOperationBadges = (
   }
 
   if (operation.kind === "select" && operation.event.source !== undefined) {
-    badges.push({ text: operation.event.source, tone: "source" });
+    badges.push({
+      text: operation.event.source,
+      tone: operation.event.source === "persist" ? "persist" : "in-mem",
+    });
   }
 
   if (operation.kind === "frame" && operation.frame.cached) {
@@ -2133,6 +2162,7 @@ type TraceRowViewProps = {
   durationMs?: number;
   status: TraceStatus;
   cached: boolean;
+  inMem: boolean;
   selectCount: number;
   queriedRowCount: number;
   hasPendingSelect: boolean;
@@ -2150,6 +2180,7 @@ const TraceRowView = React.memo(
     durationMs,
     status,
     cached,
+    inMem,
     selectCount,
     queriedRowCount,
     hasPendingSelect,
@@ -2184,6 +2215,7 @@ const TraceRowView = React.memo(
             {cached ? (
               <TraceListCachedBadge>cached</TraceListCachedBadge>
             ) : null}
+            {inMem ? <TraceListInMemBadge>in-mem</TraceListInMemBadge> : null}
           </RowTitle>
           <RowMeta>
             <span>
@@ -2319,6 +2351,7 @@ const TraceRowsView = React.memo(
                   durationMs={trace.durationMs}
                   status={trace.status}
                   cached={trace.cached}
+                  inMem={trace.inMem}
                   selectCount={trace.selectCount}
                   queriedRowCount={trace.queriedRowCount}
                   hasPendingSelect={trace.hasPendingSelect}
@@ -2340,6 +2373,7 @@ const TraceRowsView = React.memo(
               durationMs={trace.durationMs}
               status={trace.status}
               cached={trace.cached}
+              inMem={trace.inMem}
               selectCount={trace.selectCount}
               queriedRowCount={trace.queriedRowCount}
               hasPendingSelect={trace.hasPendingSelect}

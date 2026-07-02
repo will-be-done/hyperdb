@@ -1,4 +1,3 @@
-import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DBProvider } from "@will-be-done/hyperdb/react";
 import App from "./App.tsx";
