@@ -35,11 +35,19 @@ state libraries start to strain:
 - **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
   primary store with an in-memory cache: reads check memory first, fall through
   to persistent storage on a miss, then cache the covered index range for next
-  time. Cache fills, write-through mutations, and transactions are serialized
-  per HybridDB instance so async selectors and actions do not overlap against
-  the in-memory cache tier. The committed cache snapshot remains synchronously
-  readable while a write transaction is active, so React can keep showing cached
-  data without seeing uncommitted writes. Drivers explicitly report whether
+  time. Readwrite transactions commit to the in-memory cache first so UI
+  subscribers can update before the persistent primary finishes; HybridDB then
+  flushes those writes to the primary in order. While a flush is pending,
+  already cached intervals keep reading from memory, and uncached persistent
+  fallbacks wait only when pending old or new rows can affect the requested
+  interval. Exact id equality lookups on single-column id indexes are marked
+  cached after the cache transaction commits, so `byId`/`byIds` reads can return
+  from memory while persistence is still pending. The committed cache snapshot
+  remains synchronously readable while a write transaction is active, so React
+  can keep showing cached data without seeing uncommitted writes. Pass
+  `debug: true` or a debug callback to `HybridDB` to see why an uncached scan
+  fell through to persistence or waited for pending persistence.
+  Drivers explicitly report whether
   selector readonly transactions are supported; enabled drivers use
   `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
   readonly transaction starts only when the persistent tier is actually read,
@@ -247,15 +255,15 @@ export function App({ db }: { db: SubscribableDB }) {
 
 ## Entry points
 
-| Import path                              | Contents                                                                 |
-| ---------------------------------------- | ------------------------------------------------------------------------ |
+| Import path                              | Contents                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------ |
 | `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB` |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                             |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                   |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                      |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                            |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                       |
-| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)             |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                         |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                               |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                  |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                        |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                   |
+| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                         |
 
 ## Learn more
 

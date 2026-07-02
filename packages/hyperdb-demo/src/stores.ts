@@ -386,7 +386,11 @@ export async function initStore(mode: StoreMode): Promise<InitResult> {
       freezeRows: false,
       dbName: "demo-idb-hybrid:cache",
     });
-    const db = new SubscribableDB(new HybridDB(primaryDB, cacheDB));
+    const db = new SubscribableDB(
+      new HybridDB(primaryDB, cacheDB, {
+        debug: (e) => console.debug("skip-cache", e),
+      }),
+    );
 
     await execAsync(db.loadTables(ALL_TABLES));
     installTaskStatsHooks(db);

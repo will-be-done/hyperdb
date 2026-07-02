@@ -904,7 +904,7 @@ describe("HyperDBDevtools", () => {
       expect(getCallTreeOperationBadges(operation!)).toEqual([
         { text: "7ms", tone: "duration" },
         { text: "3 rows", tone: "rows" },
-        { text: source, tone: "source" },
+        { text: source, tone: source },
       ]);
     },
   );

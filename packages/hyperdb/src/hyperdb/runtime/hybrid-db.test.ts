@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DB } from "./db";
-import { HybridDB } from "./hybrid-db";
+import { HybridDB, type HybridDBDebugEvent } from "./hybrid-db";
 import { SubscribableDB } from "./subscribable-db";
 import { AsyncDB } from "../test-utils/async-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
@@ -50,12 +50,14 @@ const createTask = (value: number, title = `Task ${value}`): Task => ({
   projectId: value <= 3 ? "a" : "b",
 });
 
-const createDBs = async () => {
+const createDBs = async (
+  hybridOptions?: ConstructorParameters<typeof HybridDB>[2],
+) => {
   const primary = new DB(new BptreeInmemDriver());
   const cache = new DB(new BptreeInmemDriver());
   const primaryScanSpy = vi.spyOn(primary, "intervalScan");
   const cacheScanSpy = vi.spyOn(cache, "intervalScan");
-  const hybrid = new HybridDB(primary, cache);
+  const hybrid = new HybridDB(primary, cache, hybridOptions);
   const db = new AsyncDB(hybrid);
 
   await db.loadTables([tasksTable]);
@@ -434,6 +436,158 @@ describe("HybridDB", () => {
 
     expect(select(cache, selectByValue(1, 1))).toEqual([]);
     expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
+  });
+
+  it("commits cache writes before persistence and blocks intersecting uncached reads", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, primary, cache } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const original = createTask(1);
+    const updated = { ...original, value: 2, title: "updated" };
+    await db.insert(tasksTable, [original]);
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 1 }] },
+      ]),
+    ).resolves.toEqual([original]);
+
+    const persistCommitStarted = deferred();
+    const resumePersistCommit = deferred();
+    const originalBeginTx = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* originalBeginTx(mode);
+      if (mode === "readwrite" || mode === undefined) {
+        const originalCommit = tx.commit.bind(tx);
+        vi.spyOn(tx, "commit").mockImplementation(function* () {
+          persistCommitStarted.resolve();
+          yield* unwrap(resumePersistCommit.promise);
+          return yield* originalCommit();
+        });
+      }
+      return tx;
+    });
+
+    const tx = await db.beginTx();
+    await tx.upsert(tasksTable, [updated]);
+    await tx.commit();
+    await waitOneTurn();
+    await expect(persistCommitStarted.promise).resolves.toBeUndefined();
+
+    expect(select(cache, selectByValue(1, 1))).toEqual([]);
+    expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 1 }] },
+      ]),
+    ).resolves.toEqual([]);
+
+    let uncachedReadResolved = false;
+    const uncachedRead = db
+      .intervalScan(tasksTable, "byValue", [{ eq: [{ col: "value", val: 2 }] }])
+      .then((rows) => {
+        uncachedReadResolved = true;
+        return rows;
+      });
+    await waitOneTurn();
+    expect(uncachedReadResolved).toBe(false);
+    expect(
+      debugEvents.filter((event) => event.type === "pending-persistence-wait"),
+    ).toEqual([
+      {
+        type: "pending-persistence-wait",
+        tableName: tasksTable.tableName,
+        indexName: "byValue",
+        clauses: [{ eq: [{ col: "value", val: 2 }] }],
+        selectOptions: undefined,
+        reasons: [
+          {
+            batchId: 1,
+            tableName: tasksTable.tableName,
+            rowId: updated.id,
+            oldValueKnown: true,
+            oldValueMatches: false,
+            newValueMatches: true,
+          },
+        ],
+      },
+    ]);
+    expect(debugEvents.some((event) => event.type === "persistent-scan")).toBe(
+      true,
+    );
+
+    resumePersistCommit.resolve();
+    await expect(uncachedRead).resolves.toEqual([updated]);
+  });
+
+  it("serves exact id lookups from cache while persistence is pending", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, primary } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const original = createTask(1);
+    const updated = { ...original, value: 2, title: "updated" };
+    await db.insert(tasksTable, [original]);
+
+    const persistCommitStarted = deferred();
+    const resumePersistCommit = deferred();
+    const originalBeginTx = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* originalBeginTx(mode);
+      if (mode === "readwrite" || mode === undefined) {
+        const originalCommit = tx.commit.bind(tx);
+        vi.spyOn(tx, "commit").mockImplementation(function* () {
+          persistCommitStarted.resolve();
+          yield* unwrap(resumePersistCommit.promise);
+          return yield* originalCommit();
+        });
+      }
+      return tx;
+    });
+
+    const tx = await db.beginTx();
+    await tx.upsert(tasksTable, [updated]);
+    await tx.commit();
+    await waitOneTurn();
+    await expect(persistCommitStarted.promise).resolves.toBeUndefined();
+
+    await expect(
+      db.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: updated.id }] },
+      ]),
+    ).resolves.toEqual([updated]);
+    expect(debugEvents).toEqual([]);
+
+    resumePersistCommit.resolve();
+  });
+
+  it("uses parent cache coverage for exact id reads inside write transactions", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, primaryScanSpy } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const task = createTask(1);
+    await db.insert(tasksTable, [task]);
+
+    await expect(
+      db.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: task.id }] },
+      ]),
+    ).resolves.toEqual([task]);
+
+    primaryScanSpy.mockClear();
+    debugEvents.length = 0;
+    const tx = await db.beginTx();
+    await expect(
+      tx.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: task.id }] },
+      ]),
+    ).resolves.toEqual([task]);
+    await tx.rollback();
+
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+    expect(debugEvents).toEqual([]);
   });
 
   it("records sources through SubscribableDB-wrapped HybridDB scans", async () => {

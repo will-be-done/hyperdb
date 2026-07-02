@@ -23,6 +23,7 @@ export type TraceSummary = {
   durationMs?: number;
   status: RootTrace["status"];
   cached: boolean;
+  inMem: boolean;
   selectCount: number;
   queriedRowCount: number;
   hasPendingSelect: boolean;
@@ -156,6 +157,7 @@ const traceSummaryFromRow = (row: TraceRootRow): TraceSummary => ({
   durationMs: row.status === "running" ? undefined : row.durationMs,
   status: row.status,
   cached: row.cached,
+  inMem: row.inMem,
   selectCount: row.selectCount,
   queriedRowCount: row.queriedRowCount,
   hasPendingSelect: row.hasPendingSelect,

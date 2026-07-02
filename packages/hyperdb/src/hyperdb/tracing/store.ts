@@ -89,6 +89,7 @@ const traceRootsTable = defineTable("hyperdbTraceRoots", {
     v.literal("error"),
   ),
   cached: v.boolean(),
+  inMem: v.boolean(),
   selectCount: v.number(),
   queriedRowCount: v.number(),
   hasPendingSelect: v.boolean(),
@@ -218,6 +219,13 @@ const getTraceMutatedRowCount = (trace: RootTrace): number =>
     (total, event) => total + (mutationRecordCount(event) ?? 0),
     0,
   );
+
+// A trace is "fully in-mem" when no select fell through to a persistent scan.
+// Mutations commit to the in-memory cache within the trace (the persistent
+// flush happens separately), so inserts/updates/deletes do not disqualify it.
+// A trace that ran no selects at all still counts as in-mem.
+const traceIsFullyInMem = (trace: RootTrace): boolean =>
+  trace.commandEvents.every((event) => event.source === "in-mem");
 
 export class HyperDBTraceStore implements HyperDBTracer {
   private subDb = new SubscribableDB(
@@ -533,6 +541,7 @@ export class HyperDBTraceStore implements HyperDBTracer {
       durationMs: trace.durationMs ?? 0,
       status: trace.status,
       cached: trace.frames[0]?.cached === true,
+      inMem: traceIsFullyInMem(trace),
       selectCount: trace.commandEvents.length,
       queriedRowCount: getTraceQueriedRowCount(trace),
       hasPendingSelect: hasPendingSelect(trace),

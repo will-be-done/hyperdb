@@ -26,6 +26,16 @@ const selectCommittedTraceNames = (store: HyperDBTraceStore): string[] =>
     })(),
   );
 
+const selectCommittedRows = (store: HyperDBTraceStore) =>
+  select(
+    store.getDB(),
+    (function* () {
+      return yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+        .order("desc")
+        .limit(10);
+    })(),
+  );
+
 const selectCommittedTraces = (store: HyperDBTraceStore) =>
   select(
     store.getDB(),
@@ -300,6 +310,60 @@ describe("devtool tracing store", () => {
     expect(successTrace?.durationMs).toBeDefined();
     expect(failedTrace?.status).toBe("error");
     expect(failedTrace?.error?.message).toBe("boom");
+
+    deactivate();
+  });
+
+  it("marks a trace as in-mem unless a select fell through to a persistent scan", async () => {
+    const store = new HyperDBTraceStore();
+    const deactivate = store.activate();
+
+    const runTrace = (
+      name: string,
+      {
+        sources = [],
+        mutate = false,
+      }: { sources?: ("in-mem" | "persist")[]; mutate?: boolean },
+    ) => {
+      const context = startRootTrace(
+        createTraceFrameMeta("selector", name, undefined),
+        store,
+      )!;
+      for (const source of sources) {
+        const event = beginSelectEvent(context, context.rootFrame, {
+          tableName: "tasks",
+          index: "byId",
+          where: [],
+          bounds: [],
+        });
+        event.source = source;
+        endSelectEventSuccess(context, event, []);
+      }
+      if (mutate) {
+        const mutation = beginMutationEvent(context, context.rootFrame, {
+          kind: "upsert",
+          tableName: "tasks",
+          rows: [],
+        });
+        endMutationEventSuccess(context, mutation);
+      }
+      endTraceSuccess(context);
+    };
+
+    runTrace("all-in-mem", { sources: ["in-mem", "in-mem"] });
+    runTrace("no-work", {});
+    runTrace("in-mem-with-mutation", { sources: ["in-mem"], mutate: true });
+    runTrace("mixed", { sources: ["in-mem", "persist"] });
+
+    store.flushTraceCommits();
+
+    const inMemByName = new Map(
+      selectCommittedRows(store).map((row) => [row.name, row.inMem]),
+    );
+    expect(inMemByName.get("all-in-mem")).toBe(true);
+    expect(inMemByName.get("no-work")).toBe(true);
+    expect(inMemByName.get("in-mem-with-mutation")).toBe(true);
+    expect(inMemByName.get("mixed")).toBe(false);
 
     deactivate();
   });

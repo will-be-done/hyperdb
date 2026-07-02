@@ -157,13 +157,45 @@ later selectors over other indexes can read from memory. `preloadTables` is part
 of the `HyperDB` contract and is safe to call through wrappers such as
 `SubscribableDB`; DBs that do not have a preload layer implement it as a no-op.
 
-Writes go to both tiers in the same operation. That means cached rows stay
-current immediately, while uncached ranges still load lazily on first access.
-Transactions open transactions against both tiers; scan coverage discovered
-inside a transaction is published to the outer cache only after commit.
-Non-transaction reads of the in-memory cache continue to see the last committed
-cache snapshot while a write transaction is active; they do not see uncommitted
-transaction writes.
+Writes outside a transaction go to both tiers in the same operation. Readwrite
+transactions are optimistic: writes apply to the in-memory cache transaction
+first, commit the cache, publish subscribers, and then flush the final row
+changes to the persistent primary in a queued background transaction. The flush
+uses `upsert` for inserted and updated rows, so repeated persistence attempts
+can safely write the latest row value.
+
+While a persistent flush is pending, cached scan intervals still read from the
+in-memory cache immediately. If a scan would fall through to the persistent
+primary, HybridDB checks the pending old and new row values for that table and
+index. The persistent fallback waits only when those pending rows can belong to
+the requested interval; unrelated uncached ranges can continue loading lazily.
+If an upsert or delete did not have the old row in memory, HybridDB treats that
+old position as unknown and waits for the flush before uncached scans of that
+table fall through to the primary.
+
+Exact id lookups are the exception to broad equality waits. After a cache
+transaction commits, HybridDB marks exact `id` intervals as covered for all
+single-column id indexes on rows written by that transaction. That lets
+`byId`/`byIds` equality reads return from memory while the persistent flush is
+still pending. Equality scans on non-unique values, such as `status = "done"`,
+still wait when pending rows can affect the interval unless that interval was
+already cached.
+
+Pass `debug: true` to `new HybridDB(primary, cache, { debug: true })` to log
+when an uncached scan falls through to persistence or waits for pending
+persistence. Pass a callback instead of `true` to receive structured
+`HybridDBDebugEvent` objects. `persistent-scan` events include the scan
+table/index, clauses, target intervals, cached intervals, uncovered intervals,
+and limited cache probe information. `pending-persistence-wait` events include
+the pending batch id, row id, and whether the old or new row value matched the
+requested interval.
+
+Scan coverage discovered inside a transaction is published to the outer cache
+only after the cache transaction commits, but transaction scans can still reuse
+coverage that was already known by the committed cache when the transaction
+started. Non-transaction reads of the in-memory cache continue to see the last
+committed cache snapshot while a write transaction is active; they do not see
+uncommitted transaction writes.
 Drivers explicitly report whether selector-scoped readonly transactions are
 supported. When they are, HyperDB uses `beginTx("readonly")`; HybridDB keeps
 that context lazy until a selector misses the cache and reads the persistent
@@ -171,10 +203,10 @@ tier. If the browser finishes that readonly transaction between selector scans,
 the current scan reopens it once. Selector and action execution context is
 carried as a trait so persistent drivers can include run names in their logs.
 
-HybridDB serializes cache fills, write-through mutations, coverage updates, and
-transaction lifetimes per instance. This keeps async selector misses and actions
-from overlapping against the in-memory cache tier while a primary read or
-transaction is still in flight.
+HybridDB serializes cache fills, coverage updates, cache transaction lifetimes,
+and root write-through mutations per instance. Persistent flushes from
+readwrite transactions are also serialized so the primary sees committed cache
+transactions in order.
 
 ## Executing commands
 

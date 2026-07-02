@@ -37,6 +37,17 @@ export type HybridIntervalCache = Map<string, NormalizedInterval[]>;
 
 export const createHybridIntervalCache = (): HybridIntervalCache => new Map();
 
+export type HybridPersistentScanDebugInfo = {
+  target: IntervalTarget;
+  cached: NormalizedInterval[];
+  uncovered: NormalizedInterval[];
+  limitedCacheProbe?: {
+    rowCount: number;
+    limit: number;
+    order: SelectOptions["order"];
+  };
+};
+
 /*
  * HybridDB cache coverage is tracked per table index as normalized tuple
  * intervals. The current cache plan is intentionally conservative:
@@ -70,6 +81,23 @@ const maxTuple = (count: number): Tuple =>
 
 const rowToTuple = (row: Row, indexCols: string[]): Tuple =>
   indexCols.map((col) => row[col] as Value);
+
+const tupleInInterval = (
+  tuple: Tuple,
+  interval: NormalizedInterval,
+): boolean => {
+  const lowerCmp = compareTuple(tuple, interval.lower);
+  if (lowerCmp < 0 || (lowerCmp === 0 && !interval.lowerInclusive)) {
+    return false;
+  }
+
+  const upperCmp = compareTuple(tuple, interval.upper);
+  if (upperCmp > 0 || (upperCmp === 0 && !interval.upperInclusive)) {
+    return false;
+  }
+
+  return true;
+};
 
 export const boundToInterval = (
   bound: TupleScanOptions,
@@ -116,6 +144,14 @@ export const intervalFromClauses = (
     supportsPartialLimitCoverage:
       indexConfig.type === "btree" || indexCols[0] === "id",
   };
+};
+
+export const rowMatchesIntervalTarget = (
+  row: Row,
+  target: IntervalTarget,
+): boolean => {
+  const tuple = rowToTuple(row, target.indexCols);
+  return target.intervals.some((interval) => tupleInInterval(tuple, interval));
 };
 
 export const isEmptyInterval = (interval: NormalizedInterval) => {
@@ -360,11 +396,26 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
   indexName: keyof ExtractIndexes<TTable>,
   clauses: WhereClause[],
   selectOptions?: SelectOptions,
+  options: {
+    additionalCachedIntervals?: HybridIntervalCache[];
+    beforePersistentScan?: (target: IntervalTarget) => Generator<DBCmd, void>;
+    filterPersistentRows?: (
+      target: IntervalTarget,
+      rows: ExtractSchema<TTable>[],
+    ) => ExtractSchema<TTable>[];
+    onPersistentScan?: (info: HybridPersistentScanDebugInfo) => void;
+    returnCacheAfterPersistentScan?: (target: IntervalTarget) => boolean;
+  } = {},
 ): Generator<DBCmd, ExtractSchema<TTable>[]> {
   if (selectOptions?.limit === 0) return [];
 
   const target = intervalFromClauses(table, indexName as string, clauses);
-  const cached = cachedIntervals.get(target.key) ?? [];
+  const cached = mergeIntervals([
+    ...(cachedIntervals.get(target.key) ?? []),
+    ...(options.additionalCachedIntervals ?? []).flatMap(
+      (intervals) => intervals.get(target.key) ?? [],
+    ),
+  ]);
   const uncovered = subtractIntervals(target.intervals, cached);
 
   if (uncovered.length === 0) {
@@ -372,6 +423,7 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
     return yield* cache.intervalScan(table, indexName, clauses, selectOptions);
   }
 
+  let limitedCacheProbe: HybridPersistentScanDebugInfo["limitedCacheProbe"];
   if (selectOptions?.limit !== undefined) {
     setSelectSource(selectEvent, "in-mem");
     const cacheRows = yield* cache.intervalScan(
@@ -380,6 +432,11 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
       clauses,
       selectOptions,
     );
+    limitedCacheProbe = {
+      rowCount: cacheRows.length,
+      limit: selectOptions.limit,
+      order: selectOptions.order,
+    };
     if (
       canServeLimitedResultFromCache(
         cacheRows as Row[],
@@ -394,16 +451,31 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
   }
 
   setSelectSource(selectEvent, "persist");
+  options.onPersistentScan?.({
+    target,
+    cached,
+    uncovered,
+    limitedCacheProbe,
+  });
+  if (options.beforePersistentScan) {
+    yield* options.beforePersistentScan(target);
+  }
   const primaryDB = typeof primary === "function" ? yield* primary() : primary;
-  const primaryRows = yield* primaryDB.intervalScan(
+  const persistentRows = yield* primaryDB.intervalScan(
     table,
     indexName,
     clauses,
     selectOptions,
   );
+  const primaryRows =
+    options.filterPersistentRows?.(target, persistentRows) ?? persistentRows;
 
   if (primaryRows.length > 0) {
     yield* cache.upsert(table, primaryRows);
+  }
+
+  if (options.returnCacheAfterPersistentScan?.(target)) {
+    return yield* cache.intervalScan(table, indexName, clauses, selectOptions);
   }
 
   const fullyLoaded =
