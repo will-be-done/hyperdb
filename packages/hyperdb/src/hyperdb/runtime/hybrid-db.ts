@@ -488,7 +488,10 @@ export class HybridDB implements HyperDB {
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
-    const hybridDB = this;
+    const emitPersistentScanDebugEvent =
+      this.emitPersistentScanDebugEvent.bind(this);
+    const waitForPendingPersistenceForScan =
+      this.waitForPendingPersistenceForScan.bind(this);
     return yield* withHybridLock(this.state, function* () {
       return yield* hybridIntervalScan(
         withDriverTraceContextTrait(primary, traceContext),
@@ -501,7 +504,7 @@ export class HybridDB implements HyperDB {
         selectOptions,
         {
           onPersistentScan: (info) => {
-            hybridDB.emitPersistentScanDebugEvent(
+            emitPersistentScanDebugEvent(
               "root",
               table,
               indexName,
@@ -511,7 +514,7 @@ export class HybridDB implements HyperDB {
             );
           },
           beforePersistentScan: function* (target: IntervalTarget) {
-            yield* hybridDB.waitForPendingPersistenceForScan(
+            yield* waitForPendingPersistenceForScan(
               table,
               indexName,
               clauses,
@@ -832,10 +835,10 @@ class HybridDBReadonlyTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
-    const { cache, state } = this.hybridDB;
+    const { hybridDB } = this;
+    const { cache, state } = hybridDB;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
-    const readonlyTx = this;
     const getPrimaryForRead = function* (
       this: HybridDBReadonlyTx,
     ): Generator<DBCmd, HyperDB> {
@@ -865,7 +868,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
         selectOptions,
         {
           onPersistentScan: (info) => {
-            readonlyTx.hybridDB.emitPersistentScanDebugEvent(
+            hybridDB.emitPersistentScanDebugEvent(
               "readonly-tx",
               table,
               indexName,
@@ -875,7 +878,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
             );
           },
           beforePersistentScan: function* (target: IntervalTarget) {
-            yield* readonlyTx.hybridDB.waitForPendingPersistenceForScan(
+            yield* hybridDB.waitForPendingPersistenceForScan(
               table,
               indexName,
               clauses,
@@ -1015,14 +1018,14 @@ class HybridDBTx implements HyperDBTx {
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
     const traceContext = getDriverTraceContextForDB(this);
+    const { hybridDB } = this;
     const ownPendingIds = new Set(
       this.state.pendingWrites
         .filter((write) => write.table === table)
         .map((write) => write.id),
     );
-    const tx = this;
     return yield* hybridIntervalScan(
-      withDriverTraceContextTrait(this.hybridDB.primary, traceContext),
+      withDriverTraceContextTrait(hybridDB.primary, traceContext),
       withDriverTraceContextTrait(this.cacheTx, traceContext),
       this.state.cachedIntervals,
       getCurrentSelectEventForDB(this),
@@ -1031,9 +1034,9 @@ class HybridDBTx implements HyperDBTx {
       clauses,
       selectOptions,
       {
-        additionalCachedIntervals: [this.hybridDB.state.cachedIntervals],
+        additionalCachedIntervals: [hybridDB.state.cachedIntervals],
         onPersistentScan: (info) => {
-          this.hybridDB.emitPersistentScanDebugEvent(
+          hybridDB.emitPersistentScanDebugEvent(
             "readwrite-tx",
             table,
             indexName,
@@ -1043,7 +1046,7 @@ class HybridDBTx implements HyperDBTx {
           );
         },
         beforePersistentScan: function* (target: IntervalTarget) {
-          yield* tx.hybridDB.waitForPendingPersistenceForScan(
+          yield* hybridDB.waitForPendingPersistenceForScan(
             table,
             indexName,
             clauses,
