@@ -57,6 +57,11 @@ HyperDB?](/start/why/) gives the technical background.
     backend the runtime reads only the rows a selector touches instead of
     hydrating the whole dataset into memory.
   </Card>
+  <Card title="Persistent local state" icon="database">
+    Use `HybridDB` with IndexedDB or async SQLite as the primary store and an
+    in-memory B-tree cache for hot ranges. Cached reads stay fast, and writes
+    update the UI immediately before flushing to storage.
+  </Card>
   <Card title="JavaScript selectors and actions" icon="seti:javascript">
     Write selectors and actions as ordinary JS (loops, conditionals, function
     calls) on both client and server. HyperDB gives you fast indexed lookups
@@ -82,7 +87,7 @@ HyperDB?](/start/why/) gives the technical background.
 <LinkCard
   title="Why HyperDB?"
   href="/start/why/"
-  description="Why HyperDB is built."
+  description="The data-modeling and reactivity problems HyperDB solves."
 />
 <LinkCard
   title="How HyperDB Works"

@@ -53,3 +53,4 @@ DB:
 6. Check if OR queries keep ordering
 7. In-mem tx for fast action
 8. k-way indexxedb OR merging
+9. Multibe column support in db index

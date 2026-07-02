@@ -18,63 +18,29 @@ schemas, read it through reactive selectors, and change it through
 transactional actions. The same slice of schema, selectors, and actions can be
 shared by the client and backend; only the storage driver differs.
 
-It is designed for the parts of local-first apps where Redux, MobX, or plain
-state libraries start to strain:
+It is designed for the parts of local-first apps where plain client state starts
+to strain:
 
-- **Efficient inserts into sorted data.** Every table index is backed by a real B-tree, so
-  inserting into a sorted collection stays `O(log n)` instead of the `O(n)` you
-  pay rebuilding (Redux) or shifting (MobX) an array. This fits fractional
-  indexing in local-first apps.
+- **Efficient inserts into sorted data.** Every table index is backed by a real
+  B-tree, so inserting into a sorted collection stays `O(log n)` instead of
+  rebuilding or shifting a whole array. This fits fractional indexing in
+  local-first apps.
+- **Explicit query execution.** SQL is powerful, but the query text does not
+  usually tell you whether the database will use an index or scan a whole table.
+  In HyperDB, selectors name the table index they read and build explicit bounds
+  over it, so the code shows the access path it will take.
 - **Fine-grained reactivity.** Selectors record exactly which index ranges they
   scanned, so a mutation only re-runs the selectors that overlap it, without
   proxies or `observer()`.
+- **Lazy persistent reads when you need them.** `HybridDB` combines a persistent
+  primary store with an in-memory B-tree cache. Reads return cached ranges when
+  possible and load missing ranges from the primary store on demand. Writes
+  update the cache first so the UI can respond immediately, then flush to the
+  primary store in order.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a
   selector touches instead of hydrating the whole dataset into memory.
-- **Lazy persistent reads when you need them.** `HybridDB` pairs a persistent
-  primary store with an in-memory cache: reads check memory first, fall through
-  to persistent storage on a miss, then cache the covered index range for next
-  time. Readwrite transactions commit to the in-memory cache first so UI
-  subscribers can update before the persistent primary finishes; HybridDB then
-  flushes those writes to the primary in order. While a flush is pending,
-  already cached intervals keep reading from memory, and uncached persistent
-  fallbacks wait only when pending old or new rows can affect the requested
-  interval. Exact `uniqhash` equality lookups, including the built-in `byId`
-  index, are marked cached when rows are loaded or cache transactions commit, so
-  unique lookups can return from memory while persistence is still pending. The
-  committed cache snapshot
-  remains synchronously readable while a write transaction is active, so React
-  can keep showing cached data without seeing uncommitted writes. Pass
-  `debug: true` or a debug callback to `HybridDB` to see why an uncached scan
-  fell through to persistence, waited for pending persistence, or retried a
-  failed background flush. If a background flush still fails after its bounded
-  retries, HybridDB enters a permanent crashed state (`hybrid.isCrashed`): every
-  further read, write, or transaction throws `HybridDBCrashedError` instead of
-  serving cache data that the primary never received.
-  Drivers explicitly report whether
-  selector readonly transactions are supported; enabled drivers use
-  `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
-  readonly transaction starts only when the persistent tier is actually read,
-  and is reopened once if the browser finishes it between scans. IDB operation
-  logs include transaction ids and selector/action names when a run context is
-  available. When a workflow should start warm, call `db.preloadTables(...)`
-  with a B-tree full-scan index such as `byIds` to load whole tables into the
-  cache and mark their indexes as resident when the DB is a HybridDB wrapper, or
-  call `preloadSelector(...)` with the same selector args a route will render to
-  warm the selector result too. Retained selector cache entries keep tracking DB
-  changes until GC: unrelated mutations advance the cached revision without a
-  re-run, while mutations inside the selector's read ranges mark unused entries
-  stale so they re-run lazily on the next preload or read.
-- **Hybrid-first React reads.** `HybridDB` is the recommended frontend shape for
-  durable local state: IndexedDB or async SQLite as the primary store, an
-  in-memory B-tree cache for hot ranges, and React reading through
-  `useAsyncSelector`. Cached results stay visible while missing ranges load in
-  the background, and writes go through `useAsyncDispatch` / `asyncDispatch` so
-  both tiers commit together. `preloadSelector(...)` uses the same cache bridge
-  outside React, so route loaders can warm HybridDB and the in-memory selector
-  snapshot in one call. The async React API returns a React Query-style object
-  with `data`, `status`, `error`, fetching flags, and `refetch()`.
 - **JavaScript selectors and actions.** Selectors and actions are ordinary JS: loops,
   conditionals, function calls. You get fast indexed lookups underneath, not a
   query language to learn.
@@ -93,7 +59,7 @@ across your whole stack:
 - Apps with rich data models (tasks, documents, boards) that need indexed lookups
   and ordering on both client and server.
 - **Large sorted collections** you reorder or insert into with fractional
-  indexing, where a plain Redux/MobX array degrades to `O(n)`.
+  indexing, where array-based state becomes costly.
 - Anywhere you'd otherwise duplicate models and queries between frontend and
   backend.
 
@@ -132,7 +98,6 @@ export const tasksTable = defineTable("tasks", {
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
   .index("bySlug", ["slug"], { type: "uniqhash" })
-  // B-tree full-table scan index used by HybridDB preloading.
   .index("byIds", ["id"]);
 
 export type Task = ExtractSchema<typeof tasksTable>;
@@ -198,9 +163,11 @@ export async function createAppDB() {
   const db = new SubscribableDB(new HybridDB(primary, cache));
 
   await execAsync(db.loadTables([tasksTable]));
-  await execAsync(
-    db.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
-  );
+
+  // Optional: warm the cache with the whole table so future reads can stay in memory.
+  // await execAsync(
+  //   db.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+  // );
 
   return db;
 }
@@ -208,7 +175,7 @@ export async function createAppDB() {
 
 `SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
-for successful index scans. `HybridDB` keeps the persistent store durable while
+for successful index scans. `HybridDB` keeps the primary store persistent while
 serving cached index ranges from memory.
 
 ```tsx
@@ -280,7 +247,7 @@ export function App({ db }: { db: SubscribableDB }) {
 ## Learn more
 
 - [Introduction](https://hyperdb.will-be-done.app/start/introduction/): what HyperDB is and when to use it
-- [Why HyperDB?](https://hyperdb.will-be-done.app/start/why/): the problems with Redux/MobX that motivated it
+- [Why HyperDB?](https://hyperdb.will-be-done.app/start/why/): the data-modeling and reactivity problems it is built to solve
 - [How HyperDB Works](https://hyperdb.will-be-done.app/start/how-it-works/): the mental model
 - [Quickstart](https://hyperdb.will-be-done.app/start/quickstart/): define a table, run a query, wire it into React
 - [LLM Cheat Sheet](https://hyperdb.will-be-done.app/start/llm-cheat-sheet/): compact context to paste into another project

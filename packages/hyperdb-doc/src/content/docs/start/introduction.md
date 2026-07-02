@@ -14,12 +14,6 @@ schema, selectors, and actions are written once and can run in the browser (over
 in-memory B+trees, IndexedDB, or WebAssembly SQLite) _and_ on the server (over
 native SQLite). Only the storage driver differs per environment.
 
-For durable frontend apps, the main runtime shape is `HybridDB`: a persistent
-primary store such as IndexedDB or async SQLite, plus an in-memory B-tree cache
-for hot ranges. React reads that hybrid runtime with `useAsyncSelector`, keeping
-cached data visible while missing ranges load from persistence, and writes with
-`useAsyncDispatch` so both tiers commit together.
-
 It was inspired by [Convex](https://www.convex.dev/): you model your data with
 validators, read it with functions instead of raw SQL, and let the runtime keep
 your reads reactive. HyperDB takes that ergonomic model and makes it usable on
@@ -35,14 +29,18 @@ both the client and server.
   limits. Every table is backed by a real B+tree, so inserting into a sorted
   collection stays `O(log n)` instead of the `O(n)` you pay rebuilding or
   shifting an array.
+- Explicit access paths: SQL is powerful, but the query text usually does not
+  show whether the database will use an index or scan a whole table. HyperDB
+  selectors name the index they read and build explicit bounds over it, so the
+  code shows the access path it will take.
 - Selectors & actions: reads and writes are expressed as generator
   functions that _describe_ what to do. The runtime executes them, which makes
   the same code work synchronously against pure in-memory storage or
-  asynchronously against durable stores such as IndexedDB and SQLite.
-- Hybrid persistence: `HybridDB` checks an in-memory cache first, falls through
-  to the persistent primary store only for missing index ranges, then records
-  coverage so repeated reads stay fast. You can preload whole tables or specific
-  selectors before a route renders.
+  asynchronously against persistent stores such as IndexedDB and SQLite.
+- Hybrid reads: `HybridDB` combines a primary store with an in-memory B-tree
+  cache. Reads use cached index ranges when possible and fall through to the
+  primary store only for missing ranges. Writes update the cache first for
+  immediate UI feedback, then flush to the primary store.
 - JavaScript selectors and actions: selectors and actions are ordinary JS, with loops,
   conditionals, and function calls. HyperDB gives you fast indexed lookups and
   inserts underneath, not a query language to learn, and the same mental model on
@@ -69,8 +67,8 @@ one data layer shared across your whole stack:
 - Apps with rich data models (tasks, documents, boards) that need indexed lookups
   and ordering on both client and server.
 - Large sorted collections: lists you reorder or insert into with
-  fractional indexing, where a plain Redux/MobX array degrades to `O(n)` and a
-  B-tree stays `O(log n)`.
+  fractional indexing, where array-based state becomes costly and a B-tree
+  stays `O(log n)`.
 - Anywhere you'd otherwise duplicate models and queries between frontend and
   backend, or hand-roll in-memory indexes and manual invalidation.
 
@@ -110,5 +108,5 @@ exposing `HyperDBDevtools` from `@will-be-done/hyperdb-devtool/react`.
 ## Next steps
 
 Read [How HyperDB Works](/start/how-it-works/) for the mental model, then jump
-into the [Quickstart](/start/quickstart/). For the cache-first durable runtime,
+into the [Quickstart](/start/quickstart/). For the cache-first persistent runtime,
 see [`HybridDB` in the runtime guide](/runtime/db/#hybriddb).
