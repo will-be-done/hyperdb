@@ -109,8 +109,7 @@ describe("SQLite driver edge case regressions", () => {
       "PRAGMA index_list(driverEdgeUniqhashMigration)",
     ).find(
       (row) =>
-        String(row[1]) ===
-        "idx_driverEdgeUniqhashMigration_byEmail_sort_key",
+        String(row[1]) === "idx_driverEdgeUniqhashMigration_byEmail_sort_key",
     );
     expect(byEmail && Number(byEmail[2])).toBe(1);
 

@@ -487,9 +487,7 @@ export class SqlDriver implements DBDriver {
     const existingColumns = this.getTableColumns(tableDef.tableName);
     for (const sortKeyColumn of sortKeyColumns) {
       if (!existingColumns.has(sortKeyColumn)) continue;
-      this.db.exec(
-        `UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`,
-      );
+      this.db.exec(`UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`);
     }
   }
 
