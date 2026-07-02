@@ -139,9 +139,10 @@ export const projectTasks = selector({
 OR queries can return an array or use `or(...)`:
 
 ```ts
-yield* selectFrom(tasksTable, "byProjectOrder").where((q) =>
-  or(q.eq("projectId", "p1"), q.eq("projectId", "p2")),
-);
+yield *
+  selectFrom(tasksTable, "byProjectOrder").where((q) =>
+    or(q.eq("projectId", "p1"), q.eq("projectId", "p2")),
+  );
 ```
 
 Run selectors outside React with `select`, `selectAsync`, or
@@ -241,6 +242,21 @@ Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure
 in-memory apps can skip `HybridDB` and use `new SubscribableDB(new DB(new
 BptreeInmemDriver()))`.
+
+HybridDB readwrite transactions commit to the in-memory cache first and flush
+their final row changes to the persistent primary afterward. This keeps
+`asyncDispatch` responsive for UI writes. Cached scan intervals keep reading
+from memory while persistence is pending; uncached scans wait for the pending
+flush only when the pending old or new row values can affect the requested
+interval. Exact `id` equality lookups on single-column id indexes are marked
+cached after the cache transaction commits, so `byId`/`byIds` reads can return
+from memory while persistence is still pending. Write transaction scans reuse
+coverage already known by the committed cache.
+
+Use `new HybridDB(primary, cache, { debug: true })` to log why an uncached scan
+fell through to persistence or waited for pending persistence. Use a callback
+for structured
+`HybridDBDebugEvent` objects.
 
 ## React Pattern
 
