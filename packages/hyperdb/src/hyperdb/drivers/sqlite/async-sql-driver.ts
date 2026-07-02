@@ -4,6 +4,7 @@ import type { DBDriver, DBDriverTX } from "../../core/driver";
 import type { TableDefinition } from "../../schema/table";
 import type { DBCmd } from "../../commands/async";
 import { unwrapCb } from "../../commands/async";
+import { execAsync } from "../../core/executor";
 import { cloneDeep } from "../../utils/toolkit";
 import {
   buildSortKeyWhereClause,
@@ -17,6 +18,7 @@ import {
   addSortKeyColumnSQL,
   dropSortKeyColumnSQL,
   chunkArray,
+  CHUNK_SIZE,
   getSqliteDeleteChunkSize,
   getSqliteInsertChunkSize,
   sqliteIndexSortKeyColumn,
@@ -164,37 +166,12 @@ function* performAsyncUpsertOperation(
 ): Generator<DBCmd, void> {
   if (values.length === 0) return;
 
-  yield* unwrapCb(async () => {
-    const allValues = chunkArray(values, getSqliteInsertChunkSize(tableDef));
-    for (const chunk of allValues) {
-      const upsertSQL = buildInsertSQL(tableDef, chunk.length, {
-        replace: true,
-      });
-      const params = chunk.flatMap((v) => buildRowInsertParams(tableDef, v));
-      const startedAt = nowMs();
-
-      try {
-        await db.exec(upsertSQL, params);
-        logAsyncSQL(upsertSQL, startedAt, {
-          tableName: tableDef.tableName,
-          rowCount: chunk.length,
-          ...summarizeSqlParams(params),
-        });
-      } catch (error) {
-        logAsyncSQL(
-          upsertSQL,
-          startedAt,
-          {
-            tableName: tableDef.tableName,
-            rowCount: chunk.length,
-            ...summarizeSqlParams(params),
-          },
-          error,
-        );
-        throw error;
-      }
-    }
-  });
+  yield* performAsyncDeleteOperation(
+    db,
+    tableDef,
+    values.map((value) => value.id),
+  );
+  yield* performAsyncInsertOperation(db, tableDef, values);
 }
 
 function* performAsyncDeleteOperation(
@@ -616,9 +593,18 @@ export class AsyncSqlDriver implements DBDriver {
           }
 
           await this.createTable(tableDef);
-          await this.dropStaleSortKeyIndexes(tableDef);
+          const indexUniqueness = await this.getGeneratedIndexUniqueness(
+            tableDef.tableName,
+          );
+          const reencodedColumns = this.reencodedSortKeyColumns(
+            tableDef,
+            indexUniqueness,
+          );
+          await this.dropStaleSortKeyIndexes(tableDef, indexUniqueness);
           await this.dropStaleSortKeyColumns(tableDef);
           await this.addMissingSortKeyColumns(tableDef);
+          await this.resetSortKeyColumns(tableDef, reencodedColumns);
+          await this.backfillSortKeyColumns(tableDef);
           await this.createIndexes(tableDef);
           this.tableDefinitions.set(tableDef.tableName, tableDef);
         }
@@ -672,15 +658,17 @@ export class AsyncSqlDriver implements DBDriver {
     return columns;
   }
 
-  private async getTableIndexNames(tableName: string): Promise<Set<string>> {
-    const indexes = new Set<string>();
+  private async getGeneratedIndexUniqueness(
+    tableName: string,
+  ): Promise<Map<string, boolean>> {
+    const indexes = new Map<string, boolean>();
     const sql = `PRAGMA index_list(${tableName})`;
     const startedAt = nowMs();
     const stmt = await this.db.prepare(sql);
 
     try {
       for (const row of await stmt.values([])) {
-        indexes.add(String(row[1]));
+        indexes.set(String(row[1]), Number(row[2]) === 1);
       }
       logAsyncSQL(sql, startedAt, {
         tableName,
@@ -731,13 +719,70 @@ export class AsyncSqlDriver implements DBDriver {
 
   private async dropStaleSortKeyIndexes(
     tableDef: TableDefinition<any>,
+    indexUniqueness: Map<string, boolean>,
   ): Promise<void> {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
-    for (const indexName of await this.getTableIndexNames(tableDef.tableName)) {
+    for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      if (expectedIndexes.has(indexName)) continue;
+      if (expectedIndexes.has(indexName)) {
+        const tableIndexName = this.tableIndexNameFromGenerated(
+          tableDef.tableName,
+          indexName,
+        );
+        const expectedUnique =
+          tableDef.indexes[tableIndexName]?.type === "uniqhash";
+        if (unique === expectedUnique) continue;
+      }
 
       await runAsyncSQL(this.db, dropIndexSQL(indexName));
+    }
+  }
+
+  private tableIndexNameFromGenerated(
+    tableName: string,
+    generatedIndexName: string,
+  ): string {
+    return generatedIndexName
+      .slice(`idx_${tableName}_`.length)
+      .replace(/_sort_key$/, "");
+  }
+
+  // Sort-key columns whose encoding changed because the index flipped between
+  // uniqhash (value only) and hash/btree (value + id). Their existing values
+  // are encoded with the old shape, so they must be recomputed for every row
+  // rather than left to the NULL-only backfill.
+  private reencodedSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    indexUniqueness: Map<string, boolean>,
+  ): string[] {
+    const columns: string[] = [];
+    for (const [indexName, unique] of indexUniqueness) {
+      if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
+      const tableIndexName = this.tableIndexNameFromGenerated(
+        tableDef.tableName,
+        indexName,
+      );
+      const indexDef = tableDef.indexes[tableIndexName];
+      if (!indexDef) continue;
+      const expectedUnique = indexDef.type === "uniqhash";
+      if (unique !== expectedUnique) {
+        columns.push(sqliteIndexSortKeyColumn(tableIndexName));
+      }
+    }
+    return columns;
+  }
+
+  private async resetSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    sortKeyColumns: string[],
+  ): Promise<void> {
+    const existingColumns = await this.getTableColumns(tableDef.tableName);
+    for (const sortKeyColumn of sortKeyColumns) {
+      if (!existingColumns.has(sortKeyColumn)) continue;
+      await runAsyncSQL(
+        this.db,
+        `UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`,
+      );
     }
   }
 
@@ -770,9 +815,52 @@ export class AsyncSqlDriver implements DBDriver {
     }
   }
 
+  // NOTE: backwards compatibility. Remove after v1.
+  private async backfillSortKeyColumns(
+    tableDef: TableDefinition<any>,
+  ): Promise<void> {
+    for (const indexName of Object.keys(tableDef.indexes)) {
+      const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
+      const sql = `SELECT data FROM ${tableDef.tableName} WHERE ${sortKeyColumn} IS NULL`;
+      const startedAt = nowMs();
+      const stmt = await this.db.prepare(sql);
+
+      try {
+        const rows = await stmt.values([]);
+        logAsyncSQL(sql, startedAt, {
+          tableName: tableDef.tableName,
+          indexName,
+          rowCount: rows.length,
+        });
+        for (const chunk of chunkArray(rows, CHUNK_SIZE)) {
+          await execAsync(
+            performAsyncUpsertOperation(
+              this.db,
+              tableDef,
+              chunk.map(([data]) => parseSqliteStoredRow(String(data))),
+            ),
+          );
+        }
+      } catch (error) {
+        logAsyncSQL(
+          sql,
+          startedAt,
+          {
+            tableName: tableDef.tableName,
+            indexName,
+          },
+          error,
+        );
+        throw error;
+      } finally {
+        await stmt.finalize();
+      }
+    }
+  }
+
   private async createIndexes(tableDef: TableDefinition<any>): Promise<void> {
     for (const [indexName] of Object.entries(tableDef.indexes)) {
-      const indexSQL = createIndexSQL(tableDef.tableName, indexName);
+      const indexSQL = createIndexSQL(tableDef, indexName);
       await runAsyncSQL(this.db, indexSQL);
     }
   }

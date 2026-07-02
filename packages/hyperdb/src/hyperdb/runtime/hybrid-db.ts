@@ -32,6 +32,8 @@ import {
   hybridIntervalScan,
   intervalFromClauses,
   mergeCoverage,
+  mergeExactUniqhashCoverage,
+  mergeExactUniqhashCoverageForRows,
   mergeCoverageMaps,
   rowMatchesIntervalTarget,
   type HybridIntervalCache,
@@ -47,7 +49,27 @@ type HybridDBState = {
   pendingPersistence: Set<HybridPersistenceBatch>;
   persistenceTail: Promise<void>;
   nextPersistenceBatchId: number;
+  isCrashed: boolean;
+  crashError: unknown;
 };
+
+/**
+ * Thrown by every HybridDB read/write once background persistence has
+ * permanently failed (all retries exhausted). The HybridDB is considered
+ * crashed: its cache and primary may have diverged, so it refuses all further
+ * operations rather than serving stale in-memory data. The underlying
+ * persistence error is available via `cause`.
+ */
+export class HybridDBCrashedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "HybridDB is in a crashed state after background persistence permanently failed. " +
+        "No further reads or writes are allowed.",
+      { cause },
+    );
+    this.name = "HybridDBCrashedError";
+  }
+}
 
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
@@ -76,6 +98,14 @@ type HybridPersistenceBatch = {
   id: number;
   writes: HybridPendingWrite[];
   promise: Promise<void>;
+};
+
+type HybridPersistenceFailure = {
+  error: unknown;
+  attempt: number;
+  maxAttempts: number;
+  retryDelayMs?: number;
+  willRetry: boolean;
 };
 
 export type HybridDBPendingPersistenceWaitReason = {
@@ -111,9 +141,25 @@ export type HybridDBPersistentScanDebugEvent = {
   limitedCacheProbe?: HybridPersistentScanDebugInfo["limitedCacheProbe"];
 };
 
+export type HybridDBPersistenceFailureDebugEvent = {
+  type: "persistence-failure";
+  batchId: number;
+  writeCount: number;
+  error: unknown;
+  attempt: number;
+  maxAttempts: number;
+  retryDelayMs?: number;
+  willRetry: boolean;
+};
+
 export type HybridDBDebugEvent =
   | HybridDBPendingPersistenceWaitDebugEvent
-  | HybridDBPersistentScanDebugEvent;
+  | HybridDBPersistentScanDebugEvent
+  | HybridDBPersistenceFailureDebugEvent;
+
+const hybridPersistenceMaxAttempts = 3;
+const hybridPersistenceInitialRetryDelayMs = 10;
+const hybridPersistenceRetryBackoffFactor = 2;
 
 const createHybridDBState = (): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
@@ -121,6 +167,8 @@ const createHybridDBState = (): HybridDBState => ({
   pendingPersistence: new Set(),
   persistenceTail: Promise.resolve(),
   nextPersistenceBatchId: 1,
+  isCrashed: false,
+  crashError: undefined,
 });
 
 const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
@@ -252,6 +300,13 @@ function* persistWrites(
   }
 }
 
+const persistenceRetryDelayMs = (attempt: number): number =>
+  hybridPersistenceInitialRetryDelayMs *
+  hybridPersistenceRetryBackoffFactor ** (attempt - 1);
+
+const waitForPersistenceRetry = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, delayMs));
+
 function pendingWriteMatchReason(
   write: HybridPendingWrite,
   batchId: number,
@@ -290,23 +345,35 @@ function pendingWritesMatchTarget(
   return false;
 }
 
-function idCoverageIndexes(table: TableDefinition): string[] {
-  return Object.entries(table.indexes)
-    .filter(([, index]) => index.cols.length === 1 && index.cols[0] === "id")
-    .map(([indexName]) => indexName);
-}
-
-function mergeExactIdCoverage(
+function mergeExactUniqhashWriteCoverage(
   cachedIntervals: HybridIntervalCache,
   writes: HybridPendingWrite[],
 ): void {
   for (const write of coalescePersistenceWrites(writes)) {
-    for (const indexName of idCoverageIndexes(write.table)) {
-      const target = intervalFromClauses(write.table, indexName, [
-        { eq: [{ col: "id", val: write.id }] },
-      ]);
-      mergeCoverage(cachedIntervals, target.key, target.intervals);
+    for (const [indexName, indexConfig] of Object.entries(
+      write.table.indexes,
+    )) {
+      if (
+        indexConfig.type === "uniqhash" &&
+        indexConfig.cols.length === 1 &&
+        indexConfig.cols[0] === "id"
+      ) {
+        mergeExactUniqhashCoverage(
+          cachedIntervals,
+          `${write.table.tableName}:${indexName}`,
+          write.id,
+        );
+      }
     }
+
+    const rows: Row[] = [];
+    if (write.newValue) {
+      rows.push(write.newValue);
+    }
+    if (write.oldValueKnown && write.oldValue) {
+      rows.push(write.oldValue);
+    }
+    mergeExactUniqhashCoverageForRows(cachedIntervals, write.table, rows);
   }
 }
 
@@ -359,6 +426,7 @@ export class HybridDB implements HyperDB {
   }
 
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     yield* this.waitForPendingPersistence();
     yield* withHybridLock(this.state, function* () {
@@ -371,6 +439,7 @@ export class HybridDB implements HyperDB {
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     const traceContext = getDriverTraceContextForDB(this);
 
@@ -413,6 +482,7 @@ export class HybridDB implements HyperDB {
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    this.throwIfCrashed();
     if (mode === "readonly") {
       return new HybridDBReadonlyTx(this);
     }
@@ -440,51 +510,54 @@ export class HybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfCrashed();
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
-    return yield* withHybridLock(
-      this.state,
-      function* () {
-        return yield* hybridIntervalScan(
-          withDriverTraceContextTrait(primary, traceContext),
-          withDriverTraceContextTrait(cache, traceContext),
-          state.cachedIntervals,
-          selectEvent,
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-          {
-            onPersistentScan: (info) => {
-              this.emitPersistentScanDebugEvent(
-                "root",
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                info,
-              );
-            },
-            beforePersistentScan: function* (target) {
-              yield* this.waitForPendingPersistenceForScan(
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                target,
-              );
-            }.bind(this),
+    const emitPersistentScanDebugEvent =
+      this.emitPersistentScanDebugEvent.bind(this);
+    const waitForPendingPersistenceForScan =
+      this.waitForPendingPersistenceForScan.bind(this);
+    return yield* withHybridLock(this.state, function* () {
+      return yield* hybridIntervalScan(
+        withDriverTraceContextTrait(primary, traceContext),
+        withDriverTraceContextTrait(cache, traceContext),
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+        {
+          onPersistentScan: (info) => {
+            emitPersistentScanDebugEvent(
+              "root",
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              info,
+            );
           },
-        );
-      }.bind(this),
-    );
+          beforePersistentScan: function* (target: IntervalTarget) {
+            yield* waitForPendingPersistenceForScan(
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              target,
+            );
+          },
+        },
+      );
+    });
   }
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -504,6 +577,7 @@ export class HybridDB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -523,6 +597,7 @@ export class HybridDB implements HyperDB {
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
@@ -542,6 +617,22 @@ export class HybridDB implements HyperDB {
     mergeCoverageMaps(this.state.cachedIntervals, intervals);
   }
 
+  get isCrashed(): boolean {
+    return this.state.isCrashed;
+  }
+
+  throwIfCrashed(): void {
+    if (this.state.isCrashed) {
+      throw new HybridDBCrashedError(this.state.crashError);
+    }
+  }
+
+  private markPersistenceCrash(error: unknown): void {
+    if (this.state.isCrashed) return;
+    this.state.isCrashed = true;
+    this.state.crashError = error;
+  }
+
   enqueuePersistence(
     writes: HybridPendingWrite[],
     traceContext: ReturnType<typeof getDriverTraceContextForDB>,
@@ -549,35 +640,68 @@ export class HybridDB implements HyperDB {
     if (writes.length === 0) return;
 
     const primary = withDriverTraceContextTrait(this.primary, traceContext);
-    const promise = this.state.persistenceTail.then(() =>
-      execAsync(persistWrites(primary, writes)),
-    );
+    const batchId = this.state.nextPersistenceBatchId++;
+    const persistWithRetry = (attempt: number): Promise<void> =>
+      execAsync(persistWrites(primary, writes)).catch((error) => {
+        const willRetry = attempt < hybridPersistenceMaxAttempts;
+        const retryDelayMs = persistenceRetryDelayMs(attempt);
+        this.emitPersistenceFailureDebugEvent(batchId, writes, {
+          error,
+          attempt,
+          maxAttempts: hybridPersistenceMaxAttempts,
+          retryDelayMs: willRetry ? retryDelayMs : undefined,
+          willRetry,
+        });
+
+        if (!willRetry) {
+          this.markPersistenceCrash(error);
+          throw error;
+        }
+
+        return waitForPersistenceRetry(retryDelayMs).then(() =>
+          persistWithRetry(attempt + 1),
+        );
+      });
+    // Chain after the previous batch settles (success OR failure) so a failed
+    // batch never blocks later batches from attempting their own persistence.
+    const promise = this.state.persistenceTail.then(() => {
+      this.throwIfCrashed();
+      return persistWithRetry(1);
+    });
     const batch: HybridPersistenceBatch = {
-      id: this.state.nextPersistenceBatchId++,
+      id: batchId,
       writes,
       promise,
     };
     this.state.pendingPersistence.add(batch);
     this.state.persistenceTail = promise.catch(() => {
-      // Keep later persistence batches running after a failed batch.
+      // Swallow here only for scheduling; the batch promise keeps the rejection.
     });
 
-    void promise
-      .catch((error) => {
-        console.error("HybridDB background persistence failed", error);
-      })
-      .finally(() => {
+    void promise.then(
+      () => {
         this.state.pendingPersistence.delete(batch);
-      });
+      },
+      () => {
+        // A rejected batch means persistence permanently failed and the DB is
+        // now crashed; drop the batch so waiters fail fast via throwIfCrashed
+        // instead of awaiting a promise that will never resolve.
+        this.state.pendingPersistence.delete(batch);
+      },
+    );
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const pending = [...this.state.pendingPersistence].map(
       (batch) => batch.promise,
     );
     if (pending.length > 0) {
-      yield* unwrap(Promise.all(pending).then(() => undefined));
+      // allSettled: a rejected batch means a crash, surfaced as
+      // HybridDBCrashedError by throwIfCrashed rather than the raw error.
+      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
     }
+    this.throwIfCrashed();
   }
 
   *waitForPendingPersistenceForScan(
@@ -587,6 +711,7 @@ export class HybridDB implements HyperDB {
     selectOptions: SelectOptions | undefined,
     target: IntervalTarget,
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     const pending: Promise<void>[] = [];
     const reasons: HybridDBPendingPersistenceWaitReason[] = [];
 
@@ -610,8 +735,9 @@ export class HybridDB implements HyperDB {
         selectOptions,
         reasons,
       });
-      yield* unwrap(Promise.all(pending).then(() => undefined));
+      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
     }
+    this.throwIfCrashed();
   }
 
   private emitDebugEvent(event: HybridDBDebugEvent): void {
@@ -632,6 +758,19 @@ export class HybridDB implements HyperDB {
       return;
     }
 
+    if (event.type === "persistence-failure") {
+      console.debug("HybridDB persistence failure", {
+        batchId: event.batchId,
+        writeCount: event.writeCount,
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        retryDelayMs: event.retryDelayMs,
+        willRetry: event.willRetry,
+        error: event.error,
+      });
+      return;
+    }
+
     console.debug("HybridDB persistent scan", {
       scope: event.scope,
       tableName: event.tableName,
@@ -641,6 +780,19 @@ export class HybridDB implements HyperDB {
       cachedIntervals: event.cachedIntervals,
       uncoveredIntervals: event.uncoveredIntervals,
       limitedCacheProbe: event.limitedCacheProbe,
+    });
+  }
+
+  private emitPersistenceFailureDebugEvent(
+    batchId: number,
+    writes: HybridPendingWrite[],
+    failure: HybridPersistenceFailure,
+  ): void {
+    this.emitDebugEvent({
+      type: "persistence-failure",
+      batchId,
+      writeCount: writes.length,
+      ...failure,
     });
   }
 
@@ -731,6 +883,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     this.state.txCounter.val++;
     return this;
   }
@@ -745,7 +898,9 @@ class HybridDBReadonlyTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
-    const { cache, state } = this.hybridDB;
+    this.hybridDB.throwIfCrashed();
+    const { hybridDB } = this;
+    const { cache, state } = hybridDB;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
     const getPrimaryForRead = function* (
@@ -765,42 +920,39 @@ class HybridDBReadonlyTx implements HyperDBTx {
       return tx ?? tracePrimary;
     }.bind(this);
 
-    return yield* withHybridLock(
-      state,
-      function* () {
-        return yield* hybridIntervalScan(
-          getPrimaryForRead,
-          withDriverTraceContextTrait(cache, traceContext),
-          state.cachedIntervals,
-          selectEvent,
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-          {
-            onPersistentScan: (info) => {
-              this.hybridDB.emitPersistentScanDebugEvent(
-                "readonly-tx",
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                info,
-              );
-            },
-            beforePersistentScan: function* (target) {
-              yield* this.hybridDB.waitForPendingPersistenceForScan(
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                target,
-              );
-            }.bind(this),
+    return yield* withHybridLock(state, function* () {
+      return yield* hybridIntervalScan(
+        getPrimaryForRead,
+        withDriverTraceContextTrait(cache, traceContext),
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+        {
+          onPersistentScan: (info) => {
+            hybridDB.emitPersistentScanDebugEvent(
+              "readonly-tx",
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              info,
+            );
           },
-        );
-      }.bind(this),
-    );
+          beforePersistentScan: function* (target: IntervalTarget) {
+            yield* hybridDB.waitForPendingPersistenceForScan(
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              target,
+            );
+          },
+        },
+      );
+    });
   }
 
   *insert<TTable extends TableDefinition>(
@@ -915,6 +1067,7 @@ class HybridDBTx implements HyperDBTx {
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     this.state.txCounter.val++;
     return this;
   }
@@ -929,14 +1082,16 @@ class HybridDBTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
+    const { hybridDB } = this;
     const ownPendingIds = new Set(
       this.state.pendingWrites
         .filter((write) => write.table === table)
         .map((write) => write.id),
     );
     return yield* hybridIntervalScan(
-      withDriverTraceContextTrait(this.hybridDB.primary, traceContext),
+      withDriverTraceContextTrait(hybridDB.primary, traceContext),
       withDriverTraceContextTrait(this.cacheTx, traceContext),
       this.state.cachedIntervals,
       getCurrentSelectEventForDB(this),
@@ -945,9 +1100,9 @@ class HybridDBTx implements HyperDBTx {
       clauses,
       selectOptions,
       {
-        additionalCachedIntervals: [this.hybridDB.state.cachedIntervals],
+        additionalCachedIntervals: [hybridDB.state.cachedIntervals],
         onPersistentScan: (info) => {
-          this.hybridDB.emitPersistentScanDebugEvent(
+          hybridDB.emitPersistentScanDebugEvent(
             "readwrite-tx",
             table,
             indexName,
@@ -956,15 +1111,15 @@ class HybridDBTx implements HyperDBTx {
             info,
           );
         },
-        beforePersistentScan: function* (target) {
-          yield* this.hybridDB.waitForPendingPersistenceForScan(
+        beforePersistentScan: function* (target: IntervalTarget) {
+          yield* hybridDB.waitForPendingPersistenceForScan(
             table,
             indexName,
             clauses,
             selectOptions,
             target,
           );
-        }.bind(this),
+        },
         filterPersistentRows: (_target, rows) =>
           rows.filter((row) => !ownPendingIds.has(row.id)),
         returnCacheAfterPersistentScan: (target) =>
@@ -978,6 +1133,7 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).insert(
       table,
@@ -998,6 +1154,7 @@ class HybridDBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const previousRecords = yield* this.getCachedRowsById(
       table,
@@ -1024,6 +1181,7 @@ class HybridDBTx implements HyperDBTx {
     ids: string[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
+    this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const previousRecords = yield* this.getCachedRowsById(table, ids);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).delete(
@@ -1047,8 +1205,12 @@ class HybridDBTx implements HyperDBTx {
     if (this.state.txCounter.val !== 0) return;
 
     try {
+      // Checked inside the try so the finally still releases the lock. A
+      // crashed DB must not publish new cache/coverage state or enqueue
+      // persistence that can never reach the primary.
+      this.hybridDB.throwIfCrashed();
       yield* this.cacheTx.commit();
-      mergeExactIdCoverage(
+      mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
         this.state.pendingWrites,
       );

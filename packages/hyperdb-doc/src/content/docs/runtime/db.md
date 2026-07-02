@@ -118,11 +118,16 @@ range is not cached, it runs the same scan against the persistent primary,
 upserts the returned rows into memory, and records that range as cached for
 later reads. Empty misses are cached too. Limited B-tree reads cache the covered
 prefix or suffix when the runtime can prove the returned rows are enough to
-answer the same limited query from memory. With an IndexedDB primary, this means
-no readonly IndexedDB transaction is opened until the selector actually falls
-through to the persisted tier. If the persistent tier is read, readonly
-transaction reuse stays scoped to that selector run, so concurrent selector runs
-do not share one IndexedDB transaction.
+answer the same limited query from memory. Rows loaded by any persistent scan
+also mark their exact `uniqhash` values as cached, because those values are
+driver-enforced unique. A later exact lookup on that unique hash index can then
+hit memory even if the row was first loaded through a different index. Normal
+non-unique hash buckets are only marked covered when the hash scan itself proves
+the whole bucket. With an IndexedDB primary, this means no readonly IndexedDB
+transaction is opened until the selector actually falls through to the persisted
+tier. If the persistent tier is read, readonly transaction reuse stays scoped to
+that selector run, so concurrent selector runs do not share one IndexedDB
+transaction.
 
 ```ts
 import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
@@ -151,18 +156,27 @@ in-memory tier.
 Use `preloadTables` when you know a whole table should be resident from startup
 or before a workflow begins. `scanIndex` must be a B-tree index that can scan the
 whole table, commonly an explicit `.index("byIds", ["id"])`; the built-in
-`byId` index is a hash index for exact id lookups, not full-table scans. After a
-table preload finishes, HybridDB marks that table's index ranges as cached, so
-later selectors over other indexes can read from memory. `preloadTables` is part
-of the `HyperDB` contract and is safe to call through wrappers such as
-`SubscribableDB`; DBs that do not have a preload layer implement it as a no-op.
+`byId` index is a unique hash index for exact id lookups, not full-table scans.
+After a table preload finishes, HybridDB marks that table's index ranges as
+cached, so later selectors over other indexes can read from memory.
+`preloadTables` is part of the `HyperDB` contract and is safe to call through
+wrappers such as `SubscribableDB`; DBs that do not have a preload layer
+implement it as a no-op.
 
 Writes outside a transaction go to both tiers in the same operation. Readwrite
 transactions are optimistic: writes apply to the in-memory cache transaction
 first, commit the cache, publish subscribers, and then flush the final row
 changes to the persistent primary in a queued background transaction. The flush
 uses `upsert` for inserted and updated rows, so repeated persistence attempts
-can safely write the latest row value.
+can safely write the latest row value. If a background flush fails, HybridDB
+retries it with bounded backoff before giving up; while it is unresolved, scans
+and root operations that need that batch continue to wait on the queued flush.
+If the retry limit is reached, the cache and the primary can no longer be
+trusted to agree, so HybridDB enters a permanent **crashed** state: every
+subsequent read, write, or transaction — including cache-only reads — throws a
+`HybridDBCrashedError` (whose `cause` is the underlying persistence error), and
+no further persistence is attempted. Check `hybrid.isCrashed` to detect this;
+recover by constructing a fresh `HybridDB` and reloading tables.
 
 While a persistent flush is pending, cached scan intervals still read from the
 in-memory cache immediately. If a scan would fall through to the persistent
@@ -173,13 +187,13 @@ If an upsert or delete did not have the old row in memory, HybridDB treats that
 old position as unknown and waits for the flush before uncached scans of that
 table fall through to the primary.
 
-Exact id lookups are the exception to broad equality waits. After a cache
-transaction commits, HybridDB marks exact `id` intervals as covered for all
-single-column id indexes on rows written by that transaction. That lets
-`byId`/`byIds` equality reads return from memory while the persistent flush is
-still pending. Equality scans on non-unique values, such as `status = "done"`,
-still wait when pending rows can affect the interval unless that interval was
-already cached.
+Exact unique lookups are the exception to broad equality waits. After a cache
+transaction commits, HybridDB marks exact `uniqhash` intervals as covered for
+known old and new row values; the built-in `byId` is covered even when a delete
+did not know the old row. That lets `byId` and other unique equality reads
+return from memory while the persistent flush is still pending. Equality scans
+on non-unique values, such as `status = "done"`, still wait when pending rows
+can affect the interval unless that interval was already cached.
 
 Pass `debug: true` to `new HybridDB(primary, cache, { debug: true })` to log
 when an uncached scan falls through to persistence or waits for pending
@@ -188,7 +202,9 @@ persistence. Pass a callback instead of `true` to receive structured
 table/index, clauses, target intervals, cached intervals, uncovered intervals,
 and limited cache probe information. `pending-persistence-wait` events include
 the pending batch id, row id, and whether the old or new row value matched the
-requested interval.
+requested interval. `persistence-failure` events include the failed batch id,
+write count, attempt number, retry limit, retry delay, retry decision, and the
+error.
 
 Scan coverage discovered inside a transaction is published to the outer cache
 only after the cache transaction commits, but transaction scans can still reuse

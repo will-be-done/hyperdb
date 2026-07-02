@@ -40,13 +40,18 @@ state libraries start to strain:
   flushes those writes to the primary in order. While a flush is pending,
   already cached intervals keep reading from memory, and uncached persistent
   fallbacks wait only when pending old or new rows can affect the requested
-  interval. Exact id equality lookups on single-column id indexes are marked
-  cached after the cache transaction commits, so `byId`/`byIds` reads can return
-  from memory while persistence is still pending. The committed cache snapshot
+  interval. Exact `uniqhash` equality lookups, including the built-in `byId`
+  index, are marked cached when rows are loaded or cache transactions commit, so
+  unique lookups can return from memory while persistence is still pending. The
+  committed cache snapshot
   remains synchronously readable while a write transaction is active, so React
   can keep showing cached data without seeing uncommitted writes. Pass
   `debug: true` or a debug callback to `HybridDB` to see why an uncached scan
-  fell through to persistence or waited for pending persistence.
+  fell through to persistence, waited for pending persistence, or retried a
+  failed background flush. If a background flush still fails after its bounded
+  retries, HybridDB enters a permanent crashed state (`hybrid.isCrashed`): every
+  further read, write, or transaction throws `HybridDBCrashedError` instead of
+  serving cache data that the primary never received.
   Drivers explicitly report whether
   selector readonly transactions are supported; enabled drivers use
   `beginTx("readonly")` for scoped reuse. With an IndexedDB primary, that
@@ -101,9 +106,12 @@ npm install @will-be-done/hyperdb
 The React devtool ships separately. It traces every selector run and mutation
 into a browsable call tree, so you can see which index a slow view scanned. For
 HybridDB reads, select nodes are labeled `in-mem` or `persist` to show whether
-the returned rows came from the memory cache or the primary persistent store.
-You can sort traces by creation time, duration, or rows fetched, and when you
-switch traces, the active detail tab stays selected so comparison stays focused:
+the returned rows came from the memory cache or the primary persistent store,
+and trace rows get an `in-mem` badge when no select fell through to a persistent
+scan — every read was served from the memory cache (mutations, which flush
+separately, don't affect it). You can sort traces by creation time, duration, or
+rows fetched, and when you switch traces, the active detail tab stays selected so
+comparison stays focused:
 
 ```bash
 npm install @will-be-done/hyperdb-devtool
@@ -119,9 +127,11 @@ export const tasksTable = defineTable("tasks", {
   id: v.string(),
   projectId: v.string(),
   title: v.string(),
+  slug: v.string(),
   orderToken: v.string(),
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
+  .index("bySlug", ["slug"], { type: "uniqhash" })
   // B-tree full-table scan index used by HybridDB preloading.
   .index("byIds", ["id"]);
 
@@ -160,7 +170,9 @@ export const createTask = action({
   name: "createTask",
   args: { id: v.string(), projectId: v.string(), title: v.string() },
   handler: function* ({ id, projectId, title }) {
-    yield* insert(tasksTable, [{ id, projectId, title, orderToken: id }]);
+    yield* insert(tasksTable, [
+      { id, projectId, title, slug: id, orderToken: id },
+    ]);
   },
 });
 ```

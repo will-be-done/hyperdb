@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DB } from "./db";
-import { HybridDB, type HybridDBDebugEvent } from "./hybrid-db";
+import {
+  HybridDB,
+  HybridDBCrashedError,
+  type HybridDBDebugEvent,
+} from "./hybrid-db";
 import { SubscribableDB } from "./subscribable-db";
 import { AsyncDB } from "../test-utils/async-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
@@ -30,6 +34,7 @@ type Task = {
   title: string;
   value: number;
   projectId: string;
+  slug: string;
 };
 
 const tasksTable = defineTable("hybridTasks", {
@@ -37,10 +42,12 @@ const tasksTable = defineTable("hybridTasks", {
   title: v.string(),
   value: v.number(),
   projectId: v.string(),
+  slug: v.string(),
 })
   .index("byValue", ["value"])
   .index("byIds", ["id"])
   .index("byTitle", ["title"], { type: "hash" })
+  .index("bySlug", ["slug"], { type: "uniqhash" })
   .index("byProjectValue", ["projectId", "value"]);
 
 const createTask = (value: number, title = `Task ${value}`): Task => ({
@@ -48,6 +55,7 @@ const createTask = (value: number, title = `Task ${value}`): Task => ({
   title,
   value,
   projectId: value <= 3 ? "a" : "b",
+  slug: `task-${value}`,
 });
 
 const createDBs = async (
@@ -562,6 +570,127 @@ describe("HybridDB", () => {
     resumePersistCommit.resolve();
   });
 
+  it("retries background persistence failures and crashes the DB after exhausting retries", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, hybrid, primary } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const persistenceError = new Error("primary unavailable");
+    const originalBeginTx = primary.beginTx.bind(primary);
+    let persistAttempts = 0;
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      if (mode === "readwrite" || mode === undefined) {
+        persistAttempts++;
+        throw persistenceError;
+      }
+      return yield* originalBeginTx(mode);
+    });
+
+    const inserted = createTask(1);
+    const tx = await db.beginTx();
+    await tx.insert(tasksTable, [inserted]);
+    await tx.commit();
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: inserted.value }] },
+      ]),
+    ).rejects.toThrow(HybridDBCrashedError);
+    expect(persistAttempts).toBe(3);
+    expect(hybrid.isCrashed).toBe(true);
+
+    const persistenceFailureEvents = debugEvents.filter(
+      (event) => event.type === "persistence-failure",
+    );
+    expect(persistenceFailureEvents).toEqual([
+      {
+        type: "persistence-failure",
+        batchId: 1,
+        writeCount: 1,
+        error: persistenceError,
+        attempt: 1,
+        maxAttempts: 3,
+        retryDelayMs: 10,
+        willRetry: true,
+      },
+      {
+        type: "persistence-failure",
+        batchId: 1,
+        writeCount: 1,
+        error: persistenceError,
+        attempt: 2,
+        maxAttempts: 3,
+        retryDelayMs: 20,
+        willRetry: true,
+      },
+      {
+        type: "persistence-failure",
+        batchId: 1,
+        writeCount: 1,
+        error: persistenceError,
+        attempt: 3,
+        maxAttempts: 3,
+        retryDelayMs: undefined,
+        willRetry: false,
+      },
+    ]);
+    expect(
+      debugEvents.some((event) => event.type === "pending-persistence-wait"),
+    ).toBe(true);
+
+    // Once crashed, every further read/write throws and no new persistence is
+    // attempted, even for cache-only operations.
+    await expect(db.insert(tasksTable, [createTask(2)])).rejects.toThrow(
+      HybridDBCrashedError,
+    );
+    await expect(
+      db.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: inserted.id }] },
+      ]),
+    ).rejects.toThrow(HybridDBCrashedError);
+    await expect(db.beginTx()).rejects.toThrow(HybridDBCrashedError);
+    expect(persistAttempts).toBe(3);
+  });
+
+  it("does not run queued persistence after the DB has crashed", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, hybrid, primary } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const persistenceError = new Error("primary unavailable");
+    const originalBeginTx = primary.beginTx.bind(primary);
+    let persistAttempts = 0;
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      if (mode === "readwrite" || mode === undefined) {
+        persistAttempts++;
+        throw persistenceError;
+      }
+      return yield* originalBeginTx(mode);
+    });
+
+    const firstTx = await db.beginTx();
+    await firstTx.insert(tasksTable, [createTask(1)]);
+    await firstTx.commit();
+
+    const secondTx = await db.beginTx();
+    await secondTx.insert(tasksTable, [createTask(2)]);
+    await secondTx.commit();
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: 2 }] },
+      ]),
+    ).rejects.toThrow(HybridDBCrashedError);
+
+    expect(hybrid.isCrashed).toBe(true);
+    expect(persistAttempts).toBe(3);
+    expect(
+      debugEvents
+        .filter((event) => event.type === "persistence-failure")
+        .map((event) => event.batchId),
+    ).toEqual([1, 1, 1]);
+  });
+
   it("uses parent cache coverage for exact id reads inside write transactions", async () => {
     const debugEvents: HybridDBDebugEvent[] = [];
     const { db, primaryScanSpy } = await createDBs({
@@ -632,9 +761,9 @@ describe("HybridDB", () => {
   it("uses the appended id cursor for limited duplicate btree values", async () => {
     const { db, primary, primaryScanSpy } = await createDBs();
     const tasks: Task[] = [
-      { ...createTask(1, "A"), id: "a" },
-      { ...createTask(1, "B"), id: "b" },
-      { ...createTask(1, "C"), id: "c" },
+      { ...createTask(1, "A"), id: "a", slug: "task-a" },
+      { ...createTask(1, "B"), id: "b", slug: "task-b" },
+      { ...createTask(1, "C"), id: "c", slug: "task-c" },
     ];
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
@@ -685,6 +814,47 @@ describe("HybridDB", () => {
       ]),
     ).resolves.toEqual(tasks);
     expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("marks uniqhash values covered when rows are loaded through another index", async () => {
+    const { db, primary, primaryScanSpy } = await createDBs();
+    const tasks = [createTask(1), createTask(2)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
+      ]),
+    ).resolves.toEqual(tasks);
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+
+    primaryScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: "task-1" }] },
+      ]),
+    ).resolves.toEqual([tasks[0]]);
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not mark non-unique hash buckets covered when rows are loaded through another index", async () => {
+    const { db, primary, primaryScanSpy } = await createDBs();
+    const tasks = [createTask(1, "same"), createTask(2, "same")];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
+      ]),
+    ).resolves.toEqual(tasks);
+
+    primaryScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "byTitle", [
+        { eq: [{ col: "title", val: "same" }] },
+      ]),
+    ).resolves.toEqual(tasks);
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does not mark a limited non-id hash lookup as fully cached", async () => {
@@ -865,6 +1035,50 @@ describe("HybridDB", () => {
         { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 2 }] },
       ]),
     ).resolves.toEqual(tasks);
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("reuses transaction scan coverage after returning cache with pending writes", async () => {
+    const { db, primary, primaryScanSpy } = await createDBs();
+    const tasks = [createTask(1), createTask(2)];
+    await new AsyncDB(primary).insert(tasksTable, tasks);
+
+    const tx = await db.beginTx();
+    const inserted = createTask(3);
+    await tx.insert(tasksTable, [inserted]);
+    const clauses = [
+      { gte: [{ col: "value", val: 1 }], lte: [{ col: "value", val: 3 }] },
+    ];
+
+    primaryScanSpy.mockClear();
+    await expect(
+      tx.intervalScan(tasksTable, "byValue", clauses),
+    ).resolves.toEqual([...tasks, inserted]);
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+
+    primaryScanSpy.mockClear();
+    await expect(
+      tx.intervalScan(tasksTable, "byValue", clauses),
+    ).resolves.toEqual([...tasks, inserted]);
+    expect(primaryScanSpy).not.toHaveBeenCalled();
+
+    await tx.rollback();
+  });
+
+  it("publishes uniqhash coverage from committed cache transactions", async () => {
+    const { db, primaryScanSpy } = await createDBs();
+    const inserted = createTask(1);
+
+    const tx = await db.beginTx();
+    await tx.insert(tasksTable, [inserted]);
+    await tx.commit();
+
+    primaryScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: inserted.slug }] },
+      ]),
+    ).resolves.toEqual([inserted]);
     expect(primaryScanSpy).not.toHaveBeenCalled();
   });
 

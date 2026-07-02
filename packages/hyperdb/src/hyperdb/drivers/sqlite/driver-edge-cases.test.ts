@@ -41,6 +41,16 @@ const pruneSortKeysTableV2 = defineTable("driverEdgePruneSortKeys", {
   state: v.union(v.literal("todo"), v.literal("done")),
 }).index("byState", ["state"]);
 
+const uniqhashMigrationTableV1 = defineTable("driverEdgeUniqhashMigration", {
+  id: v.string(),
+  email: v.string(),
+}).index("byEmail", ["email"], { type: "hash" });
+
+const uniqhashMigrationTableV2 = defineTable("driverEdgeUniqhashMigration", {
+  id: v.string(),
+  email: v.string(),
+}).index("byEmail", ["email"], { type: "uniqhash" });
+
 const multiColumnHashTable = {
   tableName: "driverEdgeMultiColumnHash",
   schema: {},
@@ -68,8 +78,10 @@ describe("SQLite driver edge case regressions", () => {
 
     db.loadTables([sortKeyBackfillTableV2]);
 
+    expect(execLog.some((sql) => sql.startsWith("DELETE FROM"))).toBe(true);
+    expect(execLog.some((sql) => sql.startsWith("INSERT INTO"))).toBe(true);
     expect(execLog.some((sql) => sql.startsWith("INSERT OR REPLACE"))).toBe(
-      true,
+      false,
     );
     expect(execLog.some((sql) => sql.startsWith("UPDATE"))).toBe(false);
     expect(
@@ -77,6 +89,44 @@ describe("SQLite driver edge case regressions", () => {
         { eq: [{ col: "title", val: "A" }] },
       ]),
     ).toEqual([{ id: "task-a", title: "A" }]);
+  });
+
+  it("recomputes stored sort keys when a hash index is promoted to uniqhash", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+
+    db.loadTables([uniqhashMigrationTableV1]);
+    db.insert(uniqhashMigrationTableV1, [
+      { id: "task-a", email: "a@example.com" },
+      { id: "task-b", email: "b@example.com" },
+    ]);
+
+    db.loadTables([uniqhashMigrationTableV2]);
+
+    // The generated index is rebuilt as UNIQUE.
+    const byEmail = sqliteRows(
+      sqldb,
+      "PRAGMA index_list(driverEdgeUniqhashMigration)",
+    ).find(
+      (row) =>
+        String(row[1]) === "idx_driverEdgeUniqhashMigration_byEmail_sort_key",
+    );
+    expect(byEmail && Number(byEmail[2])).toBe(1);
+
+    // The pre-migration row is still found by an equality lookup, which only
+    // works if its stored sort key was re-encoded from [email, id] to [email].
+    expect(
+      db.intervalScan(uniqhashMigrationTableV2, "byEmail", [
+        { eq: [{ col: "email", val: "a@example.com" }] },
+      ]),
+    ).toEqual([{ id: "task-a", email: "a@example.com" }]);
+
+    // The new UNIQUE constraint rejects a different row with the same value.
+    expect(() =>
+      db.insert(uniqhashMigrationTableV2, [
+        { id: "task-c", email: "a@example.com" },
+      ]),
+    ).toThrow();
   });
 
   it("drops sort-key indexes and columns that are no longer in the schema", async () => {

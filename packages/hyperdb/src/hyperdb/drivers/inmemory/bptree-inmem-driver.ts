@@ -35,6 +35,7 @@ type BtreeIndexDef = {
 type HashIndexDef = {
   name: string;
   column: string;
+  unique: boolean;
 };
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -328,6 +329,16 @@ function validateRecordIds(
   }
 }
 
+function validateIndexInsert(
+  tblData: TableData | TxTableData,
+  values: Row[],
+  replacingIds: Set<string>,
+) {
+  for (const index of tblData.indexes.values()) {
+    index.validateInsert(values, replacingIds);
+  }
+}
+
 function performInsert(tblData: TableData | TxTableData, values: Row[]) {
   for (const value of values) {
     Object.freeze(value);
@@ -335,6 +346,7 @@ function performInsert(tblData: TableData | TxTableData, values: Row[]) {
 
   // NOTE: performance will be noot good here. Maybe make fastInsert?
   validateRecordIds(tblData, values, { allowExisting: false });
+  validateIndexInsert(tblData, values, new Set());
 
   for (const index of tblData.indexes.values()) {
     index.insert(values);
@@ -347,6 +359,8 @@ function performUpsert(tblData: TableData | TxTableData, records: Row[]) {
   }
 
   validateRecordIds(tblData, records, { allowExisting: true });
+  const replacingIds = new Set(records.map((record) => record.id));
+  validateIndexInsert(tblData, records, replacingIds);
 
   performDelete(
     tblData,
@@ -356,10 +370,11 @@ function performUpsert(tblData: TableData | TxTableData, records: Row[]) {
 }
 
 interface BaseIndex {
-  type: "btree" | "hash";
+  type: "btree" | "hash" | "uniqhash";
   scan(tupleBounds: TupleScanOptions[], selectOptions: SelectOptions): Row[];
   cols(): string[];
 
+  validateInsert(values: Row[], replacingIds: Set<string>): void;
   insert(values: Row[]): void;
   delete(values: Row[]): void;
 }
@@ -430,7 +445,9 @@ const getColumnValuesFromBounds = (
 type HashColumnKey = string;
 
 class HashIndex implements Index {
-  type = "hash" as const;
+  get type(): "hash" | "uniqhash" {
+    return this.indexDef.unique ? "uniqhash" : "hash";
+  }
   indexDef: HashIndexDef;
   records: Map<HashColumnKey, Map<string, Row>> = new Map();
   rowKeys: Map<RowId, HashColumnKey> = new Map();
@@ -469,6 +486,34 @@ class HashIndex implements Index {
     }
 
     return results;
+  }
+
+  validateInsert(values: Row[], replacingIds: Set<string>): void {
+    if (!this.indexDef.unique) return;
+
+    const batchKeys = new Map<HashColumnKey, string>();
+    for (const record of values) {
+      const colValue = getHashIndexValue(record, this.indexDef.column);
+      if (colValue === undefined) continue;
+      const key = hashIndexKey(colValue);
+      const batchId = batchKeys.get(key);
+      if (batchId !== undefined && batchId !== record.id) {
+        throw new Error(
+          `Unique hash index ${this.indexDef.name} already has value for record ${batchId}`,
+        );
+      }
+      batchKeys.set(key, record.id);
+
+      const existingRows = this.records.get(key);
+      if (!existingRows) continue;
+
+      for (const existingId of existingRows.keys()) {
+        if (existingId === record.id || replacingIds.has(existingId)) continue;
+        throw new Error(
+          `Unique hash index ${this.indexDef.name} already has value for record ${existingId}`,
+        );
+      }
+    }
   }
 
   insert(values: Row[]): void {
@@ -512,7 +557,9 @@ class HashIndex implements Index {
 type RowId = string;
 type ColumnValue = HashColumnKey;
 class HashIndexTx implements IndexTx {
-  type = "hash" as const;
+  get type(): "hash" | "uniqhash" {
+    return this.originalIndex.type;
+  }
   originalIndex: HashIndex;
   private txBuckets = new Map<ColumnValue, Map<RowId, Row>>();
   private txRowKeys = new Map<RowId, HashColumnKey | undefined>();
@@ -598,6 +645,39 @@ class HashIndexTx implements IndexTx {
     return copiedRows;
   }
 
+  validateInsert(values: Row[], replacingIds: Set<string>): void {
+    if (!this.originalIndex.indexDef.unique) return;
+
+    const batchKeys = new Map<HashColumnKey, string>();
+    for (const record of values) {
+      const colValue = getHashIndexValue(
+        record,
+        this.originalIndex.indexDef.column,
+      );
+      if (colValue === undefined) continue;
+      const key = hashIndexKey(colValue);
+      const batchId = batchKeys.get(key);
+      if (batchId !== undefined && batchId !== record.id) {
+        throw new Error(
+          `Unique hash index ${this.originalIndex.indexDef.name} already has value for record ${batchId}`,
+        );
+      }
+      batchKeys.set(key, record.id);
+
+      const existingRows = this.txBuckets.has(key)
+        ? this.txBuckets.get(key)
+        : this.originalIndex.records.get(key);
+      if (!existingRows) continue;
+
+      for (const existingId of existingRows.keys()) {
+        if (existingId === record.id || replacingIds.has(existingId)) continue;
+        throw new Error(
+          `Unique hash index ${this.originalIndex.indexDef.name} already has value for record ${existingId}`,
+        );
+      }
+    }
+  }
+
   insert(values: Row[]): void {
     if (this.isCommitted) throw new Error("Can't insert after commit");
 
@@ -675,6 +755,8 @@ class BtreeIndexTx implements IndexTx {
     }
   }
 
+  validateInsert(_values: Row[], _replacingIds: Set<string>): void {}
+
   delete(values: Row[]): void {
     if (this.isCommitted) throw new Error("Can't delete after commit");
 
@@ -743,6 +825,8 @@ class BtreeIndex implements Index {
       this.btree.set(key, record);
     }
   }
+
+  validateInsert(_values: Row[], _replacingIds: Set<string>): void {}
 
   delete(values: Row[]): void {
     for (const row of values) {
@@ -942,7 +1026,7 @@ export class BptreeInmemDriver implements DBDriver {
               includeMissing: isSchemalessTable(tableDef),
             }),
           );
-        } else if (indexDef.type === "hash") {
+        } else if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
           if (indexDef.cols.length !== 1) {
             throw new Error("Hash index must have exactly one column");
           }
@@ -952,6 +1036,7 @@ export class BptreeInmemDriver implements DBDriver {
             new HashIndex({
               name: indexName,
               column: indexDef.cols[0] as string,
+              unique: indexDef.type === "uniqhash",
             }),
           );
         } else {

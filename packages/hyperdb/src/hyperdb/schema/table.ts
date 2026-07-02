@@ -17,7 +17,7 @@ export type UnionValue<T, K extends PropertyKey> = T extends unknown
     : never
   : never;
 
-export type IndexType = "hash" | "btree";
+export type IndexType = "hash" | "uniqhash" | "btree";
 export type IndexableValue =
   | string
   | number
@@ -128,6 +128,20 @@ export interface TableDefinition<
     },
     TSchema
   >;
+  index<const TName extends string, const TCol extends IndexableColumn<T>>(
+    name: TName,
+    columns: readonly [TCol],
+    options: { type: "uniqhash" },
+  ): TableDefinition<
+    T,
+    I & {
+      [K in TName]: {
+        type: "uniqhash";
+        cols: readonly [TCol];
+      };
+    },
+    TSchema
+  >;
 }
 
 export type AnyTableDefinition = TableDefinition<any, AnyIndexDefinitions, any>;
@@ -158,11 +172,14 @@ export function validateIndexes(
       throw new Error(`Invalid index configuration for ${indexName}`);
     }
 
-    if (!["hash", "btree"].includes(config.type)) {
+    if (!["hash", "uniqhash", "btree"].includes(config.type)) {
       throw new Error(`Invalid index type: ${config.type}`);
     }
 
-    if (config.type === "hash" && config.cols.length !== 1) {
+    if (
+      (config.type === "hash" || config.type === "uniqhash") &&
+      config.cols.length !== 1
+    ) {
       throw new Error(
         `Hash index must have exactly one column for index: ${indexName} table: ${tableName}`,
       );
@@ -350,7 +367,7 @@ export function defineTable<const TSchema extends ValidatorSchemaWithId>(
   InferTableSchema<TSchema>,
   {
     byId: {
-      type: "hash";
+      type: "uniqhash";
       cols: readonly ["id"];
     };
   },
@@ -363,7 +380,7 @@ export function defineTable<const TValidator extends Validator<{ id: string }>>(
   Infer<TValidator>,
   {
     byId: {
-      type: "hash";
+      type: "uniqhash";
       cols: readonly ["id"];
     };
   }
@@ -375,7 +392,7 @@ export function defineTable(
   any,
   {
     byId: {
-      type: "hash";
+      type: "uniqhash";
       cols: readonly ["id"];
     };
   }
@@ -386,10 +403,10 @@ export function defineTable(
     schemaOrValidator,
   );
   const indexes = {
-    byId: { type: "hash", cols: ["id"] as const },
+    byId: { type: "uniqhash", cols: ["id"] as const },
   } satisfies {
     byId: {
-      type: "hash";
+      type: "uniqhash";
       cols: readonly ["id"];
     };
   };

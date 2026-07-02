@@ -57,6 +57,13 @@ The trace list can be sorted by creation time, duration, or rows fetched. The
 rows fetched sort uses the total rows returned by all select events in a trace,
 which makes broad scans and high-fanout selectors easier to spot.
 
+Trace rows are tagged with an `in-mem` badge when no select fell through to a
+persistent scan — every read was served from the `HybridDB` memory cache.
+Mutations do not affect the badge: writes commit to the in-memory cache within
+the trace and are flushed to the persistent database separately, so an action
+that only wrote through the cache still counts as in-mem. This makes it easy to
+spot which traces avoided reading from persistent storage.
+
 The details pane keeps the active tab while you move between traces, so you can
 compare Overview, Queries, Mutations, or Call Tree output without reselecting
 the same tab each time.

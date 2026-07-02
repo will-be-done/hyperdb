@@ -12,7 +12,8 @@ they also act as the source of truth for TypeScript types.
 ## Defining a table
 
 Every table has a name and a set of fields. A table must have a string `id`
-field. HyperDB automatically creates a built-in hash index named `byId` on `id`.
+field. HyperDB automatically creates a built-in unique hash index named `byId`
+on `id`.
 
 ```ts
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
@@ -21,12 +22,14 @@ export const tasksTable = defineTable("tasks", {
   id: v.string(),
   projectId: v.string(),
   title: v.string(),
+  slug: v.string(),
   state: v.union(v.literal("todo"), v.literal("done")),
   orderToken: v.string(),
   note: v.optional(v.string()),
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
-  .index("byTitle", ["title"], { type: "hash" });
+  .index("byTitle", ["title"], { type: "hash" })
+  .index("bySlug", ["slug"], { type: "uniqhash" });
 
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
@@ -38,6 +41,7 @@ type Task = {
   id: string;
   projectId: string;
   title: string;
+  slug: string;
   state: "todo" | "done";
   orderToken: string;
   note?: string;
@@ -126,12 +130,16 @@ defineTable("tasks", {
   /* fields */
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // btree (default)
-  .index("byTitle", ["title"], { type: "hash" }); // hash
+  .index("byTitle", ["title"], { type: "hash" }) // non-unique hash
+  .index("bySlug", ["slug"], { type: "uniqhash" }); // unique hash
 ```
 
 - `btree` (the default) supports equality _and_ range queries, ordering, and
   composite (multi-column) keys.
 - `hash` supports equality lookups only and must have exactly one column.
+- `uniqhash` supports equality lookups only, must have exactly one column, and
+  rejects duplicate values in every storage driver. The built-in `byId` index is
+  a `uniqhash`.
 
 Index columns must:
 

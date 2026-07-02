@@ -480,7 +480,7 @@ describe("Database Transactions", async () => {
         const updatedTask: Task = { id: "task-update", title: "Updated" };
         await tx.upsert(tasksTable, [updatedTask]);
 
-        // Query via built-in hash id index
+        // Query via built-in unique hash id index
         const hashResult = Array.from(
           await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-update" }] },

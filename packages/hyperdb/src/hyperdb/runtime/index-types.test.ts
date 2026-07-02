@@ -15,6 +15,12 @@ const stringTable = defineTable("indexTypesString", {
   .index("byValue", ["value"])
   .index("byValueHash", ["value"], { type: "hash" });
 
+const uniqueStringTable = defineTable("indexTypesUniqueString", {
+  id: v.string(),
+  slug: v.string(),
+  title: v.string(),
+}).index("bySlug", ["slug"], { type: "uniqhash" });
+
 const bigintTable = defineTable("indexTypesBigint", {
   id: v.string(),
   value: v.bigint(),
@@ -392,6 +398,72 @@ describe("runtime index value types", () => {
             (row) => row.id,
           ),
         ).toEqual(["task-2", "task-1", "template-3", "template-4"]);
+      });
+
+      it("enforces uniqhash indexes atomically", async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([uniqueStringTable]);
+        await db.insert(uniqueStringTable, [
+          { id: "a", slug: "one", title: "One" },
+          { id: "b", slug: "two", title: "Two" },
+        ]);
+
+        await expect(
+          db.insert(uniqueStringTable, [
+            { id: "c", slug: "one", title: "Duplicate" },
+          ]),
+        ).rejects.toThrow();
+
+        await expect(
+          db.upsert(uniqueStringTable, [
+            { id: "a", slug: "one", title: "One updated" },
+          ]),
+        ).resolves.toBeUndefined();
+
+        await expect(
+          db.upsert(uniqueStringTable, [
+            { id: "a", slug: "two", title: "Cannot steal" },
+          ]),
+        ).rejects.toThrow();
+
+        expect(
+          (
+            await db.intervalScan(uniqueStringTable, "bySlug", [
+              { eq: [{ col: "slug", val: "one" }] },
+            ])
+          ).map((row) => row.id),
+        ).toEqual(["a"]);
+        expect(
+          (
+            await db.intervalScan(uniqueStringTable, "bySlug", [
+              { eq: [{ col: "slug", val: "two" }] },
+            ])
+          ).map((row) => row.id),
+        ).toEqual(["b"]);
+
+        await db.delete(uniqueStringTable, ["b"]);
+        await expect(
+          db.insert(uniqueStringTable, [
+            { id: "c", slug: "two", title: "Freed" },
+          ]),
+        ).resolves.toBeUndefined();
+      });
+
+      it("does not over-advance exact uniqhash scans with tight limits", async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([uniqueStringTable]);
+
+        const row = { id: "a", slug: "one", title: "One" };
+        await db.insert(uniqueStringTable, [row]);
+
+        await expect(
+          db.intervalScan(
+            uniqueStringTable,
+            "bySlug",
+            [{ eq: [{ col: "slug", val: "one" }] }],
+            { limit: 1 },
+          ),
+        ).resolves.toEqual([row]);
       });
     });
   }

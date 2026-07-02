@@ -28,6 +28,16 @@ const tasksTable = defineTable("tasks", {
   .index("byTitle", ["title"], { type: "hash" })
   .index("projectIdState", ["projectId", "state", "lastToggledAt"]);
 
+const uniqhashMigrationTableV1 = defineTable("asyncUniqhashMigration", {
+  id: v.string(),
+  email: v.string(),
+}).index("byEmail", ["email"], { type: "hash" });
+
+const uniqhashMigrationTableV2 = defineTable("asyncUniqhashMigration", {
+  id: v.string(),
+  email: v.string(),
+}).index("byEmail", ["email"], { type: "uniqhash" });
+
 describe("db", async () => {
   for (const driver of [createSqlJsAsyncDriver]) {
     it("works", async () => {
@@ -100,6 +110,35 @@ describe("db", async () => {
           ]),
         ),
       ).toEqual([]);
+    });
+
+    it("backfills re-encoded sort keys before recreating indexes", async () => {
+      const db = new DB(await driver());
+
+      await execAsync(db.loadTables([uniqhashMigrationTableV1]));
+      await execAsync(
+        db.insert(uniqhashMigrationTableV1, [
+          { id: "user-a", email: "a@example.com" },
+          { id: "user-b", email: "b@example.com" },
+        ]),
+      );
+
+      await execAsync(db.loadTables([uniqhashMigrationTableV2]));
+
+      await expect(
+        execAsync(
+          db.intervalScan(uniqhashMigrationTableV2, "byEmail", [
+            { eq: [{ col: "email", val: "a@example.com" }] },
+          ]),
+        ),
+      ).resolves.toEqual([{ id: "user-a", email: "a@example.com" }]);
+      await expect(
+        execAsync(
+          db.insert(uniqhashMigrationTableV2, [
+            { id: "user-c", email: "a@example.com" },
+          ]),
+        ),
+      ).rejects.toThrow();
     });
   }
 });

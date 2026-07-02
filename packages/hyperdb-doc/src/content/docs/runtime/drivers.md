@@ -86,6 +86,9 @@ const driver = new AsyncSqlDriver(sqliteDb);
 
 The SQLite storage codec encodes `bigint`, `ArrayBuffer`, and
 typed-array/data-view values around JSON storage so they round-trip exactly.
+`uniqhash` indexes are created as SQLite `UNIQUE` indexes. Upserts delete the
+same primary keys first and then insert the new rows, so a secondary unique
+conflict throws instead of replacing a different row.
 
 ## SQLite Recipes
 
@@ -317,6 +320,9 @@ one selector run while the browser keeps a readonly transaction active, the
 driver reuses it instead of opening one transaction per scan. Concurrent
 selector runs get separate readonly transactions, and an inactive or finished
 readonly transaction is reopened once for the current scan.
+IndexedDB `uniqhash` indexes are native unique indexes. If an index changes
+between `hash` and `uniqhash`, HyperDB recreates the IndexedDB index during the
+schema upgrade.
 
 IDB operation logs include a per-driver transaction id (`tx 3`) and, when the
 operation comes from an object selector or action, the run context

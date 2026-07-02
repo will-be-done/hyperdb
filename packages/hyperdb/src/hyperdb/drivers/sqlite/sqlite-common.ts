@@ -84,10 +84,14 @@ export function isSqliteSortKeyColumn(columnName: string): boolean {
 }
 
 export function sqliteIndexSortColumns(
-  indexColumns: readonly (string | number | symbol)[],
+  tableDef: TableDefinition,
+  indexName: string,
 ): string[] {
-  const cols = indexColumns.map(String);
-  if (cols[cols.length - 1] !== "id") {
+  const indexDef = tableDef.indexes[indexName];
+  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+
+  const cols = indexDef.cols.map(String);
+  if (indexDef.type !== "uniqhash" && cols[cols.length - 1] !== "id") {
     cols.push("id");
   }
   return cols;
@@ -111,7 +115,7 @@ export function getSqliteIndexSortKeyValue(
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
-  const sortColumns = sqliteIndexSortColumns(indexDef.cols);
+  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
   const includeMissing =
     indexDef.type === "btree" && isSchemalessTable(tableDef);
   const mode = sqliteIndexSortKeyMode(tableDef, indexName);
@@ -223,11 +227,11 @@ export function buildSortKeyWhereClause(
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
   const filterColumns = indexDef.cols.map(String);
-  const sortColumns = sqliteIndexSortColumns(indexDef.cols);
+  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
   const mode = sqliteIndexSortKeyMode(tableDef, indexName);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 
-  if (indexDef.type === "hash") {
+  if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
     validateHashBounds(indexName, filterColumns, rawBounds);
   }
 
@@ -330,7 +334,6 @@ export function buildOrderClause(
 export function buildInsertSQL(
   tableDef: TableDefinition,
   valueCount: number,
-  options: { replace?: boolean } = {},
 ): string {
   const indexColumns = Object.keys(tableDef.indexes).map((indexName) =>
     sqliteIndexSortKeyColumn(indexName),
@@ -338,8 +341,7 @@ export function buildInsertSQL(
   const columns = ["id", "data", ...indexColumns];
   const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
   const valuesQ = Array(valueCount).fill(rowPlaceholders).join(", ");
-  const conflictMode = options.replace ? "INSERT OR REPLACE" : "INSERT";
-  const sql = `${conflictMode} INTO ${tableDef.tableName} (${columns.join(
+  const sql = `INSERT INTO ${tableDef.tableName} (${columns.join(
     ", ",
   )}) VALUES ${valuesQ}`
     .trim()
@@ -396,12 +398,22 @@ export function createTableSQL(tableDef: TableDefinition): string {
   return sql;
 }
 
-export function createIndexSQL(tableName: string, indexName: string): string {
+export function createIndexSQL(
+  tableDef: TableDefinition,
+  indexName: string,
+): string {
+  const tableName = tableDef.tableName;
+  const indexDef = tableDef.indexes[indexName];
+  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+
   const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
   const indexIdentifier = sqliteIndexIdentifier(tableName, indexName);
+  const unique = indexDef.type === "uniqhash" ? "UNIQUE " : "";
+  const indexColumns =
+    indexDef.type === "uniqhash" ? sortKeyColumn : `${sortKeyColumn}, id`;
   const sql = `
-    CREATE INDEX IF NOT EXISTS ${indexIdentifier}
-    ON ${tableName}(${sortKeyColumn}, id)
+    CREATE ${unique}INDEX IF NOT EXISTS ${indexIdentifier}
+    ON ${tableName}(${indexColumns})
     WHERE ${sortKeyColumn} IS NOT NULL
   `
     .trim()

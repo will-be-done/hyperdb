@@ -36,7 +36,9 @@ state libraries start to strain:
   a B-tree full-scan index such as `byIds` to load whole tables into the cache
   and mark their indexes as resident when the DB is a HybridDB wrapper, or call
   `preloadSelector(...)` with the same selector args a route will render to warm
-  the selector result too.
+  the selector result too. Exact `uniqhash` equality lookups, including the
+  built-in `byId` index, can be marked cached when rows are loaded through other
+  indexes because the value identifies at most one row.
 - **Hybrid-first React reads.** `HybridDB` is the recommended frontend shape for
   durable local state: IndexedDB or async SQLite as the primary store, an
   in-memory B-tree cache for hot ranges, and React reading through
@@ -88,9 +90,11 @@ export const tasksTable = defineTable("tasks", {
   id: v.string(),
   projectId: v.string(),
   title: v.string(),
+  slug: v.string(),
   orderToken: v.string(),
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
+  .index("bySlug", ["slug"], { type: "uniqhash" })
   // B-tree full-table scan index used by HybridDB preloading.
   .index("byIds", ["id"]);
 
@@ -129,7 +133,9 @@ export const createTask = action({
   name: "createTask",
   args: { id: v.string(), projectId: v.string(), title: v.string() },
   handler: function* ({ id, projectId, title }) {
-    yield* insert(tasksTable, [{ id, projectId, title, orderToken: id }]);
+    yield* insert(tasksTable, [
+      { id, projectId, title, slug: id, orderToken: id },
+    ]);
   },
 });
 ```

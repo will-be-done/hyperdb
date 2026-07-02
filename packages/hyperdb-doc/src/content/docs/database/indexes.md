@@ -1,6 +1,6 @@
 ---
 title: Indexes
-description: B-tree and hash indexes, composite keys, and the prefix rules that govern which queries are valid.
+description: B-tree, hash, and unique hash indexes, composite keys, and the prefix rules that govern which queries are valid.
 sidebar:
   order: 4
 ---
@@ -15,24 +15,29 @@ defineTable("tasks", {
   projectId: v.string(),
   state: v.union(v.literal("todo"), v.literal("done")),
   orderToken: v.string(),
+  slug: v.string(),
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // composite btree
-  .index("byState", ["state"], { type: "hash" }); // single-column hash
+  .index("byState", ["state"], { type: "hash" }) // non-unique exact lookup
+  .index("bySlug", ["slug"], { type: "uniqhash" }); // unique exact lookup
 ```
 
-The built-in `byId` hash index on `id` is always present, so you never declare it.
+The built-in `byId` unique hash index on `id` is always present, so you never
+declare it.
 
 ### B-tree vs. hash
 
-|                               | B-tree (default) | Hash                    |
-| ----------------------------- | ---------------- | ----------------------- |
-| Equality (`eq`)               | ✅               | ✅                      |
-| Range (`gt`/`gte`/`lt`/`lte`) | ✅               | ❌                      |
-| `order("asc" \| "desc")`      | ✅               | ❌                      |
-| Composite (multi-column)      | ✅               | ❌ (exactly one column) |
+|                               | B-tree (default) | Hash                    | Unique hash             |
+| ----------------------------- | ---------------- | ----------------------- | ----------------------- |
+| Equality (`eq`)               | ✅               | ✅                      | ✅                      |
+| Range (`gt`/`gte`/`lt`/`lte`) | ✅               | ❌                      | ❌                      |
+| `order("asc" \| "desc")`      | ✅               | ❌                      | ❌                      |
+| Composite (multi-column)      | ✅               | ❌ (exactly one column) | ❌ (exactly one column) |
+| Duplicate values              | ✅               | ✅                      | ❌ driver-enforced      |
 
 Reach for a hash index when you only ever look up a column by exact value;
-use a btree index when you need ranges, ordering, or multi-column keys.
+use a unique hash index when that exact value must identify at most one row.
+Use a btree index when you need ranges, ordering, or multi-column keys.
 
 ### What can be indexed
 
