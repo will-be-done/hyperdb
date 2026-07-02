@@ -524,10 +524,7 @@ async function getAllRecords<T>(
 
       results.push(...records.map((record) => record.value));
       if (records.length < count) return results;
-      if (
-        options.limit !== undefined &&
-        results.length >= options.limit
-      ) {
+      if (options.limit !== undefined && results.length >= options.limit) {
         return results;
       }
 
