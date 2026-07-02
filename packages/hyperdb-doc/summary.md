@@ -118,12 +118,6 @@ check the matching docs below and also check the root `README.md`.
 
 ## Guides
 
-- `src/content/docs/guides/in-memory-persistence.md`: Local persistence guide.
-  Shows a synchronous in-memory UI database mirrored to IndexedDB. Covers the
-  two-tier shape, full-scan B-tree indexes for hydration, creating both stores,
-  hydrating memory from persistent storage, the hybrid-mode note, subscribing to
-  changes, coalescing and persisting ops in order, wiring startup, caveats, and
-  links to sync-engine next steps.
 - `src/content/docs/guides/sync-engine.md`: WIP sync design page. Describes
   planned sync primitives, change tracking, lifecycle hooks, remote changeset
   merge, two-tier persistence, cross-tab syncing, server-as-peer behavior, and

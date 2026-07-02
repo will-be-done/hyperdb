@@ -64,10 +64,6 @@ export default defineConfig({
         {
           label: "Guides",
           items: [
-            {
-              label: "In-Memory + Persistence",
-              slug: "guides/in-memory-persistence",
-            },
             { label: "Building a Sync Engine", slug: "guides/sync-engine" },
           ],
         },

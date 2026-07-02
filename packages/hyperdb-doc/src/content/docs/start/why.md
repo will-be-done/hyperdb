@@ -125,6 +125,50 @@ can fall through to storage, while startup stays quick and memory stays low.
 Writes update the cache first for an immediate UI response, then flush to the
 primary store in order.
 
+## Composable app logic
+
+HyperDB selectors and actions compose like ordinary code. A selector can call
+another selector, map over the result, branch, and call more selectors. An action
+can read with a selector, write, call another action, then read again, all inside
+one transaction. You do not have to split logic between a query language, React
+components, and a separate mutation layer just to express the order of work.
+
+That is an intentional tradeoff. Because selectors are real JavaScript, the full
+read plan is not always knowable without running the code. A selector may branch
+on a row it just loaded, and the next index range may depend on that branch. So
+preloading is execution-based: run the selector, or warm known tables/ranges
+ahead of time. HyperDB can't statically extract a perfect preload plan
+from arbitrary control flow.
+
+## Every query is observable
+
+Because reads go through declarative queries rather than ad-hoc property access,
+HyperDB records what each selector and action did: which indexes were
+scanned, how many rows came back, and how long each step took. It surfaces all of
+that in a built-in [devtool](/integrations/devtools/).
+
+![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
+
+Each dispatch and selector run becomes a trace you can sort by duration or rows
+fetched. Open one and you get a full call tree: the selector at the top, every nested
+selector it composed, and at the leaves the actual index reads, like
+`select project_categories.byProjectIdOrderToken → 3 rows`, each annotated with
+its own timing and row count. When a view is slow, you can see precisely which
+sub-query or which index is responsible, instead of guessing.
+
+This kind of insight comes from reading data through queries. A state
+library where components reach into plain objects has nothing to trace; HyperDB's
+declarative reads give it a complete, structured picture of every computation.
+
+## It's still just JavaScript
+
+A fair worry about "use a database on the backend" is that it means writing SQL
+and thinking in query languages. HyperDB doesn't ask that of you. You write
+ordinary JavaScript (loops, conditionals, function calls) in your selectors and
+actions. What HyperDB provides underneath is fast indexed lookups and inserts,
+not a query language to learn. The mental model is the same on the client and
+the server: plain JS logic over typed, indexed, reactive data.
+
 ## Why not SQLite?
 
 If the same selectors and actions already run on server SQLite, the natural
@@ -200,49 +244,6 @@ that can fetch indexed ranges and receive mutations, then maintain derived views
 incrementally. That is a possible future extension, not a contradiction of the
 core design.
 
-## Composable app logic
-
-HyperDB selectors and actions compose like ordinary code. A selector can call
-another selector, map over the result, branch, and call more selectors. An action
-can read with a selector, write, call another action, then read again, all inside
-one transaction. You do not have to split logic between a query language, React
-components, and a separate mutation layer just to express the order of work.
-
-That is an intentional tradeoff. Because selectors are real JavaScript, the full
-read plan is not always knowable without running the code. A selector may branch
-on a row it just loaded, and the next index range may depend on that branch. So
-preloading is execution-based: run the selector, or warm known tables/ranges
-ahead of time. HyperDB can't statically extract a perfect preload plan
-from arbitrary control flow.
-
-## Every query is observable
-
-Because reads go through declarative queries rather than ad-hoc property access,
-HyperDB records what each selector and action did: which indexes were
-scanned, how many rows came back, and how long each step took. It surfaces all of
-that in a built-in [devtool](/integrations/devtools/).
-
-![The HyperDB devtool showing a trace list on the left and the Call Tree of a selector on the right](../../../assets/devtool-call-tree.png)
-
-Each dispatch and selector run becomes a trace you can sort by duration or rows
-fetched. Open one and you get a full call tree: the selector at the top, every nested
-selector it composed, and at the leaves the actual index reads, like
-`select project_categories.byProjectIdOrderToken → 3 rows`, each annotated with
-its own timing and row count. When a view is slow, you can see precisely which
-sub-query or which index is responsible, instead of guessing.
-
-This kind of insight comes from reading data through queries. A state
-library where components reach into plain objects has nothing to trace; HyperDB's
-declarative reads give it a complete, structured picture of every computation.
-
-## It's still just JavaScript
-
-A fair worry about "use a database on the backend" is that it means writing SQL
-and thinking in query languages. HyperDB doesn't ask that of you. You write
-ordinary JavaScript (loops, conditionals, function calls) in your selectors and
-actions. What HyperDB provides underneath is fast indexed lookups and inserts,
-not a query language to learn. The mental model is the same on the client and
-the server: plain JS logic over typed, indexed, reactive data.
 
 ## In short
 
