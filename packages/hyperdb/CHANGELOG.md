@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.3.0
+
+### Minor Changes
+
+- eab2183: Added uniqhash, delayed persist. Added "in-mem" label to devtool traces
+
 ## 0.2.0
 
 ### Minor Changes
