@@ -20,8 +20,8 @@ npm install @will-be-done/hyperdb-devtool
 
 ## 2. Define a table
 
-A table needs a string `id`. HyperDB automatically adds a hash index named
-`byId`; declare any additional indexes you want to query by.
+A table needs a string `id`. HyperDB automatically adds a unique hash index
+named `byId`; declare any additional indexes you want to query by.
 
 ```ts
 // schema.ts

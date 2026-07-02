@@ -30,12 +30,21 @@ export type IntervalTarget = {
   key: string;
   intervals: NormalizedInterval[];
   indexCols: string[];
+  exactUniqhashKeys: { key: string; interval: NormalizedInterval }[];
   supportsPartialLimitCoverage: boolean;
 };
 
-export type HybridIntervalCache = Map<string, NormalizedInterval[]>;
+export class HybridIntervalCache extends Map<string, NormalizedInterval[]> {
+  exactKeys = new Map<string, Set<string>>();
 
-export const createHybridIntervalCache = (): HybridIntervalCache => new Map();
+  override clear(): void {
+    super.clear();
+    this.exactKeys.clear();
+  }
+}
+
+export const createHybridIntervalCache = (): HybridIntervalCache =>
+  new HybridIntervalCache();
 
 export type HybridPersistentScanDebugInfo = {
   target: IntervalTarget;
@@ -59,8 +68,12 @@ export type HybridPersistentScanDebugInfo = {
  * - unlimited empty misses still mark the requested range as covered;
  * - limited btree scans cache the proven prefix or suffix up to the last
  *   returned row, including duplicate index values via an appended id column;
- * - full hash/equality lookups are cached, while partial limited coverage is
- *   only trusted for btree indexes or indexes whose first column is id;
+ * - full hash/equality lookups are cached when the scan itself proves the
+ *   bucket;
+ * - unique hash values loaded through any persistent scan are marked covered
+ *   exactly, because at most one row can match each value;
+ * - partial limited coverage is only trusted for btree, uniqhash, or legacy
+ *   id-first indexes;
  * - transaction coverage is merged into the parent DB only on commit;
  * - loadTables clears coverage because table contents may have changed.
  *
@@ -81,6 +94,37 @@ const maxTuple = (count: number): Tuple =>
 
 const rowToTuple = (row: Row, indexCols: string[]): Tuple =>
   indexCols.map((col) => row[col] as Value);
+
+const rowToIndexValue = (row: Row, col: string): Value | undefined => {
+  if (!Object.prototype.hasOwnProperty.call(row, col)) return undefined;
+
+  const value = row[col];
+  return value === undefined ? null : (value as Value);
+};
+
+function bytesOfExactValue(value: ArrayBuffer | ArrayBufferView): number[] {
+  if (value instanceof ArrayBuffer) {
+    return Array.from(new Uint8Array(value));
+  }
+  return Array.from(
+    new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+  );
+}
+
+function toHex(value: number): string {
+  return value.toString(16).padStart(2, "0");
+}
+
+const exactValueKey = (value: Value): string => {
+  if (value === null) return "null:";
+  if (typeof value === "string") return `string:${value}`;
+  if (typeof value === "number") {
+    return `number:${Object.is(value, -0) ? 0 : value}`;
+  }
+  if (typeof value === "bigint") return `bigint:${value.toString()}`;
+  if (typeof value === "boolean") return `boolean:${value ? "1" : "0"}`;
+  return `bytes:${bytesOfExactValue(value).map(toHex).join("")}`;
+};
 
 const tupleInInterval = (
   tuple: Tuple,
@@ -133,16 +177,41 @@ export const intervalFromClauses = (
     indexConfig.type === "btree" && indexCols[indexCols.length - 1] !== "id"
       ? [...indexCols, "id"]
       : indexCols;
-  const intervals = convertWhereToBound(indexCols, clauses)
+  const bounds = convertWhereToBound(indexCols, clauses);
+  const intervals = bounds
     .map((bound) => boundToInterval(bound, sortCols.length))
     .filter((interval) => !isEmptyInterval(interval));
+  const exactUniqhashKeys =
+    indexConfig.type === "uniqhash" && indexCols.length === 1
+      ? bounds.flatMap((bound) => {
+          if (
+            bound.gt !== undefined ||
+            bound.lt !== undefined ||
+            !bound.gte ||
+            !bound.lte ||
+            bound.gte.length !== 1 ||
+            bound.lte.length !== 1
+          ) {
+            return [];
+          }
+
+          const gteKey = exactValueKey(bound.gte[0] as Value);
+          if (gteKey !== exactValueKey(bound.lte[0] as Value)) return [];
+
+          const interval = boundToInterval(bound, 1);
+          return isEmptyInterval(interval) ? [] : [{ key: gteKey, interval }];
+        })
+      : [];
 
   return {
     key: cacheKey(table, indexName),
     intervals: mergeIntervals(intervals),
     indexCols: sortCols,
+    exactUniqhashKeys,
     supportsPartialLimitCoverage:
-      indexConfig.type === "btree" || indexCols[0] === "id",
+      indexConfig.type === "btree" ||
+      indexConfig.type === "uniqhash" ||
+      indexCols[0] === "id",
   };
 };
 
@@ -349,6 +418,55 @@ export const mergeCoverageMaps = (
   for (const [key, intervals] of child) {
     mergeCoverage(parent, key, intervals);
   }
+  for (const [key, exactKeys] of child.exactKeys) {
+    let parentKeys = parent.exactKeys.get(key);
+    if (!parentKeys) {
+      parentKeys = new Set();
+      parent.exactKeys.set(key, parentKeys);
+    }
+    for (const exactKey of exactKeys) {
+      parentKeys.add(exactKey);
+    }
+  }
+};
+
+export const mergeExactUniqhashCoverage = (
+  cachedIntervals: HybridIntervalCache,
+  key: string,
+  value: Value,
+) => {
+  let exactKeys = cachedIntervals.exactKeys.get(key);
+  if (!exactKeys) {
+    exactKeys = new Set();
+    cachedIntervals.exactKeys.set(key, exactKeys);
+  }
+  exactKeys.add(exactValueKey(value));
+};
+
+export const mergeExactUniqhashCoverageForRows = (
+  cachedIntervals: HybridIntervalCache,
+  table: TableDefinition,
+  rows: Row[],
+) => {
+  if (rows.length === 0) return;
+
+  for (const [indexName, indexConfig] of Object.entries(table.indexes)) {
+    if (indexConfig.type !== "uniqhash" || indexConfig.cols.length !== 1) {
+      continue;
+    }
+
+    const col = String(indexConfig.cols[0]);
+    for (const row of rows) {
+      const value = rowToIndexValue(row, col);
+      if (value === undefined) continue;
+
+      mergeExactUniqhashCoverage(
+        cachedIntervals,
+        cacheKey(table, indexName),
+        value,
+      );
+    }
+  }
 };
 
 export const canServeLimitedResultFromCache = (
@@ -410,11 +528,20 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
   if (selectOptions?.limit === 0) return [];
 
   const target = intervalFromClauses(table, indexName as string, clauses);
+  const exactCovered = target.exactUniqhashKeys.flatMap((exact) => {
+    const isCovered = [
+      cachedIntervals,
+      ...(options.additionalCachedIntervals ?? []),
+    ].some((intervals) => intervals.exactKeys.get(target.key)?.has(exact.key));
+
+    return isCovered ? [exact.interval] : [];
+  });
   const cached = mergeIntervals([
     ...(cachedIntervals.get(target.key) ?? []),
     ...(options.additionalCachedIntervals ?? []).flatMap(
       (intervals) => intervals.get(target.key) ?? [],
     ),
+    ...exactCovered,
   ]);
   const uncovered = subtractIntervals(target.intervals, cached);
 
@@ -472,10 +599,11 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
 
   if (primaryRows.length > 0) {
     yield* cache.upsert(table, primaryRows);
-  }
-
-  if (options.returnCacheAfterPersistentScan?.(target)) {
-    return yield* cache.intervalScan(table, indexName, clauses, selectOptions);
+    mergeExactUniqhashCoverageForRows(
+      cachedIntervals,
+      table,
+      primaryRows as Row[],
+    );
   }
 
   const fullyLoaded =
@@ -492,6 +620,10 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
         )
       : [];
   mergeCoverage(cachedIntervals, target.key, loadedIntervals);
+
+  if (options.returnCacheAfterPersistentScan?.(target)) {
+    return yield* cache.intervalScan(table, indexName, clauses, selectOptions);
+  }
 
   return primaryRows;
 }

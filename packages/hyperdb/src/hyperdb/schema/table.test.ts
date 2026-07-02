@@ -74,8 +74,13 @@ describe("defineTable", () => {
     })
       .index("byProjectState", ["projectId", "state"])
       .index("byTitle", ["title"], { type: "hash" })
+      .index("bySlug", ["title"], { type: "uniqhash" })
       .index("byIdBtree", ["id"], { type: "btree" });
 
+    expect(tasksTable.indexes.byId).toEqual({
+      type: "uniqhash",
+      cols: ["id"],
+    });
     expect(tasksTable.indexes.byProjectState.cols).toEqual([
       "projectId",
       "state",
@@ -83,6 +88,10 @@ describe("defineTable", () => {
     expect(tasksTable.indexes.byProjectState.type).toBe("btree");
     expect(tasksTable.indexes.byTitle).toEqual({
       type: "hash",
+      cols: ["title"],
+    });
+    expect(tasksTable.indexes.bySlug).toEqual({
+      type: "uniqhash",
       cols: ["title"],
     });
     expect(tasksTable.indexes.byIdBtree.type).toBe("btree");
@@ -101,6 +110,14 @@ describe("defineTable", () => {
           // @ts-expect-error hash indexes must use exactly one column
           ["projectId", "state"],
           { type: "hash" },
+        ),
+      );
+      assertType(
+        tasksTable.index(
+          "badUniqHash",
+          // @ts-expect-error uniqhash indexes must use exactly one column
+          ["projectId", "state"],
+          { type: "uniqhash" },
         ),
       );
     }
@@ -134,6 +151,16 @@ describe("defineTable", () => {
         state: v.string(),
       }).index("byProjectState", ["projectId", "state"] as any, {
         type: "hash",
+      }),
+    ).toThrow(/Hash index must have exactly one column/);
+
+    expect(() =>
+      defineTable("badUniqHash", {
+        id: v.string(),
+        projectId: v.string(),
+        state: v.string(),
+      }).index("byProjectState", ["projectId", "state"] as any, {
+        type: "uniqhash",
       }),
     ).toThrow(/Hash index must have exactly one column/);
 

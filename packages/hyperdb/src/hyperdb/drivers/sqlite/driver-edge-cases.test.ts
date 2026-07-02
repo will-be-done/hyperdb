@@ -68,8 +68,10 @@ describe("SQLite driver edge case regressions", () => {
 
     db.loadTables([sortKeyBackfillTableV2]);
 
+    expect(execLog.some((sql) => sql.startsWith("DELETE FROM"))).toBe(true);
+    expect(execLog.some((sql) => sql.startsWith("INSERT INTO"))).toBe(true);
     expect(execLog.some((sql) => sql.startsWith("INSERT OR REPLACE"))).toBe(
-      true,
+      false,
     );
     expect(execLog.some((sql) => sql.startsWith("UPDATE"))).toBe(false);
     expect(

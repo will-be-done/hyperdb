@@ -82,6 +82,9 @@ type GetAllRecordsSource<T> = {
   }) => IDBRequest<IdbRecord<T>[]>;
 };
 
+type OptionalKeyRange = IDBKeyRange | undefined;
+type MaybeKeyRange = OptionalKeyRange | null;
+
 function nowMs(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
 }
@@ -277,20 +280,20 @@ function createSortKeyRanges(
   tableDef: TableDefinition,
   indexName: string,
   clauses: WhereClause[],
-): (IDBKeyRange | undefined)[] {
+): MaybeKeyRange[] {
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
   const filterColumns = indexDef.cols.map(String);
-  const sortColumns = sqliteIndexSortColumns(indexDef.cols);
+  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
   const mode = sqliteIndexSortKeyMode(tableDef, indexName);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 
-  if (indexDef.type === "hash") {
+  if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
     validateHashBounds(indexName, filterColumns, rawBounds);
   }
 
-  const ranges: (IDBKeyRange | undefined)[] = [];
+  const ranges: MaybeKeyRange[] = [];
 
   for (const rawBound of rawBounds) {
     const bound = {
@@ -312,6 +315,20 @@ function createSortKeyRanges(
         : undefined;
 
     if (lowerSortKey !== undefined && upperSortKey !== undefined) {
+      const comparison = compareIdbKeys(lowerSortKey, upperSortKey);
+      if (
+        comparison > 0 ||
+        (comparison === 0 && (bound.gt !== undefined || bound.lt !== undefined))
+      ) {
+        ranges.push(null);
+        continue;
+      }
+
+      if (comparison === 0) {
+        ranges.push(IDBKeyRange.only(lowerSortKey));
+        continue;
+      }
+
       ranges.push(
         IDBKeyRange.bound(
           lowerSortKey,
@@ -411,6 +428,10 @@ function indexKeyPath(indexName: string): string {
   return `indexes.${indexName}`;
 }
 
+function indexIsUnique(tableDef: TableDefinition, indexName: string): boolean {
+  return tableDef.indexes[indexName]?.type === "uniqhash";
+}
+
 function createNativeRecordFromRow(
   tableDef: TableDefinition,
   row: Row,
@@ -438,19 +459,31 @@ function createNativeRecord(
   return createNativeRecordFromRow(tableDef, row);
 }
 
+function compareIdbKeys(left: IDBValidKey, right: IDBValidKey): number {
+  return indexedDB.cmp(left, right);
+}
+
 function advanceRange(
-  range: IDBKeyRange | undefined,
+  range: OptionalKeyRange,
   lastKey: IDBValidKey,
   direction: IDBCursorDirection,
-): IDBKeyRange {
+): MaybeKeyRange {
   if (direction === "prev" || direction === "prevunique") {
     if (range?.lower !== undefined) {
+      if (compareIdbKeys(range.lower, lastKey) >= 0) {
+        return null;
+      }
+
       return IDBKeyRange.bound(range.lower, lastKey, range.lowerOpen, true);
     }
     return IDBKeyRange.upperBound(lastKey, true);
   }
 
   if (range?.upper !== undefined) {
+    if (compareIdbKeys(lastKey, range.upper) >= 0) {
+      return null;
+    }
+
     return IDBKeyRange.bound(lastKey, range.upper, true, range.upperOpen);
   }
   return IDBKeyRange.lowerBound(lastKey, true);
@@ -458,7 +491,7 @@ function advanceRange(
 
 async function getAllRecords<T>(
   source: IDBObjectStore | IDBIndex,
-  query: IDBKeyRange | undefined,
+  query: OptionalKeyRange,
   options: { limit?: number; direction?: IDBCursorDirection } = {},
 ): Promise<T[]> {
   const getAllRecordsFn = (source as GetAllRecordsSource<T>).getAllRecords;
@@ -469,6 +502,8 @@ async function getAllRecords<T>(
     let currentQuery = query;
 
     while (true) {
+      if (currentQuery === null) return results;
+
       const remaining =
         options.limit === undefined
           ? undefined
@@ -489,6 +524,12 @@ async function getAllRecords<T>(
 
       results.push(...records.map((record) => record.value));
       if (records.length < count) return results;
+      if (
+        options.limit !== undefined &&
+        results.length >= options.limit
+      ) {
+        return results;
+      }
 
       currentQuery = advanceRange(
         query,
@@ -518,6 +559,8 @@ async function getAllRecords<T>(
   let currentQuery = query;
 
   while (true) {
+    if (currentQuery === null) return results;
+
     const remaining =
       options.limit === undefined ? undefined : options.limit - results.length;
     if (remaining !== undefined && remaining <= 0) return results;
@@ -545,6 +588,14 @@ async function getAllRecords<T>(
       return options.limit === undefined
         ? ordered
         : ordered.slice(0, options.limit);
+    }
+    if (
+      direction !== "prev" &&
+      direction !== "prevunique" &&
+      options.limit !== undefined &&
+      results.length >= options.limit
+    ) {
+      return results;
     }
 
     currentQuery = advanceRange(currentQuery, keys[keys.length - 1], "next");
@@ -797,6 +848,8 @@ async function performScan(
     const records: NativeStoredRecord[] = [];
 
     for (const range of ranges) {
+      if (range === null) continue;
+
       const remaining =
         canPushLimit && selectOptions.limit !== undefined
           ? selectOptions.limit - records.length
@@ -1460,7 +1513,11 @@ export class IdbDriver implements DBDriver {
           storeNeedsUpgrade = true;
           continue;
         }
-        if (store.index(indexName).keyPath !== indexKeyPath(indexName)) {
+        const index = store.index(indexName);
+        if (
+          index.keyPath !== indexKeyPath(indexName) ||
+          index.unique !== indexIsUnique(tableDef, indexName)
+        ) {
           storeNeedsUpgrade = true;
         }
       }
@@ -1685,7 +1742,8 @@ function applySchemaUpgrade(
     for (const indexName of Array.from(store.indexNames)) {
       if (
         !expectedIndexes.has(indexName) ||
-        store.index(indexName).keyPath !== indexKeyPath(indexName)
+        store.index(indexName).keyPath !== indexKeyPath(indexName) ||
+        store.index(indexName).unique !== indexIsUnique(tableDef, indexName)
       ) {
         store.deleteIndex(indexName);
       }
@@ -1693,7 +1751,9 @@ function applySchemaUpgrade(
 
     for (const indexName of expectedIndexes) {
       if (!store.indexNames.contains(indexName)) {
-        store.createIndex(indexName, indexKeyPath(indexName));
+        store.createIndex(indexName, indexKeyPath(indexName), {
+          unique: indexIsUnique(tableDef, indexName),
+        });
       }
     }
   }

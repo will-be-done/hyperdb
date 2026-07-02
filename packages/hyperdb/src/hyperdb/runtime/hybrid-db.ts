@@ -32,6 +32,8 @@ import {
   hybridIntervalScan,
   intervalFromClauses,
   mergeCoverage,
+  mergeExactUniqhashCoverage,
+  mergeExactUniqhashCoverageForRows,
   mergeCoverageMaps,
   rowMatchesIntervalTarget,
   type HybridIntervalCache,
@@ -78,6 +80,14 @@ type HybridPersistenceBatch = {
   promise: Promise<void>;
 };
 
+type HybridPersistenceFailure = {
+  error: unknown;
+  attempt: number;
+  maxAttempts: number;
+  retryDelayMs?: number;
+  willRetry: boolean;
+};
+
 export type HybridDBPendingPersistenceWaitReason = {
   batchId: number;
   tableName: string;
@@ -111,9 +121,25 @@ export type HybridDBPersistentScanDebugEvent = {
   limitedCacheProbe?: HybridPersistentScanDebugInfo["limitedCacheProbe"];
 };
 
+export type HybridDBPersistenceFailureDebugEvent = {
+  type: "persistence-failure";
+  batchId: number;
+  writeCount: number;
+  error: unknown;
+  attempt: number;
+  maxAttempts: number;
+  retryDelayMs?: number;
+  willRetry: boolean;
+};
+
 export type HybridDBDebugEvent =
   | HybridDBPendingPersistenceWaitDebugEvent
-  | HybridDBPersistentScanDebugEvent;
+  | HybridDBPersistentScanDebugEvent
+  | HybridDBPersistenceFailureDebugEvent;
+
+const hybridPersistenceMaxAttempts = 3;
+const hybridPersistenceInitialRetryDelayMs = 10;
+const hybridPersistenceRetryBackoffFactor = 2;
 
 const createHybridDBState = (): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
@@ -252,6 +278,13 @@ function* persistWrites(
   }
 }
 
+const persistenceRetryDelayMs = (attempt: number): number =>
+  hybridPersistenceInitialRetryDelayMs *
+  hybridPersistenceRetryBackoffFactor ** (attempt - 1);
+
+const waitForPersistenceRetry = (delayMs: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, delayMs));
+
 function pendingWriteMatchReason(
   write: HybridPendingWrite,
   batchId: number,
@@ -290,23 +323,35 @@ function pendingWritesMatchTarget(
   return false;
 }
 
-function idCoverageIndexes(table: TableDefinition): string[] {
-  return Object.entries(table.indexes)
-    .filter(([, index]) => index.cols.length === 1 && index.cols[0] === "id")
-    .map(([indexName]) => indexName);
-}
-
-function mergeExactIdCoverage(
+function mergeExactUniqhashWriteCoverage(
   cachedIntervals: HybridIntervalCache,
   writes: HybridPendingWrite[],
 ): void {
   for (const write of coalescePersistenceWrites(writes)) {
-    for (const indexName of idCoverageIndexes(write.table)) {
-      const target = intervalFromClauses(write.table, indexName, [
-        { eq: [{ col: "id", val: write.id }] },
-      ]);
-      mergeCoverage(cachedIntervals, target.key, target.intervals);
+    for (const [indexName, indexConfig] of Object.entries(
+      write.table.indexes,
+    )) {
+      if (
+        indexConfig.type === "uniqhash" &&
+        indexConfig.cols.length === 1 &&
+        indexConfig.cols[0] === "id"
+      ) {
+        mergeExactUniqhashCoverage(
+          cachedIntervals,
+          `${write.table.tableName}:${indexName}`,
+          write.id,
+        );
+      }
     }
+
+    const rows: Row[] = [];
+    if (write.newValue) {
+      rows.push(write.newValue);
+    }
+    if (write.oldValueKnown && write.oldValue) {
+      rows.push(write.oldValue);
+    }
+    mergeExactUniqhashCoverageForRows(cachedIntervals, write.table, rows);
   }
 }
 
@@ -443,42 +488,40 @@ export class HybridDB implements HyperDB {
     const { cache, primary, state } = this;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
-    return yield* withHybridLock(
-      this.state,
-      function* () {
-        return yield* hybridIntervalScan(
-          withDriverTraceContextTrait(primary, traceContext),
-          withDriverTraceContextTrait(cache, traceContext),
-          state.cachedIntervals,
-          selectEvent,
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-          {
-            onPersistentScan: (info) => {
-              this.emitPersistentScanDebugEvent(
-                "root",
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                info,
-              );
-            },
-            beforePersistentScan: function* (target) {
-              yield* this.waitForPendingPersistenceForScan(
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                target,
-              );
-            }.bind(this),
+    const hybridDB = this;
+    return yield* withHybridLock(this.state, function* () {
+      return yield* hybridIntervalScan(
+        withDriverTraceContextTrait(primary, traceContext),
+        withDriverTraceContextTrait(cache, traceContext),
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+        {
+          onPersistentScan: (info) => {
+            hybridDB.emitPersistentScanDebugEvent(
+              "root",
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              info,
+            );
           },
-        );
-      }.bind(this),
-    );
+          beforePersistentScan: function* (target: IntervalTarget) {
+            yield* hybridDB.waitForPendingPersistenceForScan(
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              target,
+            );
+          },
+        },
+      );
+    });
   }
 
   *insert<TTable extends TableDefinition>(
@@ -549,26 +592,44 @@ export class HybridDB implements HyperDB {
     if (writes.length === 0) return;
 
     const primary = withDriverTraceContextTrait(this.primary, traceContext);
-    const promise = this.state.persistenceTail.then(() =>
-      execAsync(persistWrites(primary, writes)),
-    );
+    const batchId = this.state.nextPersistenceBatchId++;
+    const persistWithRetry = (attempt: number): Promise<void> =>
+      execAsync(persistWrites(primary, writes)).catch((error) => {
+        const willRetry = attempt < hybridPersistenceMaxAttempts;
+        const retryDelayMs = willRetry
+          ? persistenceRetryDelayMs(attempt)
+          : undefined;
+        this.emitPersistenceFailureDebugEvent(batchId, writes, {
+          error,
+          attempt,
+          maxAttempts: hybridPersistenceMaxAttempts,
+          retryDelayMs,
+          willRetry,
+        });
+
+        if (!willRetry) throw error;
+
+        return waitForPersistenceRetry(retryDelayMs).then(() =>
+          persistWithRetry(attempt + 1),
+        );
+      });
+    const promise = this.state.persistenceTail.then(() => persistWithRetry(1));
     const batch: HybridPersistenceBatch = {
-      id: this.state.nextPersistenceBatchId++,
+      id: batchId,
       writes,
       promise,
     };
     this.state.pendingPersistence.add(batch);
-    this.state.persistenceTail = promise.catch(() => {
-      // Keep later persistence batches running after a failed batch.
-    });
+    this.state.persistenceTail = promise;
 
-    void promise
-      .catch((error) => {
-        console.error("HybridDB background persistence failed", error);
-      })
-      .finally(() => {
+    void promise.then(
+      () => {
         this.state.pendingPersistence.delete(batch);
-      });
+      },
+      () => {
+        // Keep the rejected batch observable to later waiters.
+      },
+    );
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {
@@ -632,6 +693,19 @@ export class HybridDB implements HyperDB {
       return;
     }
 
+    if (event.type === "persistence-failure") {
+      console.debug("HybridDB persistence failure", {
+        batchId: event.batchId,
+        writeCount: event.writeCount,
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        retryDelayMs: event.retryDelayMs,
+        willRetry: event.willRetry,
+        error: event.error,
+      });
+      return;
+    }
+
     console.debug("HybridDB persistent scan", {
       scope: event.scope,
       tableName: event.tableName,
@@ -641,6 +715,19 @@ export class HybridDB implements HyperDB {
       cachedIntervals: event.cachedIntervals,
       uncoveredIntervals: event.uncoveredIntervals,
       limitedCacheProbe: event.limitedCacheProbe,
+    });
+  }
+
+  private emitPersistenceFailureDebugEvent(
+    batchId: number,
+    writes: HybridPendingWrite[],
+    failure: HybridPersistenceFailure,
+  ): void {
+    this.emitDebugEvent({
+      type: "persistence-failure",
+      batchId,
+      writeCount: writes.length,
+      ...failure,
     });
   }
 
@@ -748,6 +835,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
     const { cache, state } = this.hybridDB;
     const selectEvent = getCurrentSelectEventForDB(this);
     const traceContext = getDriverTraceContextForDB(this);
+    const readonlyTx = this;
     const getPrimaryForRead = function* (
       this: HybridDBReadonlyTx,
     ): Generator<DBCmd, HyperDB> {
@@ -765,42 +853,39 @@ class HybridDBReadonlyTx implements HyperDBTx {
       return tx ?? tracePrimary;
     }.bind(this);
 
-    return yield* withHybridLock(
-      state,
-      function* () {
-        return yield* hybridIntervalScan(
-          getPrimaryForRead,
-          withDriverTraceContextTrait(cache, traceContext),
-          state.cachedIntervals,
-          selectEvent,
-          table,
-          indexName,
-          clauses,
-          selectOptions,
-          {
-            onPersistentScan: (info) => {
-              this.hybridDB.emitPersistentScanDebugEvent(
-                "readonly-tx",
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                info,
-              );
-            },
-            beforePersistentScan: function* (target) {
-              yield* this.hybridDB.waitForPendingPersistenceForScan(
-                table,
-                indexName,
-                clauses,
-                selectOptions,
-                target,
-              );
-            }.bind(this),
+    return yield* withHybridLock(state, function* () {
+      return yield* hybridIntervalScan(
+        getPrimaryForRead,
+        withDriverTraceContextTrait(cache, traceContext),
+        state.cachedIntervals,
+        selectEvent,
+        table,
+        indexName,
+        clauses,
+        selectOptions,
+        {
+          onPersistentScan: (info) => {
+            readonlyTx.hybridDB.emitPersistentScanDebugEvent(
+              "readonly-tx",
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              info,
+            );
           },
-        );
-      }.bind(this),
-    );
+          beforePersistentScan: function* (target: IntervalTarget) {
+            yield* readonlyTx.hybridDB.waitForPendingPersistenceForScan(
+              table,
+              indexName,
+              clauses,
+              selectOptions,
+              target,
+            );
+          },
+        },
+      );
+    });
   }
 
   *insert<TTable extends TableDefinition>(
@@ -935,6 +1020,7 @@ class HybridDBTx implements HyperDBTx {
         .filter((write) => write.table === table)
         .map((write) => write.id),
     );
+    const tx = this;
     return yield* hybridIntervalScan(
       withDriverTraceContextTrait(this.hybridDB.primary, traceContext),
       withDriverTraceContextTrait(this.cacheTx, traceContext),
@@ -956,15 +1042,15 @@ class HybridDBTx implements HyperDBTx {
             info,
           );
         },
-        beforePersistentScan: function* (target) {
-          yield* this.hybridDB.waitForPendingPersistenceForScan(
+        beforePersistentScan: function* (target: IntervalTarget) {
+          yield* tx.hybridDB.waitForPendingPersistenceForScan(
             table,
             indexName,
             clauses,
             selectOptions,
             target,
           );
-        }.bind(this),
+        },
         filterPersistentRows: (_target, rows) =>
           rows.filter((row) => !ownPendingIds.has(row.id)),
         returnCacheAfterPersistentScan: (target) =>
@@ -1048,7 +1134,7 @@ class HybridDBTx implements HyperDBTx {
 
     try {
       yield* this.cacheTx.commit();
-      mergeExactIdCoverage(
+      mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
         this.state.pendingWrites,
       );

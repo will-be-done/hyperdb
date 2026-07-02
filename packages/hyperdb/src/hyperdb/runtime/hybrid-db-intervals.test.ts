@@ -11,6 +11,7 @@ import {
   isEmptyInterval,
   mergeCoverage,
   mergeCoverageMaps,
+  mergeExactUniqhashCoverage,
   mergeIntervals,
   subtractIntervals,
   subtractOne,
@@ -91,6 +92,7 @@ describe("HybridDB interval helpers", () => {
       key: "hybridIntervalTasks:byValue",
       intervals: [i([1, MIN], [2, MAX])],
       indexCols: ["value", "id"],
+      exactUniqhashKeys: [],
       supportsPartialLimitCoverage: true,
     });
 
@@ -102,7 +104,20 @@ describe("HybridDB interval helpers", () => {
       key: "hybridIntervalTasks:byTitle",
       intervals: [i(["same"], ["same"])],
       indexCols: ["title"],
+      exactUniqhashKeys: [],
       supportsPartialLimitCoverage: false,
+    });
+
+    expect(
+      intervalFromClauses(intervalTable, "byId", [
+        { eq: [{ col: "id", val: "001" }] },
+      ]),
+    ).toEqual({
+      key: "hybridIntervalTasks:byId",
+      intervals: [i(["001"], ["001"])],
+      indexCols: ["id"],
+      exactUniqhashKeys: [{ key: "string:001", interval: i(["001"], ["001"]) }],
+      supportsPartialLimitCoverage: true,
     });
 
     expect(
@@ -277,11 +292,15 @@ describe("HybridDB interval helpers", () => {
     mergeCoverage(parent, "tasks:byValue", [i([1], [2])]);
     mergeCoverage(child, "tasks:byValue", [i([2], [4], false, true)]);
     mergeCoverage(child, "tasks:byTitle", [i(["a"], ["a"])]);
+    mergeExactUniqhashCoverage(child, "tasks:bySlug", "slug-a");
     mergeCoverageMaps(parent, child);
     mergeCoverage(parent, "tasks:byValue", []);
 
     expect(parent.get("tasks:byValue")).toEqual([i([1], [4])]);
     expect(parent.get("tasks:byTitle")).toEqual([i(["a"], ["a"])]);
+    expect(parent.exactKeys.get("tasks:bySlug")?.has("string:slug-a")).toBe(
+      true,
+    );
   });
 });
 

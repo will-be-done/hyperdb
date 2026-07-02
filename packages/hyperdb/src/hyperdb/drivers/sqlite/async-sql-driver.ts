@@ -164,37 +164,12 @@ function* performAsyncUpsertOperation(
 ): Generator<DBCmd, void> {
   if (values.length === 0) return;
 
-  yield* unwrapCb(async () => {
-    const allValues = chunkArray(values, getSqliteInsertChunkSize(tableDef));
-    for (const chunk of allValues) {
-      const upsertSQL = buildInsertSQL(tableDef, chunk.length, {
-        replace: true,
-      });
-      const params = chunk.flatMap((v) => buildRowInsertParams(tableDef, v));
-      const startedAt = nowMs();
-
-      try {
-        await db.exec(upsertSQL, params);
-        logAsyncSQL(upsertSQL, startedAt, {
-          tableName: tableDef.tableName,
-          rowCount: chunk.length,
-          ...summarizeSqlParams(params),
-        });
-      } catch (error) {
-        logAsyncSQL(
-          upsertSQL,
-          startedAt,
-          {
-            tableName: tableDef.tableName,
-            rowCount: chunk.length,
-            ...summarizeSqlParams(params),
-          },
-          error,
-        );
-        throw error;
-      }
-    }
-  });
+  yield* performAsyncDeleteOperation(
+    db,
+    tableDef,
+    values.map((value) => value.id),
+  );
+  yield* performAsyncInsertOperation(db, tableDef, values);
 }
 
 function* performAsyncDeleteOperation(
@@ -672,15 +647,17 @@ export class AsyncSqlDriver implements DBDriver {
     return columns;
   }
 
-  private async getTableIndexNames(tableName: string): Promise<Set<string>> {
-    const indexes = new Set<string>();
+  private async getGeneratedIndexUniqueness(
+    tableName: string,
+  ): Promise<Map<string, boolean>> {
+    const indexes = new Map<string, boolean>();
     const sql = `PRAGMA index_list(${tableName})`;
     const startedAt = nowMs();
     const stmt = await this.db.prepare(sql);
 
     try {
       for (const row of await stmt.values([])) {
-        indexes.add(String(row[1]));
+        indexes.set(String(row[1]), Number(row[2]) === 1);
       }
       logAsyncSQL(sql, startedAt, {
         tableName,
@@ -733,9 +710,19 @@ export class AsyncSqlDriver implements DBDriver {
     tableDef: TableDefinition<any>,
   ): Promise<void> {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
-    for (const indexName of await this.getTableIndexNames(tableDef.tableName)) {
+    const indexUniqueness = await this.getGeneratedIndexUniqueness(
+      tableDef.tableName,
+    );
+    for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      if (expectedIndexes.has(indexName)) continue;
+      if (expectedIndexes.has(indexName)) {
+        const tableIndexName = indexName
+          .slice(`idx_${tableDef.tableName}_`.length)
+          .replace(/_sort_key$/, "");
+        const expectedUnique =
+          tableDef.indexes[tableIndexName]?.type === "uniqhash";
+        if (unique === expectedUnique) continue;
+      }
 
       await runAsyncSQL(this.db, dropIndexSQL(indexName));
     }
@@ -772,7 +759,7 @@ export class AsyncSqlDriver implements DBDriver {
 
   private async createIndexes(tableDef: TableDefinition<any>): Promise<void> {
     for (const [indexName] of Object.entries(tableDef.indexes)) {
-      const indexSQL = createIndexSQL(tableDef.tableName, indexName);
+      const indexSQL = createIndexSQL(tableDef, indexName);
       await runAsyncSQL(this.db, indexSQL);
     }
   }

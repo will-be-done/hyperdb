@@ -67,17 +67,12 @@ function performUpsertOperation(
 ): void {
   if (values.length === 0) return;
 
-  const allValues = chunkArray(values, getSqliteInsertChunkSize(tableDef));
-  for (const chunk of allValues) {
-    const upsertSQL = buildInsertSQL(tableDef, chunk.length, {
-      replace: true,
-    });
-
-    db.exec(
-      upsertSQL,
-      chunk.flatMap((v) => buildRowInsertParams(tableDef, v)),
-    );
-  }
+  performDeleteOperation(
+    db,
+    tableDef,
+    values.map((value) => value.id),
+  );
+  performInsertOperation(db, tableDef, values);
 }
 
 function performDeleteOperation(
@@ -386,10 +381,12 @@ export class SqlDriver implements DBDriver {
     }
   }
 
-  private getTableIndexNames(tableName: string): Set<string> {
+  private getGeneratedIndexUniqueness(tableName: string): Map<string, boolean> {
     const q = this.db.prepare(`PRAGMA index_list(${tableName})`);
     try {
-      return new Set(q.values([]).map((row) => String(row[1])));
+      return new Map(
+        q.values([]).map((row) => [String(row[1]), Number(row[2]) === 1]),
+      );
     } finally {
       q.finalize();
     }
@@ -422,9 +419,19 @@ export class SqlDriver implements DBDriver {
 
   private dropStaleSortKeyIndexes(tableDef: TableDefinition<any>): void {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
-    for (const indexName of this.getTableIndexNames(tableDef.tableName)) {
+    const indexUniqueness = this.getGeneratedIndexUniqueness(
+      tableDef.tableName,
+    );
+    for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      if (expectedIndexes.has(indexName)) continue;
+      if (expectedIndexes.has(indexName)) {
+        const tableIndexName = indexName
+          .slice(`idx_${tableDef.tableName}_`.length)
+          .replace(/_sort_key$/, "");
+        const expectedUnique =
+          tableDef.indexes[tableIndexName]?.type === "uniqhash";
+        if (unique === expectedUnique) continue;
+      }
 
       this.db.exec(dropIndexSQL(indexName));
     }
@@ -476,7 +483,7 @@ export class SqlDriver implements DBDriver {
 
   private createIndexes(tableDef: TableDefinition<any>): void {
     for (const indexName of Object.keys(tableDef.indexes)) {
-      const indexSQL = createIndexSQL(tableDef.tableName, indexName);
+      const indexSQL = createIndexSQL(tableDef, indexName);
       this.db.exec(indexSQL);
     }
   }

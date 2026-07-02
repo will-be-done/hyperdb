@@ -113,8 +113,8 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/integrations/devtools.md`: Devtool and tracing guide. Covers
   adding `HyperDBDevtools`, devtool tabs and trace inspection, component props,
   embedded panel option, trace contents, cache-hit traces, `HybridDB` source
-  labels, per-DB tracers, global default tracers, factory trace options, and
-  `skipTrace`.
+  labels, the trace-list `in-mem` badge, per-DB tracers, global default tracers,
+  factory trace options, and `skipTrace`.
 
 ## Guides
 
