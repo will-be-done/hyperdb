@@ -13,11 +13,11 @@ the sync or async runtime helpers, which depends on the storage path.
 
 ## Choosing a driver
 
-| Driver              | Import                 | Mode  | Environment | Use for                                                       |
-| ------------------- | ---------------------- | ----- | ----------- | ------------------------------------------------------------- |
-| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, fully loaded app state, and the fast `HybridDB` cache  |
-| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence, usually as a `HybridDB` primary store    |
-| `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js) |
+| Driver              | Import                 | Mode  | Environment | Use for                                                        |
+| ------------------- | ---------------------- | ----- | ----------- | -------------------------------------------------------------- |
+| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, fully loaded app state, and the fast `HybridDB` cache   |
+| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence, usually as a `HybridDB` primary store     |
+| `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js)  |
 | `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including browser SQLite as a `HybridDB` primary |
 
 Sync drivers work with `execSync` / `syncDispatch` / `select`. Async drivers

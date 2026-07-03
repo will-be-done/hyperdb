@@ -32,14 +32,14 @@ Exports from `@will-be-done/hyperdb-devtool/react`:
 
 `HyperDBDevtools` props:
 
-| Prop | Meaning |
-| ---- | ------- |
-| `db?: SubscribableDB` | Trace one DB explicitly. If omitted, the devtool tries `DBProvider` context and registered DB discovery. |
-| `initialIsOpen?: boolean` | Initial panel state before localStorage is read. |
-| `position?: "top" \| "bottom" \| "left" \| "right"` | Dock position, default `"bottom"`. |
-| `buttonPosition?: "top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | Floating button position, default `"bottom-right"`. |
-| `maxTraces?: number` | Visible/retained trace cap for the devtool view, default `200`. |
-| `theme?: "dark" \| "light" \| "system"` | Theme selection, default `"system"`. |
+| Prop                                                                            | Meaning                                                                                                  |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `db?: SubscribableDB`                                                           | Trace one DB explicitly. If omitted, the devtool tries `DBProvider` context and registered DB discovery. |
+| `initialIsOpen?: boolean`                                                       | Initial panel state before localStorage is read.                                                         |
+| `position?: "top" \| "bottom" \| "left" \| "right"`                             | Dock position, default `"bottom"`.                                                                       |
+| `buttonPosition?: "top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | Floating button position, default `"bottom-right"`.                                                      |
+| `maxTraces?: number`                                                            | Visible/retained trace cap for the devtool view, default `200`.                                          |
+| `theme?: "dark" \| "light" \| "system"`                                         | Theme selection, default `"system"`.                                                                     |
 
 ## Runtime Tracing
 

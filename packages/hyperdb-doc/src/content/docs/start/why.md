@@ -244,7 +244,6 @@ that can fetch indexed ranges and receive mutations, then maintain derived views
 incrementally. That is a possible future extension, not a contradiction of the
 core design.
 
-
 ## In short
 
 HyperDB exists because local-first apps need:

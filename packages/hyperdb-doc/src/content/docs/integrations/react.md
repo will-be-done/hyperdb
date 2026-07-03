@@ -223,12 +223,12 @@ Use `useSelect` for synchronous drivers.
 
 ## Hook reference
 
-| Hook                     | Returns                        | Use with                                   |
-| ------------------------ | ------------------------------ | ------------------------------------------ |
-| `useDB()`                | the `SubscribableDB`           | accessing the DB directly                  |
-| `useAsyncSelector(opts)` | query-style result object      | `HybridDB`, IndexedDB, async SQLite        |
-| `useSyncSelector(opts)`  | the selector result            | in-memory and sync SQLite                  |
-| `useAsyncDispatch()`     | `(action) => Promise<TReturn>` | `HybridDB`, IndexedDB, async SQLite        |
-| `useDispatch()`          | `(action) => TReturn`          | in-memory and sync SQLite                  |
-| `useAsyncSelect()`       | `(gen) => Promise<TReturn>`    | one-off read, async runtimes               |
-| `useSelect()`            | `(gen) => TReturn`             | one-off read, sync runtimes                |
+| Hook                     | Returns                        | Use with                            |
+| ------------------------ | ------------------------------ | ----------------------------------- |
+| `useDB()`                | the `SubscribableDB`           | accessing the DB directly           |
+| `useAsyncSelector(opts)` | query-style result object      | `HybridDB`, IndexedDB, async SQLite |
+| `useSyncSelector(opts)`  | the selector result            | in-memory and sync SQLite           |
+| `useAsyncDispatch()`     | `(action) => Promise<TReturn>` | `HybridDB`, IndexedDB, async SQLite |
+| `useDispatch()`          | `(action) => TReturn`          | in-memory and sync SQLite           |
+| `useAsyncSelect()`       | `(gen) => Promise<TReturn>`    | one-off read, async runtimes        |
+| `useSelect()`            | `(gen) => TReturn`             | one-off read, sync runtimes         |
