@@ -8,7 +8,8 @@ sidebar:
 You change data through actions, generator functions that may both read and
 write. Writes are expressed as the mutation commands `insert`, `upsert`, and
 `deleteRows`. An action is executed by dispatching it, which runs the whole
-action inside a single transaction.
+action inside a single transaction. Actions compose like ordinary code: they can
+call selectors, issue writes, call other actions, then read again.
 
 ## Defining an action
 
@@ -31,8 +32,54 @@ export const createTask = action({
 Object-form actions accept `name`, `args`, `handler`, and `skipTrace`. As with
 selectors, you can also wrap a bare generator function.
 
-Actions may read with `selectFrom` (or by calling selectors) before they write.
+Actions may read with `selectFrom` or by calling selectors before they write.
 Read-modify-write within the same transaction is the common pattern.
+
+## Composing actions
+
+Use `yield*` to compose selectors and actions. Nested actions run inside the
+same transaction as their parent action, so the whole workflow commits or rolls
+back together.
+
+```ts
+import { selectFrom, upsert, v } from "@will-be-done/hyperdb";
+import { selector, action } from "./builders";
+import { tasksTable } from "./schema";
+
+export const taskById = selector({
+  name: "taskById",
+  args: { id: v.string() },
+  handler: function* ({ id }) {
+    return yield* selectFrom(tasksTable, "byId")
+      .where((q) => q.eq("id", id))
+      .first();
+  },
+});
+
+export const markTaskDone = action({
+  name: "markTaskDone",
+  args: { id: v.string() },
+  handler: function* ({ id }) {
+    const task = yield* taskById({ id }); // selector in action
+    if (!task) return;
+
+    yield* upsert(tasksTable, [{ ...task, state: "done" }]);
+  },
+});
+
+export const completeAndMoveTask = action({
+  name: "completeAndMoveTask",
+  args: { id: v.string(), toProject: v.string(), orderToken: v.string() },
+  handler: function* ({ id, toProject, orderToken }) {
+    yield* markTaskDone({ id }); // action in action
+
+    const task = yield* taskById({ id });
+    if (!task) return;
+
+    yield* upsert(tasksTable, [{ ...task, projectId: toProject, orderToken }]);
+  },
+});
+```
 
 ## The mutations
 
@@ -41,11 +88,10 @@ Read-modify-write within the same transaction is the common pattern.
 Adds new rows. Fails if any `id` already exists.
 
 ```ts
-yield *
-  insert(tasksTable, [
-    { id: "t1", projectId: "p1", title: "A", state: "todo", orderToken: "a" },
-    { id: "t2", projectId: "p1", title: "B", state: "todo", orderToken: "b" },
-  ]);
+yield* insert(tasksTable, [
+  { id: "t1", projectId: "p1", title: "A", state: "todo", orderToken: "a" },
+  { id: "t2", projectId: "p1", title: "B", state: "todo", orderToken: "b" },
+]);
 ```
 
 ### `upsert`
@@ -54,13 +100,12 @@ Inserts or replaces the whole row by `id`. There is no partial update, so pass
 the complete row. To change one field, read the current row first and spread it:
 
 ```ts
-const current =
-  yield *
-  selectFrom(tasksTable, "byId")
-    .where((q) => q.eq("id", id))
-    .first();
+const current = yield* selectFrom(tasksTable, "byId")
+  .where((q) => q.eq("id", id))
+  .first();
+
 if (current) {
-  yield * upsert(tasksTable, [{ ...current, state: "done" }]);
+  yield* upsert(tasksTable, [{ ...current, state: "done" }]);
 }
 ```
 
@@ -73,14 +118,14 @@ Deletes rows by `id`. Ids that don't exist are ignored, so deleting is
 idempotent.
 
 ```ts
-yield * deleteRows(tasksTable, ["t1", "t2"]);
+yield* deleteRows(tasksTable, ["t1", "t2"]);
 ```
 
 ## Dispatching actions
 
 Dispatching runs an action in a transaction: if the handler throws, the
 transaction rolls back and nothing is written. Use the variant that matches your
-driver.
+runtime.
 
 ```ts
 import { syncDispatch, asyncDispatch } from "@will-be-done/hyperdb";
@@ -88,7 +133,7 @@ import { syncDispatch, asyncDispatch } from "@will-be-done/hyperdb";
 // synchronous drivers (in-memory, sync SQLite)
 syncDispatch(db, createTask({ id: "t1", projectId: "p1", title: "Ship" }));
 
-// asynchronous drivers (IndexedDB, async SQLite)
+// asynchronous runtimes (IndexedDB, async SQLite, HybridDB)
 await asyncDispatch(
   db,
   createTask({ id: "t1", projectId: "p1", title: "Ship" }),
@@ -97,6 +142,11 @@ await asyncDispatch(
 
 Inside React use [`useDispatch` / `useAsyncDispatch`](/integrations/react/), which
 bind the dispatcher to the database from context.
+
+With `HybridDB`, use the async dispatch path. Writes update the in-memory cache
+first so subscribers and React can respond immediately, then flush to the
+primary store in order. See [`HybridDB`](/runtime/db/#hybriddb) for the
+persistence and crash-handling details.
 
 ## Selectors can't write
 
@@ -108,7 +158,8 @@ makes selector caching safe.
 ## Transactions
 
 Every dispatch is atomic. A single action can perform many reads and writes
-across multiple tables; they all commit together or not at all.
+across multiple tables, including reads through selectors and writes from nested
+actions; they all commit together or not at all.
 
 ```ts
 export const moveTask = action({

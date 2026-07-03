@@ -5,15 +5,19 @@ sidebar:
   order: 1
 ---
 
-A schema describes the shape of your rows and the indexes you can query
-by. Schemas are defined with `defineTable` and the `v` validator library, and
-they also act as the source of truth for TypeScript types.
+A schema describes two things: the shape of your rows and the indexes your code
+can read through. Schemas are defined with `defineTable` and the `v` validator
+library, and they also act as the source of truth for TypeScript types.
+
+Indexes are part of the public data model. Selectors later name an index
+explicitly with `selectFrom(table, "indexName")`, so the schema is where you
+decide which access paths your application has.
 
 ## Defining a table
 
 Every table has a name and a set of fields. A table must have a string `id`
 field. HyperDB automatically creates a built-in unique hash index named `byId`
-on `id`.
+on `id`; declare the other indexes your selectors will read through.
 
 ```ts
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
@@ -29,7 +33,8 @@ export const tasksTable = defineTable("tasks", {
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
   .index("byTitle", ["title"], { type: "hash" })
-  .index("bySlug", ["slug"], { type: "uniqhash" });
+  .index("bySlug", ["slug"], { type: "uniqhash" })
+  .index("byIds", ["id"]);
 
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
@@ -51,6 +56,11 @@ type Task = {
 Tables are plain descriptions. They don't store data and aren't bound to any
 database, so you can import the same table into multiple `DB` instances. You make
 a table usable on a database by calling [`loadTables`](/runtime/db/).
+
+`byId` and `byIds` are intentionally different in this example. The built-in
+`byId` index is a `uniqhash` for exact id lookups. The explicit `byIds` index is
+a B-tree over `id`, useful when you need ordered full-table scans, for example
+with `preloadTables` on a `HybridDB`.
 
 ## Validators
 
@@ -121,9 +131,10 @@ collects that field's validator across every variant that declares it.
 
 ## Indexes
 
-Indexes are declared with `.index(name, columns, options?)` and are what make
-queries fast. Each `.index(...)` call returns a new table definition, so you can
-chain them.
+Indexes are declared with `.index(name, columns, options?)`. They are what make
+queries fast, and they make query execution explicit: a selector chooses one
+index, then builds equality or range bounds over that index. Each `.index(...)`
+call returns a new table definition, so you can chain them.
 
 ```ts
 defineTable("tasks", {
@@ -131,7 +142,8 @@ defineTable("tasks", {
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // btree (default)
   .index("byTitle", ["title"], { type: "hash" }) // non-unique hash
-  .index("bySlug", ["slug"], { type: "uniqhash" }); // unique hash
+  .index("bySlug", ["slug"], { type: "uniqhash" }) // unique hash
+  .index("byIds", ["id"]); // btree full-table scan
 ```
 
 - `btree` (the default) supports equality _and_ range queries, ordering, and
@@ -151,6 +163,29 @@ Index columns must:
 Invalid index definitions throw at `defineTable` time, so mistakes surface
 immediately. For how composite indexes are queried, see
 [Indexes](/database/indexes/).
+
+## Choosing indexes
+
+Start from the reads your app needs:
+
+- Exact lookup by id: use the built-in `byId`.
+- Ordered list inside a parent: use a B-tree such as
+  `["projectId", "orderToken"]`.
+- Exact lookup by a non-unique field: use `hash`.
+- Exact lookup by a unique field such as a slug: use `uniqhash`.
+- Whole-table preload or ordered full scan: add a B-tree full-scan index such as
+  `["id"]`.
+
+For composite B-tree indexes, put equality columns first and the ordered or
+range column last. A selector over `["projectId", "orderToken"]` can read one
+project in order without scanning every task.
+
+## Runtime validation
+
+Validators give you TypeScript types and normalize values before they reach
+storage. In development, pass `runtimeRowsValidation: true` to `DB` to validate
+full rows on writes and on reads from the driver. That is useful when data may
+come from older versions, imports, sync, or external storage.
 
 ## The `undefined` rule
 

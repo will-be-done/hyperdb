@@ -1146,3 +1146,10 @@ export async function selectAsync<TReturn>(
 ): Promise<TReturn> {
   return runSelectorAsync(db, () => gen, []);
 }
+
+export function selectMaybeAsync<TReturn>(
+  db: HyperDB,
+  gen: Generator<unknown, TReturn, unknown>,
+): Promise<TReturn> | TReturn {
+  return runSelectorMaybeAsync(db, () => gen, []);
+}

@@ -10,16 +10,31 @@ selector results and re-runs them precisely: only when a mutation touches a rang
 the selector actually read. This page explains the model and the knobs you can
 turn.
 
+Selectors are ordinary generator code, so they can call other selectors, branch,
+loop, and use shared helpers. Reactivity still comes from the indexed reads they
+perform: every `selectFrom(...)` scan contributes ranges to the selector run.
+
 ## Range tracking
 
-When a selector runs, the runtime records every index range it scans. The result
-is cached together with those ranges. When an action commits, the
-[`SubscribableDB`](/runtime/db/) notifies subscribers with the rows that changed.
-A cached selector re-runs only if a changed row falls inside one of the
-ranges it previously scanned; otherwise the cached value is reused untouched.
+When a selector runs, the runtime records every index range it scans: table,
+index, and bounds. If the selector calls child selectors, their scanned ranges
+are part of the same dependency tree. The result is cached together with those
+ranges.
+
+When an action commits, the [`SubscribableDB`](/runtime/db/) notifies subscribers
+with the rows that changed. A cached selector re-runs only if a changed row falls
+inside one of the ranges it previously scanned; otherwise the cached value is
+reused untouched.
 
 This means a selector that reads `projectId = "p1"` is unaffected by a write to
 `projectId = "p2"`, automatically. You never write invalidation logic.
+For inserts, HyperDB checks the new row. For deletes, it checks the old row. For
+upserts, it checks both old and new rows, so moving a row from one indexed range
+to another invalidates both affected reads.
+
+With `HybridDB`, a scan may be served from the in-memory cache or may fall
+through to the primary store on a missing range. Reactivity tracks the logical
+index range either way, independent of which storage tier returned the rows.
 
 ## Caching a selector
 
@@ -43,6 +58,20 @@ The cache is keyed by the database, the selector identity, and a stable
 serialization of the args. Argument key order doesn't matter:
 `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` resolve to the same cache entry.
 
+## Caching layers
+
+Cached selector reads always use the selector cache. If the runtime is
+`HybridDB`, there is also an in-memory cache for rows and index ranges.
+
+- The selector cache stores the result of running selector logic for one selector
+  identity and one args object. This matters when the selector does more than a
+  single scan: it may compose other selectors, branch, map rows, or build a
+  derived result.
+- The HybridDB in-memory cache stores rows and covered index ranges. This matters
+  when selector args change: another selector run may not reuse the exact
+  selector result, but it can still read already-loaded ranges from memory
+  instead of going back to IndexedDB or SQLite.
+
 ## Preloading a selector
 
 `preloadSelector` runs a selector through the root selector cache without
@@ -55,18 +84,21 @@ import { preloadSelector } from "@will-be-done/hyperdb";
 await preloadSelector(db, projectTasks, { projectId: "p1" });
 ```
 
-Preloaded entries stay range-aware while they remain in the selector cache. If a
-later mutation misses the ranges the selector read, another preload with the same
-args reuses the cached result even though the DB revision changed. If a mutation
-does touch those ranges and nothing is subscribed, the entry is marked stale and
-re-runs lazily on the next preload or cached selector read.
+Preloading is execution-based, not static analysis. HyperDB runs the selector
+with the current args and current data, so it warms the ranges that this run
+actually touches. If the selector branches on loaded data, a different branch may
+read different ranges later.
 
-With a `SubscribableDB(new HybridDB(primary, cache))`, the preload does two
-things: it runs the selector against the HybridDB so missing persistent ranges
-are loaded into the in-memory cache, then it primes the in-memory selector cache
-entry. A later `useAsyncSelector` with the same selector identity and args can
-reuse that warmed entry when its async run starts, without doing a synchronous
-cache read during render.
+After preloading, the selector result can be reused by a later read with the same
+selector and args. If a later mutation touches a range the selector read,
+HyperDB will refresh it on the next preload or cached read.
+
+With a `SubscribableDB(new HybridDB(primary, cache))`, the preload warms two
+layers. First, HybridDB loads any missing index ranges from the primary store
+into its in-memory cache. Then the selector result and its read ranges are
+stored in the selector cache. A later `useAsyncSelector` with the same selector
+identity and args can reuse that warmed entry when its async run starts, without
+doing a synchronous cache read during render.
 
 ```ts
 const categories = await preloadSelector(db, projectCategoriesByProjectId, {
@@ -89,7 +121,7 @@ different entries.
 ## Garbage collection
 
 When the last subscriber of a cache entry unsubscribes, the entry is retained for
-`gcTime` milliseconds (default 30000) before being dropped. This lets a value
+`gcTime` milliseconds (default `30_000`) before being dropped. This lets a value
 survive brief gaps, such as a component unmounting and remounting, without
 recomputing. While retained, the entry remains subscribed to DB changes so
 non-overlapping mutations can advance its revision without a re-run, and
@@ -145,6 +177,11 @@ memoization: {
 }
 ```
 
+This is separate from root caching. `root` controls whether top-level reads
+share a subscribed cache entry by selector args. `selfChild` controls whether a
+nested selector can reuse its own previous subtree while a parent selector
+re-runs.
+
 ## Subscriptions and revisions
 
 Under the hood, a `SubscribableDB` keeps a monotonically increasing revision
@@ -162,9 +199,14 @@ const unsub = db.subscribe((ops, traits, revision) => {
 
 ## Practical guidance
 
-- Default to the defaults. Root memoization on, `selfChild` off, `gcTime` 3000. This is right for most selectors.
+- Default to the defaults. Root memoization on, `selfChild` off, `gcTime` 30_000.
+  This is right for most selectors.
 - Keep args minimal and serializable. They form the cache key. Avoid passing
   large or unstable objects.
+- Prefer indexed reads over filtering large arrays in selector code. Reactivity
+  is precise when the runtime can see the range you read.
+- Use `preloadSelector` when you know the exact selector args a screen will
+  render. Use `preloadTables` on `HybridDB` when an entire table should be warm.
 - Reach for `selfChild` only when profiling (or the [devtool](/integrations/devtools/))
   shows an expensive nested selector recomputing needlessly.
 - Reach for `root: false` for one-off selectors you don't want sharing a

@@ -10,6 +10,11 @@ read. Inside a selector you build queries with `selectFrom` and `yield*` them.
 Selectors can call other selectors but can never write; the runtime rejects any
 mutation emitted from a read.
 
+Every read starts from a named index. That makes the access path explicit in
+your application code: `selectFrom(tasksTable, "byProjectOrder")` means "scan
+this table through this index", then `.where(...)`, `.order(...)`, and
+`.limit(...)` describe the bounds and result shape.
+
 ## A first selector
 
 ```ts
@@ -43,7 +48,9 @@ You can also wrap a bare generator function instead of using the object form.
 ## The query builder
 
 `selectFrom(table, indexName)` returns a builder. You always query through an
-index. The builder is immutable: each method returns a new builder.
+index. The builder is immutable: each method returns a new builder. With
+`HybridDB`, the same indexed read checks the in-memory cache first; missing
+ranges fall through to the primary store and are cached for later reads.
 
 ```ts
 selectFrom(tasksTable, "byProjectOrder")
@@ -174,18 +181,34 @@ export const projectTasks = selector({
   },
 });
 
+const projectDoneTasks = selector({
+  name: "projectDoneTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectState").where((q) =>
+      q.eq("projectId", projectId).eq("state", "done"),
+    );
+  },
+});
+
 const projectSummary = selector({
   name: "projectSummary",
   args: { projectId: v.string() },
   handler: function* ({ projectId }) {
     const tasks = yield* projectTasks({ projectId });
+    const doneTasks = yield* projectDoneTasks({ projectId });
     return {
       total: tasks.length,
-      done: tasks.filter((t) => t.state === "done").length,
+      done: doneTasks.length,
     };
   },
 });
 ```
+
+In that example, `projectDoneTasks` should use an index such as
+`byProjectState = ["projectId", "state"]` instead of filtering the full project
+list in JavaScript. Composition keeps code ergonomic, but each selector should
+still choose the index that matches the data it needs.
 
 ## Running selectors
 
@@ -198,9 +221,76 @@ import { select, selectAsync } from "@will-be-done/hyperdb";
 // synchronous drivers (in-memory, sync SQLite)
 const tasks = select(db, projectTasks({ projectId: "p1" }));
 
-// asynchronous drivers (IndexedDB, async SQLite)
+// asynchronous drivers (IndexedDB, async SQLite, HybridDB)
 const tasksAsync = await selectAsync(db, projectTasks({ projectId: "p1" }));
 ```
 
 For cached, subscribed reads outside React, see
 [`initCachedSelector`](/database/selectors-reactivity/#caching-a-selector).
+
+### Lower-level runner helpers
+
+`select` and `selectAsync` are the everyday helpers. HyperDB also exports
+lower-level selector runners from `@will-be-done/hyperdb` for integrations,
+custom stores, and cache bridges:
+
+| Helper                         | Use                                                                 |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `runSelector`                  | Run a selector generator factory synchronously and collect ranges    |
+| `runSelectorAsync`             | Async version for IndexedDB, async SQLite, and HybridDB              |
+| `runSelectorMaybeAsync`        | Return a value or a `Promise`, depending on whether execution yields |
+| `initSelector`                 | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
+| `initCachedSelector`           | Create a sync subscribed store backed by the root selector cache     |
+| `runCachedSelectorMaybeAsync` | Run or reuse the root selector cache, returning value or `Promise`   |
+
+`runSelector`, `runSelectorAsync`, and `runSelectorMaybeAsync` take a generator
+factory, not a generator instance. They also accept a mutable range array that
+the runtime fills with the index ranges read by that run:
+
+```ts
+import { runSelectorAsync } from "@will-be-done/hyperdb";
+
+const ranges = [];
+const tasks = await runSelectorAsync(
+  db,
+  () => projectTasks({ projectId: "p1" }),
+  ranges,
+);
+```
+
+Use `initSelector` when you want a small synchronous external store for one
+selector run:
+
+```ts
+import { initSelector } from "@will-be-done/hyperdb";
+
+const store = initSelector(db, () => projectTasks({ projectId: "p1" }));
+const unsubscribe = store.subscribe(() => {
+  console.log(store.getSnapshot());
+});
+```
+
+Use `initCachedSelector` when you want the same store shape but backed by the
+root selector cache, so repeated calls for the same selector and args can reuse
+the cached result:
+
+```ts
+import { initCachedSelector } from "@will-be-done/hyperdb";
+
+const cached = initCachedSelector(db, projectTasks, { projectId: "p1" });
+cached.refresh();
+```
+
+For async cache-aware code, use `runCachedSelectorMaybeAsync`. This is the
+primitive used by async React reads and preload flows: it reuses a cached result
+when possible, and returns a `Promise` when the selector has to fall through to
+async storage.
+
+```ts
+import { runCachedSelectorMaybeAsync } from "@will-be-done/hyperdb";
+
+const tasksOrPromise = runCachedSelectorMaybeAsync(db, projectTasks, {
+  projectId: "p1",
+});
+const tasks = await Promise.resolve(tasksOrPromise);
+```
