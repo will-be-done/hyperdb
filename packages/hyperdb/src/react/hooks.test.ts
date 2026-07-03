@@ -5,9 +5,10 @@ import {
   useSyncSelector,
 } from "./hooks";
 
-type Subscriber = (ops: unknown[]) => void;
+type Subscriber = (ops: unknown[], traits: unknown[], revision: number) => void;
 type MockDB = {
   subscribe: (cb: Subscriber) => () => void;
+  getRevision: () => number;
   emit(ops: unknown[]): void;
   subscriberCount(): number;
 };
@@ -61,6 +62,7 @@ async function flushPromises() {
 
 function createMockDB() {
   const subscribers: Subscriber[] = [];
+  let revision = 0;
 
   return {
     subscribe: vi.fn((cb: Subscriber) => {
@@ -73,9 +75,11 @@ function createMockDB() {
         }
       };
     }),
+    getRevision: vi.fn(() => revision),
     emit(ops: unknown[]) {
+      revision++;
       for (const subscriber of [...subscribers]) {
-        subscriber(ops);
+        subscriber(ops, [], revision);
       }
     },
     subscriberCount() {
@@ -319,7 +323,7 @@ describe("useAsyncSelector", () => {
 
     await flushPromises();
 
-    expect(cmd).toEqual({ table: "tasks", range: "hybrid" });
+    expect(mocks.refs[2].current).toEqual([cmd]);
     expect(mocks.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({
         data: ["fresh"],
@@ -370,6 +374,59 @@ describe("useAsyncSelector", () => {
     expect(mocks.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({ data: ["fresh"], status: "success" }),
     );
+  });
+
+  it("reruns when the DB revision changes before the initial async run is consumed", async () => {
+    const stale = deferred<string[]>();
+    const fresh = deferred<string[]>();
+    const staleCmd = { table: "tasks", range: "stale" };
+    const freshCmd = { table: "tasks", range: "fresh" };
+    let runCount = 0;
+
+    mocks.runSelectorMaybeAsync.mockImplementation(
+      (_db, _gen, cmds: unknown[]) => {
+        runCount++;
+
+        if (runCount === 1) {
+          cmds.push(staleCmd);
+          mocks.db.emit([{ id: "between-render-and-effect" }]);
+          return stale.promise;
+        }
+
+        cmds.push(freshCmd);
+        return fresh.promise;
+      },
+    );
+
+    useAsyncSelector({
+      selector: function* selector() {
+        return ["unused"];
+      },
+      args: {},
+      defaultValue: [],
+    });
+
+    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
+
+    stale.resolve(["stale"]);
+    await flushPromises();
+
+    expect(mocks.setState).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["stale"],
+      }),
+    );
+
+    fresh.resolve(["fresh"]);
+    await flushPromises();
+
+    expect(mocks.setState).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: ["fresh"],
+        status: "success",
+      }),
+    );
+    expect(mocks.refs[2].current).toEqual([freshCmd]);
   });
 
   it("ignores a late HybridDB preload after args change cleanup", async () => {

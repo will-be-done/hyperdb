@@ -155,9 +155,14 @@ type AsyncSelectorValueSnapshot<TData> =
   | { hasValue: true; value: TData };
 
 type AsyncSelectorInitialRun<TData> =
-  | { status: "sync"; value: TData; cmds: SelectRangeCmd[] }
-  | { status: "async"; promise: PromiseLike<TData>; cmds: SelectRangeCmd[] }
-  | { status: "error"; error: unknown };
+  | { status: "sync"; value: TData; cmds: SelectRangeCmd[]; revision: number }
+  | {
+      status: "async";
+      promise: Promise<TData>;
+      cmds: SelectRangeCmd[];
+      revision: number;
+    }
+  | { status: "error"; error: unknown; revision: number };
 
 type AsyncSelectorValueSnapshotStore<TData> = {
   getSnapshot: () => AsyncSelectorValueSnapshot<TData>;
@@ -477,6 +482,7 @@ export function useAsyncSelector<
         }
 
         const cmds: SelectRangeCmd[] = [];
+        const revision = db.getRevision();
 
         try {
           const value = hybridCacheDB
@@ -492,11 +498,16 @@ export function useAsyncSelector<
                 cmds,
               );
 
-          return isPromiseLike(value)
-            ? { status: "async", promise: value, cmds }
-            : { status: "sync", value, cmds };
+          if (isPromiseLike(value)) {
+            const promise = Promise.resolve(value);
+            promise.catch(() => undefined);
+
+            return { status: "async", promise, cmds, revision };
+          }
+
+          return { status: "sync", value, cmds, revision };
         } catch (error) {
-          return { status: "error", error };
+          return { status: "error", error, revision };
         }
       },
     });
@@ -699,11 +710,18 @@ export function useAsyncSelector<
             do {
               rerunRequestedRef.current = false;
               const cmds: SelectRangeCmd[] = [];
-              const currentInitialRun = initialRun;
+              let currentInitialRun = initialRun;
               initialRun = undefined;
               let value:
                 | SelectorReturn<TSelector>
                 | PromiseLike<SelectorReturn<TSelector>>;
+
+              if (
+                currentInitialRun &&
+                currentInitialRun.revision !== db.getRevision()
+              ) {
+                currentInitialRun = undefined;
+              }
 
               if (currentInitialRun) {
                 if (currentInitialRun.status === "error") {
@@ -790,8 +808,6 @@ export function useAsyncSelector<
       return;
     }
 
-    void run();
-
     const unsubscribe = db.subscribe((ops) => {
       if (isRunningRef.current) {
         rerunRequestedRef.current = true;
@@ -808,6 +824,8 @@ export function useAsyncSelector<
 
       void run();
     });
+
+    void run();
 
     return () => {
       cancelledRef.current = true;
