@@ -54,3 +54,4 @@ DB:
 7. In-mem tx for fast action
 8. k-way indexxedb OR merging
 9. Multibe column support in db index
+10. Rename useSelect => useSyncSelect, useDispatch => useSyncDispatch

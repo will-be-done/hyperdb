@@ -86,7 +86,7 @@ npm install @will-be-done/hyperdb-devtool
 ## Quick start
 
 ```ts
-// 1. Define a typed table (id + a queryable index)
+// 1. Define a typed table (id + query indexes)
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
@@ -147,14 +147,14 @@ When combined with `.order(...)`, those branches are merged into the index order
 before rows are returned.
 
 ```ts
-// 4. Create a HybridDB (persistent primary + in-memory cache)
+// 4. Create a HybridDB (IndexedDB primary + in-memory cache)
 import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
 import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
 export async function createAppDB() {
-  const primary = new DB(await openIndexedDBDriver("my-app"), {
+  const primary = new DB(await openIndexedDBDriver("task-app"), {
     runtimeRowsValidation: process.env.NODE_ENV === "development",
     freezeArgs: process.env.NODE_ENV === "development",
     freezeRows: process.env.NODE_ENV === "development",
@@ -172,6 +172,11 @@ export async function createAppDB() {
   return db;
 }
 ```
+
+If your whole app state can be loaded into memory at startup, you may not need
+`HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
+reads and writes synchronous, so you can use `useSyncSelector`, `useDispatch`,
+`select`, and `syncDispatch` without promise or cache-miss tradeoffs.
 
 `SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`

@@ -22,6 +22,8 @@ npm install @will-be-done/hyperdb-devtool
 
 A table needs a string `id`. HyperDB automatically adds a unique hash index
 named `byId`; declare any additional indexes you want to query by.
+The `byIds` index below is a B-tree full-table scan index used by the optional
+HybridDB preload step.
 
 ```ts
 // schema.ts
@@ -33,7 +35,9 @@ export const tasksTable = defineTable("tasks", {
   title: v.string(),
   state: v.union(v.literal("todo"), v.literal("done")),
   orderToken: v.string(),
-}).index("byProjectOrder", ["projectId", "orderToken"]);
+})
+  .index("byProjectOrder", ["projectId", "orderToken"])
+  .index("byIds", ["id"]);
 
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
@@ -87,70 +91,90 @@ export const createTask = action({
 
 ## 5. Create a database
 
-For local, ephemeral data the in-memory driver is the simplest choice. Wrap the
-core `DB` in a `SubscribableDB` so selectors can react to changes.
+For a browser app, create a `HybridDB` with IndexedDB as the primary store and
+an in-memory B-tree cache for hot index ranges. Wrap it in a `SubscribableDB` so
+selectors can react to changes.
 
 ```ts
 // db.ts
-import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
+import { DB, HybridDB, SubscribableDB, execAsync } from "@will-be-done/hyperdb";
+import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 import { BptreeInmemDriver } from "@will-be-done/hyperdb/drivers/inmemory";
 import { tasksTable } from "./schema";
 
-const baseDb = new DB(new BptreeInmemDriver(), {
-  runtimeRowsValidation: process.env.NODE_ENV === "development",
-  freezeArgs: process.env.NODE_ENV === "development",
-  freezeRows: process.env.NODE_ENV === "development",
-});
-export const db = new SubscribableDB(baseDb);
+export async function createAppDB() {
+  const primary = new DB(await openIndexedDBDriver("task-app"), {
+    runtimeRowsValidation: process.env.NODE_ENV === "development",
+    freezeArgs: process.env.NODE_ENV === "development",
+    freezeRows: process.env.NODE_ENV === "development",
+  });
+  const cache = new DB(new BptreeInmemDriver());
+  const db = new SubscribableDB(new HybridDB(primary, cache));
 
-// Or execAsync() for async driver
-execSync(db.loadTables([tasksTable]));
+  await execAsync(db.loadTables([tasksTable]));
+
+  // Optional: warm the cache with the whole table so future reads can stay in memory.
+  // await execAsync(
+  //   db.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+  // );
+
+  return db;
+}
 ```
+
+If your whole app state can be loaded into memory at startup, you may not need
+`HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
+reads and writes synchronous, so you can use `useSyncSelector`,
+`useDispatch`, `select`, and `syncDispatch` without promise or cache-miss
+tradeoffs.
 
 ## 6. Read and write outside React
 
 ```ts
-import { syncDispatch, select } from "@will-be-done/hyperdb";
-import { db } from "./db";
+import { asyncDispatch, selectAsync } from "@will-be-done/hyperdb";
+import { createAppDB } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
-syncDispatch(
+const db = await createAppDB();
+
+await asyncDispatch(
   db,
   createTask({ id: "task-1", projectId: "p1", title: "Ship it" }),
 );
 
-const tasks = select(db, projectTasks({ projectId: "p1" }));
+const tasks = await selectAsync(db, projectTasks({ projectId: "p1" }));
 console.log(tasks); // [{ id: "task-1", ... }]
 ```
 
 ## 7. Use it in React
 
-Provide the database through `DBProvider`, then read with `useSyncSelector` and
-write with `useDispatch`.
+Provide the database through `DBProvider`, then read with `useAsyncSelector` and
+write with `useAsyncDispatch`.
 
 ```tsx
 import {
   DBProvider,
-  useSyncSelector,
-  useDispatch,
+  useAsyncSelector,
+  useAsyncDispatch,
 } from "@will-be-done/hyperdb/react";
+import type { SubscribableDB } from "@will-be-done/hyperdb";
 import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
-import { db } from "./db";
 import { createTask, projectTasks } from "./tasks";
 
 function Tasks({ projectId }: { projectId: string }) {
-  const tasks = useSyncSelector({
+  const { data: tasks = [], isFetching } = useAsyncSelector({
     selector: projectTasks,
     args: { projectId },
     defaultValue: [],
   });
-  const dispatch = useDispatch();
+  const dispatch = useAsyncDispatch();
 
   return (
     <>
       <button
+        disabled={isFetching}
         onClick={() =>
-          dispatch(
+          void dispatch(
             createTask({
               id: crypto.randomUUID(),
               projectId,
@@ -170,7 +194,7 @@ function Tasks({ projectId }: { projectId: string }) {
   );
 }
 
-export function App() {
+export function App({ db }: { db: SubscribableDB }) {
   return (
     <DBProvider value={db}>
       <Tasks projectId="p1" />
@@ -183,9 +207,9 @@ export function App() {
 The list re-renders automatically whenever a `createTask` (or any mutation
 touching the queried range) commits.
 
-For async drivers, use `useAsyncSelector` instead. It keeps the same
-`selector`/`args` input and returns a React Query-style object with `data`,
-`status`, `error`, fetching flags, and `refetch()`.
+`useAsyncSelector` returns `data`, `status`, `error`, fetching flags, and
+`refetch()`. Cached results stay visible while HybridDB loads missing ranges
+from the primary store.
 
 ## Where to next
 

@@ -26,7 +26,9 @@ export const tasksTable = defineTable("tasks", {
   title: v.string(),
   state: v.union(v.literal("todo"), v.literal("done")),
   orderToken: v.string(),
-}).index("byProjectOrder", ["projectId", "orderToken"]);
+})
+  .index("byProjectOrder", ["projectId", "orderToken"])
+  .index("byProjectState", ["projectId", "state"]);
 
 export type Task = ExtractSchema<typeof tasksTable>;
 ```
@@ -41,7 +43,7 @@ a command; you never call the storage driver yourself.
 
 - Selectors read data. They can compose other selectors but cannot write.
 - Actions read and write data. They emit `insert`, `upsert`, and
-  `deleteRows` commands.
+  `deleteRows` commands, and can call selectors or other actions.
 
 ```ts
 import { selectFrom } from "@will-be-done/hyperdb";
@@ -58,6 +60,16 @@ export const projectTasks = selector({
   },
 });
 
+export const projectDoneTasks = selector({
+  name: "projectDoneTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectState").where((q) =>
+      q.eq("projectId", projectId).eq("state", "done"),
+    );
+  },
+});
+
 export const createTask = action({
   name: "createTask",
   args: { id: v.string(), projectId: v.string(), title: v.string() },
@@ -70,14 +82,47 @@ export const createTask = action({
 ```
 
 Because commands are _descriptions_, the same selector or action can be executed
-synchronously against an in-memory driver, or asynchronously against IndexedDB,
-and the code does not change. See [Reading Data](/database/reading-data/) and
-[Writing Data](/database/writing-data/).
+synchronously against an in-memory driver, asynchronously against IndexedDB or
+async SQLite, or through a `HybridDB` that reads from memory first and falls
+through to a primary store on cache misses. The code does not change. See
+[Reading Data](/database/reading-data/) and [Writing Data](/database/writing-data/).
+
+Commands also compose with normal `yield*` calls. A selector can call another
+selector, an action can read through selectors, and a larger action can call
+smaller actions inside the same transaction:
+
+```ts
+const projectSummary = selector({
+  name: "projectSummary",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    const tasks = yield* projectTasks({ projectId }); // selector in selector
+    const doneTasks = yield* projectDoneTasks({ projectId }); // indexed read
+    return {
+      total: tasks.length,
+      done: doneTasks.length,
+    };
+  },
+});
+
+const completeTask = action({
+  name: "completeTask",
+  args: { id: v.string() },
+  handler: function* ({ id }) {
+    const task = yield* taskById({ id }); // selector in action
+    if (!task) return;
+
+    yield* markTaskDone({ id }); // action in action
+  },
+});
+```
 
 ### 3. The DB runtime
 
 A `DB` ties a set of tables to a storage driver and executes commands. The
 driver provides the actual backend: in-memory B+trees, SQLite, or IndexedDB.
+`HybridDB` is a runtime wrapper that combines two DBs: a primary persistent
+store and an in-memory B-tree cache.
 
 ```ts
 import { DB, SubscribableDB, execSync } from "@will-be-done/hyperdb";
@@ -99,34 +144,43 @@ import { Database } from "bun:sqlite";
 import { SqlDriver } from "@will-be-done/hyperdb/drivers/sqlite";
 
 const sqlite = new Database("app.sqlite", { strict: true });
-const serverDb = new DB(makeSqlDriver(sqlite)); // same tasksTable, same selectors
+const serverDb = new DB(new SqlDriver(sqlite)); // same tasksTable, same selectors
 execSync(serverDb.loadTables([tasksTable]));
 ```
 
 See [Storage Drivers](/runtime/drivers/#backend-native-sqlite) for the full
 adapter.
 
-## How a read becomes reactive
+## How a read executes and becomes reactive
 
-This is the loop that powers HyperDB's reactivity:
+This is the loop that powers HyperDB's reads and reactivity:
 
 1. You run a selector through the runtime (or a React hook).
-2. As the selector scans indexes, the runtime records which index ranges it
-   touched.
-3. The result is cached, keyed by the selector and a stable serialization of its
+2. The selector emits indexed reads with `selectFrom(table, "indexName")` and
+   explicit bounds. With an in-memory DB, those reads go straight to B-trees.
+   With `HybridDB`, each read checks the in-memory cache first; missing ranges
+   fall through to the primary store, then the returned rows and covered ranges
+   are cached for later reads.
+3. As the selector scans indexes, the runtime records which logical index ranges
+   it touched, regardless of whether rows came from memory or the primary store.
+4. The result is cached, keyed by the selector and a stable serialization of its
    arguments.
-4. When an action commits a mutation, the `SubscribableDB` notifies subscribers
+5. When an action commits a mutation, the `SubscribableDB` notifies subscribers
    with the list of changed rows.
-5. A cached selector re-runs only if a changed row falls inside a range it
+6. A cached selector re-runs only if a changed row falls inside a range it
    previously scanned. Otherwise the cached value is reused.
+
+The same mechanism gives the devtool useful traces: it can show which selector
+ran, which indexes it scanned, and whether HybridDB reads came from `in-mem` or
+`persist`.
 
 More details in [Selectors & Reactivity](/database/selectors-reactivity/).
 
 ## Sync vs. async execution
 
-Every driver is either synchronous (in-memory, sync SQLite) or asynchronous
-(IndexedDB, async SQLite). The runtime exposes a matching pair of entry points
-for almost everything:
+Every storage path is either synchronous (in-memory, sync SQLite) or
+asynchronous (IndexedDB, async SQLite, or `HybridDB` when a read misses memory).
+The runtime exposes a matching pair of entry points for almost everything:
 
 | Sync                              | Async                                   |
 | --------------------------------- | --------------------------------------- |
@@ -136,5 +190,6 @@ for almost everything:
 | `useSyncSelector` / `useDispatch` | `useAsyncSelector` / `useAsyncDispatch` |
 
 Use the sync variants with the in-memory and synchronous SQLite drivers; use the
-async variants with IndexedDB and async SQLite. See
+async variants with IndexedDB, async SQLite, and `HybridDB` (because a selector
+may miss the memory cache and read from the primary store). See
 [The DB Runtime](/runtime/db/) and [Storage Drivers](/runtime/drivers/).
