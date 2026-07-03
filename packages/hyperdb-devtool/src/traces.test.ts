@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { select } from "@will-be-done/hyperdb";
+import { selectSync } from "@will-be-done/hyperdb";
 import {
   createTraceFrameMeta,
   endTraceSuccess,
@@ -87,15 +87,15 @@ describe("devtool trace selectors", () => {
       }),
     );
 
-    const traces = select(
-      hyperDBTraceStore.getDB(),
-      traceStoreTraces({
+    const traces = selectSync(hyperDBTraceStore.getDB(), {
+      selector: traceStoreTraces,
+      args: {
         maxTraces: 2,
         kind: "action",
         sortField: "duration",
         sortDir: "desc",
-      }),
-    );
+      },
+    });
 
     expect(traces.map((item) => item.name)).toEqual(["action-1", "action-2"]);
   });
@@ -136,15 +136,15 @@ describe("devtool trace selectors", () => {
       }),
     );
 
-    const traces = select(
-      hyperDBTraceStore.getDB(),
-      traceStoreTraces({
+    const traces = selectSync(hyperDBTraceStore.getDB(), {
+      selector: traceStoreTraces,
+      args: {
         maxTraces: 3,
         kind: "all",
         sortField: "rowsFetched",
         sortDir: "desc",
-      }),
-    );
+      },
+    });
 
     expect(traces.map((item) => item.name)).toEqual([
       "large",
@@ -177,16 +177,16 @@ describe("devtool trace selectors", () => {
       trace({ id: "visible-2", name: "visible-2", durationMs: 70 }),
     );
 
-    const selection = select(
-      hyperDBTraceStore.getDB(),
-      traceStoreTraceSelection({
+    const selection = selectSync(hyperDBTraceStore.getDB(), {
+      selector: traceStoreTraceSelection,
+      args: {
         maxTraces: 2,
         kind: "all",
         skipCached: true,
         sortField: "duration",
         sortDir: "desc",
-      }),
-    );
+      },
+    });
 
     expect(selection.visibleTraces.map((item) => item.name)).toEqual([
       "visible-1",
@@ -197,15 +197,15 @@ describe("devtool trace selectors", () => {
   it("does not record trace-list selector reads as devtool traces", () => {
     hyperDBTraceStore.addTrace(trace({ id: "visible-1", name: "visible-1" }));
 
-    const traces = select(
-      hyperDBTraceStore.getDB(),
-      traceStoreTraces({
+    const traces = selectSync(hyperDBTraceStore.getDB(), {
+      selector: traceStoreTraces,
+      args: {
         maxTraces: 10,
         kind: "all",
         sortField: "created",
         sortDir: "desc",
-      }),
-    );
+      },
+    });
 
     expect(traces.map((item) => item.name)).toEqual(["visible-1"]);
   });
@@ -219,28 +219,28 @@ describe("devtool trace selectors", () => {
     endTraceSuccess(context);
 
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        traceStoreTraces({
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: traceStoreTraces,
+        args: {
           maxTraces: 10,
           kind: "all",
           sortField: "created",
           sortDir: "desc",
-        }),
-      ),
+        },
+      }),
     ).toEqual([]);
 
     hyperDBTraceStore.flushTraceCommits();
 
-    const traces = select(
-      hyperDBTraceStore.getDB(),
-      traceStoreTraces({
+    const traces = selectSync(hyperDBTraceStore.getDB(), {
+      selector: traceStoreTraces,
+      args: {
         maxTraces: 10,
         kind: "all",
         sortField: "created",
         sortDir: "desc",
-      }),
-    );
+      },
+    });
 
     expect(traces.map((item) => item.name)).toEqual(["committed-action"]);
     deactivateActivatedTraceStore();
@@ -252,15 +252,15 @@ describe("devtool trace selectors", () => {
     hyperDBTraceStore.clear();
 
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        traceStoreTraces({
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: traceStoreTraces,
+        args: {
           maxTraces: 10,
           kind: "all",
           sortField: "created",
           sortDir: "desc",
-        }),
-      ),
+        },
+      }),
     ).toEqual([]);
   });
 });
