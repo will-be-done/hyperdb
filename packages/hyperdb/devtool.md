@@ -1,238 +1,174 @@
-Implement a standalone HyperDB devtool under src/devtool.
+# HyperDB Devtool Notes
 
-Context:
-We want a TanStack-devtools-inspired debugging UI for HyperDB actions/selectors. Do not use decorators. Keep the existing wrapper style and rely on named generator functions for labels:
+The React devtool lives in `packages/hyperdb-devtool`. Core HyperDB owns the
+framework-agnostic tracing primitives under `packages/hyperdb/src/hyperdb/tracing`;
+the devtool package renders those traces with React and goober.
 
-export const test = action(function\* test() {
-// ...
-});
+This file is a maintenance note, not a product spec. Keep it aligned with the
+current implementation when tracing, runtime execution, or the devtool UI
+changes.
 
-export const getTasks = selector(function\* getTasks() {
-// ...
-});
+## Public API
 
-Do not use Tailwind. Use goober for all devtool styling.
+Install the devtool package separately:
 
-Architecture:
+```bash
+npm install @will-be-done/hyperdb-devtool
+```
 
-- Add src/devtool as a standalone devtool package area.
-- Add a package export "./devtool": "./src/devtool/index.ts".
-- Add a Vite lib entry named devtool pointing to src/devtool/index.ts.
-- Add goober as a dependency.
-- Export at least:
-  - HyperDBDevtools
-  - HyperDBDevtoolsPanel
-  - tracing/store types needed for tests or advanced users.
-- Do not make core HyperDB import React. Core/runtime/commands may import only framework-agnostic tracing primitives.
+Use the React entry point:
 
-Public React API:
+```tsx
+import { HyperDBDevtools } from "@will-be-done/hyperdb-devtool/react";
 
-- HyperDBDevtools props:
-  - db?: SubscribableDB; if omitted, prefer DBProvider context and then discover registered DBs from globalThis.\_\_hyperdb
-  - initialIsOpen?: boolean
-  - position?: "top" | "bottom" | "left" | "right", default "bottom"
-  - buttonPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right", default "bottom-right"
-  - maxTraces?: number, default 200
-  - theme?: "dark" | "light" | "system", default "system"
-- HyperDBDevtools should render:
-  - a fixed floating toggle button
-  - a docked panel when open
-  - left trace list
-  - right selected trace details
-  - clear traces button
-- Persist open/closed state in localStorage.
-- HyperDBDevtoolsPanel should render the panel without the floating button, for embedded use.
+<HyperDBDevtools db={db} />;
+```
 
-Database discovery:
+Exports from `@will-be-done/hyperdb-devtool/react`:
 
-- Raw DB construction registers app DB metadata in globalThis.\_\_hyperdb for no-prop devtool discovery.
-- SubscribableDB does not register separately; it shares the wrapped DB id for trace filtering.
-- Internal devtool/trace-store DBs must opt out of registration so they do not appear in the app DB selector.
+- `HyperDBDevtools`: floating button plus docked panel.
+- `HyperDBDevtoolsPanel`: embedded panel without the floating button.
+- tracing exports re-exported from `@will-be-done/hyperdb/tracing`.
 
-Tracing activation:
+`HyperDBDevtools` props:
 
-- Capture traces only while at least one devtool listener is mounted.
-- When no listener is mounted, tracing functions should return quickly and avoid storing data.
-- Keep only latest maxTraces root traces, default 200.
-- Root traces are top-level action/selector executions only.
-- If an action calls another action or selector, do not create another root trace. Attach it as a child frame under the active trace.
-- If a selector calls another selector, also attach as a child frame.
-- A top-level direct select through useSelect/useAsyncSelect should still become a root selector trace when it came from selector(...). If a raw generator without selector metadata is used, record it as an
-  anonymous root only if doing so is practical without breaking existing behavior.
+| Prop | Meaning |
+| ---- | ------- |
+| `db?: SubscribableDB` | Trace one DB explicitly. If omitted, the devtool tries `DBProvider` context and registered DB discovery. |
+| `initialIsOpen?: boolean` | Initial panel state before localStorage is read. |
+| `position?: "top" \| "bottom" \| "left" \| "right"` | Dock position, default `"bottom"`. |
+| `buttonPosition?: "top-left" \| "top-right" \| "bottom-left" \| "bottom-right"` | Floating button position, default `"bottom-right"`. |
+| `maxTraces?: number` | Visible/retained trace cap for the devtool view, default `200`. |
+| `theme?: "dark" \| "light" \| "system"` | Theme selection, default `"system"`. |
 
-Action/selector metadata:
+## Runtime Tracing
 
-- Update action(fn) so it still returns a callable function with the same public type behavior.
-- Returned generator instances should carry non-enumerable devtool metadata:
-  - kind: "action"
-  - name: fn.name || "anonymous action"
-  - args: original call arguments
-- Update selector(fn) similarly:
-  - kind: "selector"
-  - name: fn.name || "anonymous selector"
-  - args: original call arguments
-- Preserve current behavior for generator and non-generator selector functions.
-- Do not require devtoolName in v1.
-- Existing call sites like action(function* () {}) and selector(function* () {}) must keep working.
+Core tracing is intentionally React-free. Runtime and command code may import
+only framework-agnostic tracing primitives.
 
-Critical nesting problem:
+Tracing captures top-level action and selector executions as root traces:
 
-- JS yield\* hides the nested generator from runCommandGenerator because the parent generator delegates child yields directly.
-- Solve this by making action/selector wrappers annotate yielded commands with frame metadata.
-- The runner should then attribute each command to the correct child frame.
-- Nested action/selector calls should create frame start/end records around delegated execution if possible.
-- If exact child return timing is hard because of yield\* delegation, implement the closest reliable timing with command-level child attribution and document the limitation in code comments/tests.
+- An action calling another action creates one root trace with a child action
+  frame.
+- An action calling a selector attaches the selector as a child frame.
+- A selector calling another selector attaches the nested selector as a child
+  frame.
+- Raw generator work without selector/action metadata may be recorded as
+  `unknown` only when the runner can do so without changing existing behavior.
 
-Command instrumentation:
+Each trace records:
 
-- Instrument runCommandGenerator as the central interception point.
-- For selectRange commands, record:
-  - table.tableName
-  - index
-  - selectQuery.where
-  - computed bounds
-  - limit
-  - order
-  - duration
-  - result row count
-  - result payload
-  - status success/error
-- The runner should measure select duration around yield\* db.intervalScan(...).
-- If db.intervalScan throws, mark command and trace as failed and rethrow.
-- Preserve options.selectRangeCmds behavior exactly.
+- root metadata: kind, name, args, timing, status, error summary, DB id/label
+- call tree frames for nested selectors/actions
+- select events: table, index, where, bounds, limit, order, source, duration,
+  result count, result preview, status/error
+- mutation events: insert/upsert/delete, table, ids, old rows, new rows,
+  duration, status/error
 
-Mutation instrumentation:
+Trace payloads use safe serialization so circular, function, symbol, bigint, or
+otherwise unserializable values do not crash the UI.
 
-- Instrument SubscribableDBTx write paths because they have enough context for resolved mutation ops.
-- For insert, record:
-  - type "insert"
-  - table.tableName
-  - newValue rows
-  - duration
-- For upsert, record:
-  - type "upsert"
-  - table.tableName
-  - oldValue rows when present
-  - newValue rows
-  - duration
-- For delete, record:
-  - type "delete"
-  - table.tableName
-  - oldValue rows
-  - ids
-  - duration
-- For plain DB/DBTx paths, do not invent old values. It is acceptable for v1 to only have rich mutation payloads when using SubscribableDB/SubscribableDBTx.
-- Ensure afterInsert/afterUpsert/afterDelete/afterChange subscribers do not create misleading extra root traces. They should attach under the current mutation/action trace if invoked synchronously during the
-  same command run.
+## Activation And Retention
 
-Trace data model:
+The global `hyperDBTraceStore` is the default tracer. It stores traces in an
+internal in-memory `SubscribableDB` with registration and tracing disabled, so
+the devtool does not discover or trace itself.
 
-- Root trace fields:
-  - id
-  - kind: "action" | "selector" | "unknown"
-  - name
-  - args
-  - startedAt
-  - endedAt
-  - durationMs
-  - status: "running" | "success" | "error"
-  - error summary if failed
-  - frames/call tree
-  - command events
-  - mutation events
-- Frame fields:
-  - id
-  - parentId
-  - kind
-  - name
-  - args
-  - startedAt/endedAt/durationMs/status/error
-  - children
-  - command ids or embedded command events
-- Command event fields:
-  - id
-  - frameId
-  - kind: "select"
-  - tableName/index/where/bounds/limit/order
-  - resultCount/result
-  - startedAt/endedAt/durationMs/status/error
-- Mutation event fields:
-  - id
-  - frameId
-  - kind: "insert" | "upsert" | "delete"
-  - tableName
-  - rows/ids/oldValue/newValue as applicable
-  - startedAt/endedAt/durationMs/status/error
-- Use safe serialization for UI display so circular or unserializable values do not crash the devtool.
+Tracing is active only while a devtool listener is mounted:
 
-UI details:
+- `hyperDBTraceStore.activate()` increments an activation count and returns a
+  cleanup function.
+- When inactive, tracing should stay cheap and avoid storing trace payloads.
+- Root traces are committed in small batches.
+- `maxTraces` limits retained roots; older traces are pruned.
+- `clear()` removes all traces; `clearDB(dbId)` removes traces for one DB.
 
-- Style entirely with goober css/styled APIs.
-- Dense devtool aesthetic inspired by TanStack:
-  - dark default theme with high-contrast accent
-  - compact monospace-ish data areas
-  - badges for action/selector/status
-  - resizable-looking docked panel feel, but actual resize can be omitted in v1
-- Left panel:
-  - newest traces first
-  - each row shows type, name, duration, status, counts for selects/mutations, timestamp
-  - selected trace highlighted
-- Right panel:
-  - header with trace name/status/duration
-  - tabs or segmented control for Overview, Data, Mutations, Call Tree
-  - Overview: args, timing, status, counts
-  - Data: select events with query metadata and result preview
-  - Mutations: insert/upsert/delete payloads
-  - Call Tree: nested frames with timings and attached command counts
-- Include empty state when no traces exist.
-- Include clear button.
-- Avoid in-app explanatory copy beyond necessary labels.
+Raw `DB` construction registers app DB metadata for discovery. `SubscribableDB`
+shares the wrapped DB id so trace filtering stays stable. Internal tracing DBs
+must opt out with `register: false` and `tracer: "disabled"`.
 
-Tests:
+## HybridDB Signals
 
-- Add unit tests for tracing primitives:
-  - listener activation/deactivation
-  - retention cap
-  - root trace lifecycle success/error
-  - nested frame attachment
-  - no stored traces when inactive
-  - raw DB registration and registry subscriptions
-  - withTraits does not create phantom registry entries
-  - internal trace store DB does not register itself
-- Add command/runtime tests:
-  - action with select records one root action trace and select event
-  - action calling action records one root with child frame
-  - selector calling selector records one root with child frame
-  - select event includes table, index, where, limit, order, bounds, result count, result payload
-  - select errors mark command/trace failed and rethrow
-  - insert/upsert/delete through SubscribableDBTx record mutation payloads
-  - upsert includes oldValue and newValue
-  - existing action/selector tests continue passing
-- Add React/component smoke tests if existing test setup supports it without major new tooling:
-  - HyperDBDevtools renders toggle/panel
-  - selecting a trace displays details
-  - clear button clears traces
-  - localStorage open state is respected
-  - no-prop panel discovers registered DB labels and updates after later registrations
-  - explicit db prop remains the active/default DB when other DBs are discovered
-- If component smoke tests require too much setup, keep UI tests minimal and prioritize tracing/runtime coverage.
+Select events can report their source:
 
-Validation:
+- `in-mem`: the read was served from the in-memory cache.
+- `persist`: the read fell through to the primary store.
 
-- Run these from apps/hyperdb-lib:
-  - pnpm run test
-  - pnpm run ts
-  - pnpm run build
-- Fix all failures caused by the implementation.
-- Do not run formatters that rewrite unrelated files.
-- Do not modify unrelated dirty files such as todo.md.
+A root trace is marked `inMem` when none of its select events fell through to a
+persistent scan. Mutations do not disqualify the trace: HybridDB applies writes
+to the in-memory cache during the trace, then flushes to the primary store
+separately.
 
-Important implementation cautions:
+The devtool surfaces this in two places:
 
-- Preserve public type inference for selectFrom(...).where(...), action(...), selector(...), useDispatch, useSelect, useSyncSelector, and useAsyncSelector.
-- Preserve runCommandGenerator options.selectRangeCmds behavior.
-- Avoid global context bugs with async execution. If tracing uses global active state, make sure overlapping async selectors/actions do not attach events to the wrong trace.
-- Prefer a tiny tracing context object threaded through command metadata over relying on a single mutable global.
-- Do not import React from core command/runtime files.
-- Do not introduce Tailwind, tailwind-merge, CSS modules, or global CSS.
-- Keep the implementation scoped to devtool/tracing plus the minimum necessary hooks in action/selector/runner/SubscribableDBTx/package config.
+- trace rows get an `in-mem` badge when every select was served from memory
+- call tree operations show `in-mem` or `persist` badges per select
+
+The trace list also has a "skip cached" filter, which hides fully cached traces
+when you want to focus on reads that touched persistent storage.
+
+## UI Shape
+
+The UI is compact and debugger-oriented:
+
+- floating `HDB` button
+- docked panel or embedded panel
+- trace list on the left, details on the right
+- DB selector when multiple DBs are discovered
+- filters for all/selectors/actions and cached traces
+- sorting by creation time, duration, or rows fetched
+- details tabs: Overview, Data, Mutations, Call Tree
+- clear button for all visible traces or the selected DB
+
+The selected details tab stays selected when switching traces, which makes it
+easier to compare call trees, query plans, or mutation payloads.
+
+Layout state is persisted in localStorage where available:
+
+- open/closed state
+- trace list width
+- panel height
+- kind filter
+- sort field and direction
+- skip-cached filter
+
+The panel should stay usable in narrow containers. On narrow layouts, selected
+trace details open over the trace list so the list keeps its scroll position.
+
+## Styling Constraints
+
+- Use goober for all devtool styling.
+- Do not add Tailwind, CSS modules, global CSS, or a dependency on app styles.
+- Do not import React from core HyperDB runtime, commands, tracing, or drivers.
+- Keep the devtool package as the only React UI owner.
+
+## Test Coverage
+
+Keep coverage focused on behavior that is easy to regress:
+
+- trace store activation/deactivation
+- retention cap and clearing
+- root trace lifecycle success/error
+- nested action/selector frames
+- select events with table, index, bounds, row counts, source, and errors
+- mutation events with old/new row payloads where available
+- DB registration and discovery
+- internal trace store DB not registering itself
+- no stored devtool query traces for the devtool's own trace-list selectors
+- trace sorting and filtering, including rows fetched and skip-cached
+- panel rendering, trace selection, tab persistence, DB selection, clear button,
+  localStorage state, and explicit `db` prop behavior
+
+## Validation
+
+Run the package checks that match the change:
+
+```bash
+pnpm --filter @will-be-done/hyperdb test
+pnpm --filter @will-be-done/hyperdb ts
+pnpm --filter @will-be-done/hyperdb-devtool test
+pnpm --filter @will-be-done/hyperdb-devtool ts
+pnpm --filter @will-be-done/hyperdb-devtool build
+```
+
+Avoid formatters or build steps that rewrite unrelated files.
