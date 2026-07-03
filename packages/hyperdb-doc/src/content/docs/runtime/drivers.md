@@ -6,25 +6,30 @@ sidebar:
 ---
 
 A driver is the actual storage backend behind a `DB`. The same selectors and
-actions run unchanged against any driver, and in any environment. The driver
-is the single thing you swap between the browser and the server. You also choose
-whether to use the sync or async runtime helpers, which depends on the driver.
+actions run unchanged against any driver, and in any environment. You can use a
+single driver directly, or combine a persistent primary driver with an in-memory
+cache through [`HybridDB`](/runtime/db/#hybriddb). You also choose whether to use
+the sync or async runtime helpers, which depends on the storage path.
 
 ## Choosing a driver
 
 | Driver              | Import                 | Mode  | Environment | Use for                                                       |
 | ------------------- | ---------------------- | ----- | ----------- | ------------------------------------------------------------- |
-| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, ephemeral state, the fast in-memory tier               |
+| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, fully loaded app state, and the fast `HybridDB` cache  |
+| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence, usually as a `HybridDB` primary store    |
 | `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js) |
-| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Asynchronous SQLite (e.g. wa-sqlite memory or OPFS)           |
-| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence via IndexedDB                             |
+| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including browser SQLite as a `HybridDB` primary |
 
 Sync drivers work with `execSync` / `syncDispatch` / `select`. Async drivers
-require `execAsync` / `asyncDispatch` / `selectAsync`.
+require `execAsync` / `asyncDispatch` / `selectAsync`. `HybridDB` also uses the
+async helpers, because a read may miss the memory cache and fall through to the
+primary store.
 
-A typical full-stack setup uses an in-memory or IndexedDB driver in the browser
-and a native `SqlDriver` on the server, running the _same_ schema, selectors,
-and actions on both sides.
+A typical local-first browser setup uses `HybridDB` with IndexedDB or async
+SQLite as the primary store and `BptreeInmemDriver` as the cache. If your whole
+working set can be loaded eagerly, a plain `SubscribableDB` over
+`BptreeInmemDriver` keeps the UI path fully synchronous. On the server, use a
+native `SqlDriver` while running the _same_ schema, selectors, and actions.
 
 ## In-memory
 
@@ -38,8 +43,8 @@ const memoryDb = new DB(new BptreeInmemDriver());
 execSync(memoryDb.loadTables([tasksTable]));
 ```
 
-It stores normalized JS values directly and is the backend you'll use in tests
-and as the in-memory working tier of a [local-first sync setup](/guides/sync-engine/).
+It stores normalized JS values directly. Use it in tests, for app state that can
+be fully loaded into memory, or as the cache tier inside `HybridDB`.
 
 ## SQLite
 
@@ -236,7 +241,8 @@ const dbHandle = await sqlite3.open_v2("main.sqlite");
 `OriginPrivateFileSystemVFS` uses OPFS access handles, so run this setup in a
 module Worker and expose an `AsyncSQLiteDB`-shaped RPC (`exec` and
 `prepare().values()`) to the main thread. The HyperDB demo uses that pattern for
-its direct and in-memory-fronted WA-SQLite OPFS driver options.
+direct WA-SQLite OPFS access and for WA-SQLite OPFS as a `HybridDB` primary
+store.
 
 ### Backend: native SQLite
 
@@ -295,8 +301,9 @@ can run the same change-tracking actions as clients.
 
 ## IndexedDB
 
-For durable browser storage, open an `IdbDriver` by name. It is asynchronous, so
-load tables and dispatch through the async helpers.
+For persistent browser storage, open an `IdbDriver` by name. It is asynchronous,
+so load tables and dispatch through the async helpers. In a local-first app, it
+is commonly the primary store behind `HybridDB`.
 
 ```ts
 import { DB, execAsync, asyncDispatch } from "@will-be-done/hyperdb";
@@ -331,13 +338,15 @@ and failure logs easier to correlate in browser consoles.
 
 ## Sync vs. async, in practice
 
-A common local-first architecture runs two databases: an in-memory `DB` for
-synchronous UI reads/writes, and a persistent (IndexedDB or async SQLite) `DB`
-that the in-memory tier is hydrated from and flushed to in the background. That
-is the shape of the [sync-engine guide](/guides/sync-engine/): the in-memory tier
-serves the UI synchronously while persistence and cross-tab/server sync happen
-asynchronously.
+Use a synchronous driver when the whole read path can stay in memory or in a
+sync SQLite binding. That gives you `select`, `syncDispatch`, `useSyncSelector`,
+and `useDispatch` with no promises.
 
-When mixing tiers, remember the rule: a generator that touches an async driver
-must be run with `execAsync` / `asyncDispatch` / `selectAsync`; sync drivers may
-use `execSync` / `syncDispatch` / `select`.
+Use an asynchronous driver when storage itself is asynchronous, such as
+IndexedDB, async SQLite, or `HybridDB`. `HybridDB` can still serve warm reads
+from its in-memory cache, but the public API remains async because any selector
+may touch an uncached range and need the primary store.
+
+The rule is simple: a generator that might touch an async storage path must be
+run with `execAsync` / `asyncDispatch` / `selectAsync`; purely sync paths may use
+`execSync` / `syncDispatch` / `select`.

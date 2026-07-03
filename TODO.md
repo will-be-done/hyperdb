@@ -36,6 +36,7 @@ Doc:
 1. DONE Release and make codesandbox screenshot to put it to landing page
 1. DONE adopt styling of trpc
 1. DONE move devtool to separate package
+1. Copy-paste button of full page
 
 Others:
 
@@ -55,3 +56,4 @@ DB:
 8. k-way indexxedb OR merging
 9. Multibe column support in db index
 10. Rename useSelect => useSyncSelect, useDispatch => useSyncDispatch
+11. Maybe rename upsert -> put

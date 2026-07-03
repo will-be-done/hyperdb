@@ -249,9 +249,10 @@ BptreeInmemDriver()))`.
 HybridDB readwrite transactions commit to the in-memory cache first and flush
 their final row changes to the persistent primary afterward. This keeps
 `asyncDispatch` responsive for UI writes. Cached scan intervals keep reading
-from memory while persistence is pending; uncached scans wait for the pending
-flush only when the pending old or new row values can affect the requested
-interval. Exact `uniqhash` lookups are marked cached when rows are loaded from
+from memory while persistence is pending; partially cached scans load only the
+uncovered portions from the primary store and wait for pending flushes only when
+pending old or new row values can affect those primary-read portions. Exact
+`uniqhash` lookups are marked cached when rows are loaded from
 persistence or when the cache transaction commits, so `byId` and other unique
 equality reads can return from memory while persistence is still pending.
 Non-unique hash buckets are only marked cached when the hash scan itself proves

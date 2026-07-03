@@ -570,6 +570,79 @@ describe("HybridDB", () => {
     resumePersistCommit.resolve();
   });
 
+  it("serves deleted id lookups from cache but waits for unknown unique values", async () => {
+    const debugEvents: HybridDBDebugEvent[] = [];
+    const { db, primary } = await createDBs({
+      debug: (event) => debugEvents.push(event),
+    });
+    const original = createTask(1);
+    await new AsyncDB(primary).insert(tasksTable, [original]);
+
+    const persistCommitStarted = deferred();
+    const resumePersistCommit = deferred();
+    const originalBeginTx = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* originalBeginTx(mode);
+      if (mode === "readwrite" || mode === undefined) {
+        const originalCommit = tx.commit.bind(tx);
+        vi.spyOn(tx, "commit").mockImplementation(function* () {
+          persistCommitStarted.resolve();
+          yield* unwrap(resumePersistCommit.promise);
+          return yield* originalCommit();
+        });
+      }
+      return tx;
+    });
+
+    const tx = await db.beginTx();
+    await tx.delete(tasksTable, [original.id]);
+    await tx.commit();
+    await waitOneTurn();
+    await expect(persistCommitStarted.promise).resolves.toBeUndefined();
+
+    await expect(
+      db.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: original.id }] },
+      ]),
+    ).resolves.toEqual([]);
+
+    let slugReadResolved = false;
+    const slugRead = db
+      .intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: original.slug }] },
+      ])
+      .then((rows) => {
+        slugReadResolved = true;
+        return rows;
+      });
+    await waitOneTurn();
+    expect(slugReadResolved).toBe(false);
+    expect(
+      debugEvents.filter((event) => event.type === "pending-persistence-wait"),
+    ).toEqual([
+      {
+        type: "pending-persistence-wait",
+        tableName: tasksTable.tableName,
+        indexName: "bySlug",
+        clauses: [{ eq: [{ col: "slug", val: original.slug }] }],
+        selectOptions: undefined,
+        reasons: [
+          {
+            batchId: 1,
+            tableName: tasksTable.tableName,
+            rowId: original.id,
+            oldValueKnown: false,
+            oldValueMatches: false,
+            newValueMatches: false,
+          },
+        ],
+      },
+    ]);
+
+    resumePersistCommit.resolve();
+    await expect(slugRead).resolves.toEqual([]);
+  });
+
   it("retries background persistence failures and crashes the DB after exhausting retries", async () => {
     const debugEvents: HybridDBDebugEvent[] = [];
     const { db, hybrid, primary } = await createDBs({

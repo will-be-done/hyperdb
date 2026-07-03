@@ -181,7 +181,8 @@ reads and writes synchronous, so you can use `useSyncSelector`, `useDispatch`,
 `SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
 for successful index scans. `HybridDB` keeps the primary store persistent while
-serving cached index ranges from memory.
+serving cached index ranges from memory and loading missing range portions from
+the primary store.
 
 ```tsx
 import {

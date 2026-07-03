@@ -87,6 +87,74 @@ importers:
         specifier: 4.1.5
         version: 4.1.5(@types/node@24.13.2)(@vitest/browser-playwright@4.1.5)(vite@8.0.16(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0))
 
+
+  packages/hyperdb-benchmark:
+    dependencies:
+      "@tailwindcss/vite":
+        specifier: ^4.3.1
+        version: 4.3.1(vite@8.0.16(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0))
+      "@tanstack/db":
+        specifier: ^0.6.9
+        version: 0.6.13(typescript@6.0.3)
+      "@will-be-done/hyperdb":
+        specifier: workspace:*
+        version: link:../hyperdb
+      "@will-be-done/hyperdb-devtool":
+        specifier: workspace:*
+        version: link:../hyperdb-devtool
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+      tailwindcss:
+        specifier: ^4.3.1
+        version: 4.3.1
+      wa-sqlite:
+        specifier: ^1.0.0
+        version: 1.0.0
+      wouter:
+        specifier: ^3.7.1
+        version: 3.10.0(react@19.2.7)
+    devDependencies:
+      "@eslint/js":
+        specifier: ^10.0.1
+        version: 10.0.1(eslint@10.5.0(jiti@2.7.0))
+      "@types/node":
+        specifier: ^24.12.3
+        version: 24.13.2
+      "@types/react":
+        specifier: 19.2.17
+        version: 19.2.17
+      "@types/react-dom":
+        specifier: 19.2.3
+        version: 19.2.3(@types/react@19.2.17)
+      "@vitejs/plugin-react":
+        specifier: ^6.0.1
+        version: 6.0.2(vite@8.0.16(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0))
+      eslint:
+        specifier: ^10.3.0
+        version: 10.5.0(jiti@2.7.0)
+      eslint-plugin-react-hooks:
+        specifier: 7.1.1
+        version: 7.1.1(eslint@10.5.0(jiti@2.7.0))
+      eslint-plugin-react-refresh:
+        specifier: ^0.5.2
+        version: 0.5.3(eslint@10.5.0(jiti@2.7.0))
+      globals:
+        specifier: ^17.6.0
+        version: 17.6.0
+      typescript:
+        specifier: ~6.0.2
+        version: 6.0.3
+      typescript-eslint:
+        specifier: ^8.59.2
+        version: 8.61.1(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
+      vite:
+        specifier: ^8.0.12
+        version: 8.0.16(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0)
+
   packages/hyperdb-demo:
     dependencies:
       "@tailwindcss/vite":
@@ -7001,6 +7069,72 @@ packages:
         integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==,
       }
 
+  "@tanstack/db-ivm@0.1.18":
+    resolution:
+      {
+        integrity: sha512-+pZJiRKdoKRM5Epq9T7otD9ZJl82pRFauo7LKuJGrarjVKQ7r+QQlPe3kGdN9LEKSnuNGIWjX9OOY4M8kH4eLw==,
+      }
+    peerDependencies:
+      typescript: ">=4.7"
+
+  "@tanstack/db@0.6.13":
+    resolution:
+      {
+        integrity: sha512-EWR/eE2TO0CIh/nC5P4Ct6UCzDDyX94fnEXxqMMi0/5pbZDa/MCKB1PYad9jqZRSK4AEu2uoF6Y8aOUaZJd24A==,
+      }
+    peerDependencies:
+      typescript: ">=4.7"
+
+  "@tanstack/pacer-lite@0.2.2":
+    resolution:
+      {
+        integrity: sha512-eQ1MyLKCHyXiH7NbdmB80W77OhiMgGBUb+qDx/8WMGbwg5Lf/NlfD0TfNYAqY77i8V3AxoDoYdICrQE5ADw4Yw==,
+      }
+    engines: { node: ">=18" }
+
+  fractional-indexing@3.4.0:
+    resolution:
+      {
+        integrity: sha512-8J3glhz2rrpKG6KmI7wmJo3zH1VjeOpN+vTJSw1fOyO+Viqq3zX6/5NGh6oaZB2qIAYdOYuu5Dz9xp4faOO0Pg==,
+      }
+    engines: { node: ^14.13.1 || >=16.0.0 }
+
+  mitt@3.0.1:
+    resolution:
+      {
+        integrity: sha512-vKivATfr97l2/QBCYAkXYDbrIWPM2IIKEl7YPhjCvKlG3kE2gm+uBo6nEXK3M5/Ffh/FLpKExzOQ3JJoJGFKBw==,
+      }
+
+  regexparam@3.0.0:
+    resolution:
+      {
+        integrity: sha512-RSYAtP31mvYLkAHrOlh25pCNQ5hWnT106VukGaaFfuJrZFkGRX5GhUAdPqpSDXxOhA2c4akmRuplv1mRqnBn6Q==,
+      }
+    engines: { node: ">=8" }
+
+  sorted-btree@1.8.1:
+    resolution:
+      {
+        integrity: sha512-395+XIP+wqNn3USkFSrNz7G3Ss/MXlZEqesxvzCRFwL14h6e8LukDHdLBePn5pwbm5OQ9vGu8mDyz2lLDIqamQ==,
+      }
+
+  use-sync-external-store@1.6.0:
+    resolution:
+      {
+        integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==,
+      }
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+
+  wouter@3.10.0:
+    resolution:
+      {
+        integrity: sha512-zTfddD80zc2/J5l8JKcdvzOK6AwP0kpyHEI3DxRN2bn8U1oJPnrSVm8v+X3WwDamvLAOxTO7ZvkxkpRWlyeJ1Q==,
+      }
+    peerDependencies:
+      react: ">=16.8.0"
+
+
 snapshots:
   "@ag-ui/core@0.0.52":
     dependencies:
@@ -11811,3 +11945,37 @@ snapshots:
   zod@4.4.3: {}
 
   zwitch@2.0.4: {}
+
+  "@tanstack/db-ivm@0.1.18(typescript@6.0.3)":
+    dependencies:
+      fractional-indexing: 3.4.0
+      sorted-btree: 1.8.1
+      typescript: 6.0.3
+
+  "@tanstack/db@0.6.13(typescript@6.0.3)":
+    dependencies:
+      "@standard-schema/spec": 1.1.0
+      "@tanstack/db-ivm": 0.1.18(typescript@6.0.3)
+      "@tanstack/pacer-lite": 0.2.2
+      typescript: 6.0.3
+
+  "@tanstack/pacer-lite@0.2.2": {}
+
+  fractional-indexing@3.4.0: {}
+
+  mitt@3.0.1: {}
+
+  regexparam@3.0.0: {}
+
+  sorted-btree@1.8.1: {}
+
+  use-sync-external-store@1.6.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
+
+  wouter@3.10.0(react@19.2.7):
+    dependencies:
+      mitt: 3.0.1
+      react: 19.2.7
+      regexparam: 3.0.0
+      use-sync-external-store: 1.6.0(react@19.2.7)
