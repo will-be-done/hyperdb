@@ -88,10 +88,11 @@ export const completeAndMoveTask = action({
 Adds new rows. Fails if any `id` already exists.
 
 ```ts
-yield* insert(tasksTable, [
-  { id: "t1", projectId: "p1", title: "A", state: "todo", orderToken: "a" },
-  { id: "t2", projectId: "p1", title: "B", state: "todo", orderToken: "b" },
-]);
+yield *
+  insert(tasksTable, [
+    { id: "t1", projectId: "p1", title: "A", state: "todo", orderToken: "a" },
+    { id: "t2", projectId: "p1", title: "B", state: "todo", orderToken: "b" },
+  ]);
 ```
 
 ### `upsert`
@@ -100,12 +101,14 @@ Inserts or replaces the whole row by `id`. There is no partial update, so pass
 the complete row. To change one field, read the current row first and spread it:
 
 ```ts
-const current = yield* selectFrom(tasksTable, "byId")
-  .where((q) => q.eq("id", id))
-  .first();
+const current =
+  yield *
+  selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", id))
+    .first();
 
 if (current) {
-  yield* upsert(tasksTable, [{ ...current, state: "done" }]);
+  yield * upsert(tasksTable, [{ ...current, state: "done" }]);
 }
 ```
 
@@ -118,7 +121,7 @@ Deletes rows by `id`. Ids that don't exist are ignored, so deleting is
 idempotent.
 
 ```ts
-yield* deleteRows(tasksTable, ["t1", "t2"]);
+yield * deleteRows(tasksTable, ["t1", "t2"]);
 ```
 
 ## Dispatching actions

@@ -234,13 +234,13 @@ For cached, subscribed reads outside React, see
 lower-level selector runners from `@will-be-done/hyperdb` for integrations,
 custom stores, and cache bridges:
 
-| Helper                         | Use                                                                 |
-| ------------------------------ | ------------------------------------------------------------------- |
-| `runSelector`                  | Run a selector generator factory synchronously and collect ranges    |
-| `runSelectorAsync`             | Async version for IndexedDB, async SQLite, and HybridDB              |
-| `runSelectorMaybeAsync`        | Return a value or a `Promise`, depending on whether execution yields |
-| `initSelector`                 | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
-| `initCachedSelector`           | Create a sync subscribed store backed by the root selector cache     |
+| Helper                        | Use                                                                  |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `runSelector`                 | Run a selector generator factory synchronously and collect ranges    |
+| `runSelectorAsync`            | Async version for IndexedDB, async SQLite, and HybridDB              |
+| `runSelectorMaybeAsync`       | Return a value or a `Promise`, depending on whether execution yields |
+| `initSelector`                | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
+| `initCachedSelector`          | Create a sync subscribed store backed by the root selector cache     |
 | `runCachedSelectorMaybeAsync` | Run or reuse the root selector cache, returning value or `Promise`   |
 
 `runSelector`, `runSelectorAsync`, and `runSelectorMaybeAsync` take a generator

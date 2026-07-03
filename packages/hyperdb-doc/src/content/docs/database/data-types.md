@@ -17,22 +17,22 @@ same way in memory, IndexedDB, and SQLite.
 
 ## Supported values
 
-| Validator              | TypeScript type  | Notes |
-| ---------------------- | ---------------- | ----- |
-| `v.string()`           | `string`         | |
-| `v.number()`           | `number`         | Finite only; `NaN`, `Infinity`, and `-Infinity` are rejected |
-| `v.bigint()`           | `bigint`         | Preserved by the SQLite and IndexedDB storage codecs |
-| `v.boolean()`          | `boolean`        | |
-| `v.null()`             | `null`           | Use this for explicitly empty values |
-| `v.literal(x)`         | the literal      | `x` may be a `string`, `number`, `bigint`, `boolean`, or `null` |
-| `v.array(item)`        | `T[]`            | Every item is normalized with `item`; `undefined` is rejected |
-| `v.object(fields)`     | `{ ... }`        | Rejects unknown fields; optional fields may be omitted |
-| `v.record(key, value)` | `Record<K, V>`   | Keys must be non-empty ASCII strings that do not start with `$` |
-| `v.union(...)`         | a union          | Validators are tried in order; the first matching variant wins |
-| `v.optional(inner)`    | `T \| undefined` | For object fields; `undefined` normalizes to the field being omitted |
+| Validator              | TypeScript type  | Notes                                                                    |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------ |
+| `v.string()`           | `string`         |                                                                          |
+| `v.number()`           | `number`         | Finite only; `NaN`, `Infinity`, and `-Infinity` are rejected             |
+| `v.bigint()`           | `bigint`         | Preserved by the SQLite and IndexedDB storage codecs                     |
+| `v.boolean()`          | `boolean`        |                                                                          |
+| `v.null()`             | `null`           | Use this for explicitly empty values                                     |
+| `v.literal(x)`         | the literal      | `x` may be a `string`, `number`, `bigint`, `boolean`, or `null`          |
+| `v.array(item)`        | `T[]`            | Every item is normalized with `item`; `undefined` is rejected            |
+| `v.object(fields)`     | `{ ... }`        | Rejects unknown fields; optional fields may be omitted                   |
+| `v.record(key, value)` | `Record<K, V>`   | Keys must be non-empty ASCII strings that do not start with `$`          |
+| `v.union(...)`         | a union          | Validators are tried in order; the first matching variant wins           |
+| `v.optional(inner)`    | `T \| undefined` | For object fields; `undefined` normalizes to the field being omitted     |
 | `v.arrayBuffer()`      | `ArrayBuffer`    | Typed arrays and `DataView`s are accepted and copied to an `ArrayBuffer` |
-| `v.any()`              | `any`            | Accepts any structurally storable value; use sparingly |
-| `v.pass<T>()`          | `T`              | Bypasses validation and normalization; for trusted non-storage values |
+| `v.any()`              | `any`            | Accepts any structurally storable value; use sparingly                   |
+| `v.pass<T>()`          | `T`              | Bypasses validation and normalization; for trusted non-storage values    |
 
 ### Composite helpers
 
