@@ -177,6 +177,8 @@ If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
 reads and writes synchronous, so you can use `useSyncSelector`, `useDispatch`,
 `selectSync`, and `syncDispatch` without promise or cache-miss tradeoffs.
+For one-off reads that should reuse the selector cache, use `selectCachedSync`,
+`selectCachedAsync`, or `selectCachedMaybeAsync`.
 
 `SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`

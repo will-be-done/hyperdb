@@ -9,8 +9,8 @@ import {
 import {
   createCachedSelectorStoreSync,
   getSubscribableHybridCacheDB,
-  runCachedSelectorMaybeAsync,
   selectAsync,
+  selectCachedMaybeAsync,
   selectMaybeAsync,
   selectSync,
   type AnyObjectSelector,
@@ -395,8 +395,8 @@ const defaultHookDeps = {
   useSyncExternalStore,
   useDB,
   createCachedSelectorStoreSync,
-  runCachedSelectorMaybeAsync,
   selectAsync,
+  selectCachedMaybeAsync,
   selectMaybeAsync,
   selectSync,
   isNeedToRerunRange,
@@ -490,16 +490,16 @@ export function useAsyncSelector<
 
         try {
           const value = hybridCacheDB
-            ? hookDeps.runCachedSelectorMaybeAsync(
-                db,
-                { selector: input.selector, args: input.args },
-                { selectRangeCmds: cmds },
-              )
-            : hookDeps.selectMaybeAsync(
-                db,
-                { selector: input.selector, args: input.args },
-                { selectRangeCmds: cmds },
-              );
+            ? hookDeps.selectCachedMaybeAsync(db, {
+                selector: input.selector,
+                args: input.args,
+                selectRangeCmds: cmds,
+              })
+            : hookDeps.selectMaybeAsync(db, {
+                selector: input.selector,
+                args: input.args,
+                selectRangeCmds: cmds,
+              });
 
           if (isPromiseLike(value)) {
             const promise = Promise.resolve(value);
@@ -737,16 +737,16 @@ export function useAsyncSelector<
                 }
               } else {
                 value = hybridCacheDB
-                  ? hookDeps.runCachedSelectorMaybeAsync(
-                      db,
-                      { selector: input.selector, args: input.args },
-                      { selectRangeCmds: cmds },
-                    )
-                  : hookDeps.selectMaybeAsync(
-                      db,
-                      { selector: input.selector, args: input.args },
-                      { selectRangeCmds: cmds },
-                    );
+                  ? hookDeps.selectCachedMaybeAsync(db, {
+                      selector: input.selector,
+                      args: input.args,
+                      selectRangeCmds: cmds,
+                    })
+                  : hookDeps.selectMaybeAsync(db, {
+                      selector: input.selector,
+                      args: input.args,
+                      selectRangeCmds: cmds,
+                    });
               }
 
               if (isPromiseLike(value)) {

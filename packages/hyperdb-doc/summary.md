@@ -75,15 +75,15 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/database/reading-data.md`: Selector and query-builder
   guide. Covers selector object fields, `selectFrom`, immutable query builders,
   `where` comparisons, OR queries with `or(...)` or arrays, ordering, limits,
-  many-row results, `first()` and `firstOr()`, composing selectors, and
-  `selectSync`/`selectAsync`.
+  many-row results, `first()` and `firstOr()`, and composing selectors.
 - `src/content/docs/database/indexes.md`: Index behavior and valid query
   shapes. Covers declaring B-tree and hash indexes, built-in `byId`, equality,
   range, ordering, composite-key support, indexable value rules, equality-prefix
   and trailing-range rules, query-builder validation errors, and index ordering.
 - `src/content/docs/database/selectors-reactivity.md`: Reactive selector cache.
-  Covers range tracking, cached selectors, `createCachedSelectorStoreSync`, garbage
-  collection, selector memoization controls (`root` and `selfChild`),
+  Covers running selectors with `selectSync`/`selectAsync`, cached selector
+  reads, range tracking, cached selector stores, `createCachedSelectorStoreSync`,
+  garbage collection, selector memoization controls (`root` and `selfChild`),
   subscriptions, revisions, and practical guidance for writing selectors that
   invalidate precisely.
 - `src/content/docs/database/writing-data.md`: Actions and mutations. Covers

@@ -14,6 +14,69 @@ Selectors are ordinary generator code, so they can call other selectors, branch,
 loop, and use shared helpers. Reactivity still comes from the indexed reads they
 perform: every `selectFrom(...)` scan contributes ranges to the selector run.
 
+## Running selectors
+
+Inside React, use [`useSyncSelector` / `useAsyncSelector`](/integrations/react/).
+Outside React, run selectors directly with the same `{ selector, args }` input
+shape:
+
+```ts
+import { selectAsync, selectSync } from "@will-be-done/hyperdb";
+
+// synchronous drivers (in-memory, sync SQLite)
+const tasks = selectSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
+
+// asynchronous drivers (IndexedDB, async SQLite, HybridDB)
+const tasksAsync = await selectAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
+```
+
+Use cached selector reads when repeated calls for the same selector and args
+should reuse the root selector cache:
+
+```ts
+import { selectCachedMaybeAsync } from "@will-be-done/hyperdb";
+
+const tasksOrPromise = selectCachedMaybeAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
+const tasks = await Promise.resolve(tasksOrPromise);
+```
+
+HyperDB exports these selector runners and store creators:
+
+| Helper                          | Use                                                                  |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `selectSync`                    | Run a selector once with sync drivers                                |
+| `selectAsync`                   | Run a selector once with async drivers and `HybridDB`                |
+| `selectMaybeAsync`              | Return a value or a `Promise`, depending on whether execution yields |
+| `selectCachedSync`              | Run or reuse the root selector cache synchronously                   |
+| `selectCachedAsync`             | Async cache-aware selector read                                      |
+| `selectCachedMaybeAsync`        | Cache-aware read that may return a value or a `Promise`              |
+| `createSelectorStoreSync`       | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
+| `createCachedSelectorStoreSync` | Create a sync subscribed store backed by the root selector cache     |
+
+Use `createSelectorStoreSync` when you want a small synchronous external store
+for one selector run:
+
+```ts
+import { createSelectorStoreSync } from "@will-be-done/hyperdb";
+
+const store = createSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
+const unsubscribe = store.subscribe(() => {
+  console.log(store.getSnapshot());
+});
+```
+
 ## Range tracking
 
 When a selector runs, the runtime records every index range it scans: table,
@@ -60,6 +123,10 @@ unsub();
 The cache is keyed by the database, the selector identity, and a stable
 serialization of the args. Argument key order doesn't matter:
 `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` resolve to the same cache entry.
+
+For a one-off cached read without a subscription, use `selectCachedSync`,
+`selectCachedAsync`, or `selectCachedMaybeAsync` with the same `{ selector, args
+}` input shape.
 
 ## Caching layers
 
@@ -137,18 +204,18 @@ overlapping mutations can mark it stale for the next read.
 
 ```ts
 // keep an unused entry around for 30s
-createCachedSelectorStoreSync(
-  db,
-  { selector: projectTasks, args: { projectId: "p1" } },
-  { gcTime: 30_000 },
-);
+createCachedSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+  gcTime: 30_000,
+});
 
 // drop immediately when unsubscribed
-createCachedSelectorStoreSync(
-  db,
-  { selector: projectTasks, args: { projectId: "p1" } },
-  { gcTime: 0 },
-);
+createCachedSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+  gcTime: 0,
+});
 ```
 
 ## Memoization controls

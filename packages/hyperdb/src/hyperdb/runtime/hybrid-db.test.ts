@@ -86,15 +86,25 @@ const deferred = () => {
 
 const waitOneTurn = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+const selector = createSelector();
+
+const committedTraces = selector({
+  name: "committedTraces",
+  args: { limit: v.number() },
+  *handler({ limit }) {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(limit);
+    return rows;
+  },
+});
+
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
-  selectSync(
-    hyperDBTraceStore.getDB(),
-    (function* () {
-      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(limit);
-      return hyperDBTraceStore.resolveTraceRows(rows);
-    })(),
+  hyperDBTraceStore.resolveTraceRows(
+    selectSync(hyperDBTraceStore.getDB(), {
+      selector: committedTraces,
+      args: { limit },
+    }),
   );
 
 let deactivateTraceStore: (() => void) | undefined;
@@ -104,12 +114,14 @@ const lastSelectSource = (): SelectScanSource | undefined => {
   return selectCommittedTraces()[0]?.commandEvents[0]?.source;
 };
 
-const selectByValue = (
-  minValue: number,
-  maxValue?: number,
-  limit?: number,
-): Generator<unknown, Task[], unknown> =>
-  (function* () {
+const selectByValue = selector({
+  name: "selectByValue",
+  args: {
+    minValue: v.number(),
+    maxValue: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  *handler({ minValue, maxValue, limit }) {
     let query = selectFrom(tasksTable, "byValue").where((q) => {
       const minQuery = q.gte("value", minValue);
       return maxValue === undefined
@@ -122,7 +134,8 @@ const selectByValue = (
     }
 
     return yield* query;
-  })();
+  },
+});
 
 describe("HybridDB", () => {
   beforeEach(() => {
@@ -200,9 +213,12 @@ describe("HybridDB", () => {
     const tasks = [createTask(1), createTask(2), createTask(3)];
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
-    await expect(selectAsync(hybrid, selectByValue(1, 3))).resolves.toEqual(
-      tasks,
-    );
+    await expect(
+      selectAsync(hybrid, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 3 },
+      }),
+    ).resolves.toEqual(tasks);
 
     expect(lastSelectSource()).toBe("persist");
   });
@@ -212,12 +228,18 @@ describe("HybridDB", () => {
     const tasks = [createTask(1), createTask(2), createTask(3)];
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
-    await selectAsync(hybrid, selectByValue(1, 3));
+    await selectAsync(hybrid, {
+      selector: selectByValue,
+      args: { minValue: 1, maxValue: 3 },
+    });
     hyperDBTraceStore.clear();
 
-    await expect(selectAsync(hybrid, selectByValue(1, 3))).resolves.toEqual(
-      tasks,
-    );
+    await expect(
+      selectAsync(hybrid, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 3 },
+      }),
+    ).resolves.toEqual(tasks);
 
     expect(lastSelectSource()).toBe("in-mem");
   });
@@ -227,14 +249,22 @@ describe("HybridDB", () => {
     const tasks = [createTask(1), createTask(2), createTask(3)];
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
-    await expect(selectAsync(hybrid, selectByValue(1, 3))).resolves.toEqual(
-      tasks,
-    );
-    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+    await expect(
+      selectAsync(hybrid, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 3 },
+      }),
+    ).resolves.toEqual(tasks);
+    expect(lastSelectSource()).toBe("persist");
 
     primaryScanSpy.mockClear();
 
-    expect(selectSync(cache, selectByValue(1, 3))).toEqual(tasks);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 3 },
+      }),
+    ).toEqual(tasks);
     expect(primaryScanSpy).not.toHaveBeenCalled();
   });
 
@@ -256,14 +286,20 @@ describe("HybridDB", () => {
 
     await expect(
       Promise.resolve(
-        runCachedSelectorMaybeAsync(db, projectTasks, { projectId: "a" }),
+        runCachedSelectorMaybeAsync(db, {
+          selector: projectTasks,
+          args: { projectId: "a" },
+        }),
       ),
     ).resolves.toEqual(tasks);
     hyperDBTraceStore.clear();
 
     await expect(
       Promise.resolve(
-        runCachedSelectorMaybeAsync(db, projectTasks, { projectId: "a" }),
+        runCachedSelectorMaybeAsync(db, {
+          selector: projectTasks,
+          args: { projectId: "a" },
+        }),
       ),
     ).resolves.toEqual(tasks);
 
@@ -292,14 +328,20 @@ describe("HybridDB", () => {
     });
 
     await expect(
-      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, {
+        selector: projectTasks,
+        args: { projectId: "a" },
+      }),
     ).resolves.toEqual(tasks);
     expect(runCount).toBe(1);
 
     const cacheDB = getSubscribableHybridCacheDB(db);
     expect(cacheDB).toBeDefined();
-    const cached = createCachedSelectorStoreSync(cacheDB!, projectTasks, {
-      projectId: "a",
+    const cached = createCachedSelectorStoreSync(cacheDB!, {
+      selector: projectTasks,
+      args: {
+        projectId: "a",
+      },
     });
 
     expect(cached.getSnapshot()).toEqual(tasks);
@@ -325,12 +367,18 @@ describe("HybridDB", () => {
     });
 
     await expect(
-      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, {
+        selector: projectTasks,
+        args: { projectId: "a" },
+      }),
     ).resolves.toEqual(tasks);
     expect(runCount).toBe(1);
 
     await expect(
-      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, {
+        selector: projectTasks,
+        args: { projectId: "a" },
+      }),
     ).resolves.toEqual(tasks);
 
     expect(runCount).toBe(1);
@@ -432,8 +480,18 @@ describe("HybridDB", () => {
     const tx = await db.beginTx();
     await tx.upsert(tasksTable, [updated]);
 
-    expect(selectSync(cache, selectByValue(1, 1))).toEqual([original]);
-    expect(selectSync(cache, selectByValue(2, 2))).toEqual([]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 1 },
+      }),
+    ).toEqual([original]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 2, maxValue: 2 },
+      }),
+    ).toEqual([]);
     await expect(
       tx.intervalScan(tasksTable, "byValue", [
         { eq: [{ col: "value", val: 2 }] },
@@ -442,8 +500,18 @@ describe("HybridDB", () => {
 
     await tx.commit();
 
-    expect(selectSync(cache, selectByValue(1, 1))).toEqual([]);
-    expect(selectSync(cache, selectByValue(2, 2))).toEqual([updated]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 1 },
+      }),
+    ).toEqual([]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 2, maxValue: 2 },
+      }),
+    ).toEqual([updated]);
   });
 
   it("commits cache writes before persistence and blocks intersecting uncached reads", async () => {
@@ -483,8 +551,18 @@ describe("HybridDB", () => {
     await waitOneTurn();
     await expect(persistCommitStarted.promise).resolves.toBeUndefined();
 
-    expect(selectSync(cache, selectByValue(1, 1))).toEqual([]);
-    expect(selectSync(cache, selectByValue(2, 2))).toEqual([updated]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 1 },
+      }),
+    ).toEqual([]);
+    expect(
+      selectSync(cache, {
+        selector: selectByValue,
+        args: { minValue: 2, maxValue: 2 },
+      }),
+    ).toEqual([updated]);
     await expect(
       db.intervalScan(tasksTable, "byValue", [
         { eq: [{ col: "value", val: 1 }] },
@@ -798,7 +876,12 @@ describe("HybridDB", () => {
     const tasks = [createTask(1), createTask(2), createTask(3)];
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
-    await expect(selectAsync(db, selectByValue(1, 3))).resolves.toEqual(tasks);
+    await expect(
+      selectAsync(db, {
+        selector: selectByValue,
+        args: { minValue: 1, maxValue: 3 },
+      }),
+    ).resolves.toEqual(tasks);
 
     expect(lastSelectSource()).toBe("persist");
   });
@@ -810,11 +893,17 @@ describe("HybridDB", () => {
     );
     await new AsyncDB(primary).insert(tasksTable, tasks);
 
-    await selectAsync(hybrid, selectByValue(1, undefined, 2));
+    await selectAsync(hybrid, {
+      selector: selectByValue,
+      args: { minValue: 1, limit: 2 },
+    });
     hyperDBTraceStore.clear();
 
     await expect(
-      selectAsync(hybrid, selectByValue(1, undefined, 3)),
+      selectAsync(hybrid, {
+        selector: selectByValue,
+        args: { minValue: 1, limit: 3 },
+      }),
     ).resolves.toEqual(tasks.slice(0, 3));
 
     expect(lastSelectSource()).toBe("persist");
@@ -825,7 +914,10 @@ describe("HybridDB", () => {
     await new AsyncDB(primary).insert(tasksTable, [createTask(1)]);
 
     await expect(
-      selectAsync(hybrid, selectByValue(1, undefined, 0)),
+      selectAsync(hybrid, {
+        selector: selectByValue,
+        args: { minValue: 1, limit: 0 },
+      }),
     ).resolves.toEqual([]);
 
     expect(lastSelectSource()).toBeUndefined();

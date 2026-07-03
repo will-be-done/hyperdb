@@ -67,6 +67,7 @@ import {
   or,
   preloadSelectorAsync,
   selectAsync,
+  selectCachedMaybeAsync,
   selectSync,
   selectFrom,
   syncDispatch,
@@ -148,9 +149,9 @@ yield *
   );
 ```
 
-Run selectors outside React with `selectSync`, `selectAsync`, or
-`preloadSelectorAsync`. Use sync helpers with sync drivers and async helpers with
-async drivers:
+Run selectors outside React with `selectSync`, `selectAsync`,
+`selectCachedMaybeAsync`, or `preloadSelectorAsync`. Use sync helpers with sync
+drivers and async helpers with async drivers:
 
 ```ts
 const rows = selectSync(db, {
@@ -161,6 +162,12 @@ const asyncRows = await selectAsync(db, {
   selector: projectTasks,
   args: { projectId: "p1" },
 });
+const cachedRows = await Promise.resolve(
+  selectCachedMaybeAsync(db, {
+    selector: projectTasks,
+    args: { projectId: "p1" },
+  }),
+);
 ```
 
 ## Actions And Writes

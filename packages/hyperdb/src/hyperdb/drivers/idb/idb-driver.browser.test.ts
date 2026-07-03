@@ -378,17 +378,20 @@ describe("IdbDriver", () => {
         return tx;
       });
 
-    const readProjectTasks = () =>
-      (function* () {
+    const readProjectTasks = createSelector()({
+      name: "readProjectTasks",
+      args: {},
+      *handler() {
         return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
           q.eq("projectId", "project-1"),
         );
-      })();
+      },
+    });
 
     try {
       await Promise.all([
-        selectAsync(db, readProjectTasks()),
-        selectAsync(db, readProjectTasks()),
+        selectAsync(db, { selector: readProjectTasks, args: {} }),
+        selectAsync(db, { selector: readProjectTasks, args: {} }),
       ]);
 
       expect(readonlyTransactions).toHaveLength(2);
@@ -632,14 +635,19 @@ describe("IdbDriver", () => {
       ]),
     );
 
-    const readProjectTasks = () =>
-      (function* () {
+    const readProjectTasks = createSelector()({
+      name: "readHybridProjectTasks",
+      args: {},
+      *handler() {
         return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
           q.eq("projectId", "project-1"),
         );
-      })();
+      },
+    });
 
-    await expect(selectAsync(hybrid, readProjectTasks())).resolves.toEqual([
+    await expect(
+      selectAsync(hybrid, { selector: readProjectTasks, args: {} }),
+    ).resolves.toEqual([
       {
         id: "task-1",
         title: "First",
@@ -651,7 +659,9 @@ describe("IdbDriver", () => {
     const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
 
     try {
-      await expect(selectAsync(hybrid, readProjectTasks())).resolves.toEqual([
+      await expect(
+        selectAsync(hybrid, { selector: readProjectTasks, args: {} }),
+      ).resolves.toEqual([
         {
           id: "task-1",
           title: "First",
