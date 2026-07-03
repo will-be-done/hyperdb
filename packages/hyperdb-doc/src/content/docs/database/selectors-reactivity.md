@@ -64,8 +64,9 @@ re-runs lazily on the next preload or cached selector read.
 With a `SubscribableDB(new HybridDB(primary, cache))`, the preload does two
 things: it runs the selector against the HybridDB so missing persistent ranges
 are loaded into the in-memory cache, then it primes the in-memory selector cache
-entry that React reads synchronously. A later `useAsyncSelector` with the same
-selector identity and args can start from that warmed snapshot.
+entry. A later `useAsyncSelector` with the same selector identity and args can
+reuse that warmed entry when its async run starts, without doing a synchronous
+cache read during render.
 
 ```ts
 const categories = await preloadSelector(db, projectCategoriesByProjectId, {

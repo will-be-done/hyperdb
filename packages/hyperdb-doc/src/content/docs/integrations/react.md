@@ -11,10 +11,10 @@ reads. React 18 is a peer dependency.
 
 HyperDB hands your components plain, immutable rows: frozen
 data, never proxies. There is no `observer()` wrapper to remember and
-nothing leaking into your view layer. The hooks subscribe through HyperDB's
-[range-tracked selector cache](/database/selectors-reactivity/), so a component
-re-renders only when a mutation touches a range its selector actually scanned,
-giving fine-grained updates that compose with React's rendering model directly.
+nothing leaking into your view layer. The selector hooks use HyperDB's
+[range-tracked reads](/database/selectors-reactivity/), so a component re-runs
+only when a mutation touches a range its selector actually scanned, giving
+fine-grained updates that compose with React's rendering model directly.
 
 ## Providing the database
 
@@ -42,8 +42,8 @@ It is useful for passing the DB to non-hook utilities.
 ### `useAsyncSelector`
 
 Use `useAsyncSelector` with `HybridDB`, IndexedDB, and async SQLite. This is the
-usual hook for local-first browser apps: cached results can stay visible while
-HybridDB loads missing index ranges from the primary store.
+usual hook for local-first browser apps: the last resolved result can stay
+visible while HybridDB loads missing index ranges from the primary store.
 
 ```tsx
 import { useAsyncSelector } from "@will-be-done/hyperdb/react";
@@ -84,7 +84,11 @@ function Tasks({ projectId }: { projectId: string }) {
 The hook accepts the selector and args to run, then returns a query-style result
 object with `data`, `status`, `error`, fetching flags, and `refetch()`. Each run
 starts against the current cache. If a selector needs IndexedDB, async SQLite, or
-a HybridDB primary-store fallback, the run continues asynchronously.
+a HybridDB primary-store fallback, the run continues asynchronously. The initial
+snapshot attempts the selector once: if it finishes synchronously, that value is
+visible immediately; if it returns a promise, the hook shows `defaultValue`,
+`initialData`, or `placeholderData` until the same promise resolves. It does not
+read a cached selector snapshot during render.
 
 Options:
 
@@ -119,8 +123,8 @@ Returns:
 
 For route loaders or intent prefetches, use `preloadSelector` with the same
 `SubscribableDB`, selector, and args the component will render. With HybridDB it
-loads missing primary-store ranges and primes the selector snapshot that
-`useAsyncSelector` reads on render.
+loads missing primary-store ranges and primes the selector cache that
+`useAsyncSelector` can reuse when its async run starts.
 
 ```ts
 import { preloadSelector, type SubscribableDB } from "@will-be-done/hyperdb";

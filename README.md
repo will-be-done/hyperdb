@@ -238,6 +238,11 @@ export function App({ db }: { db: SubscribableDB }) {
 }
 ```
 
+`useAsyncSelector` attempts the selector once for its initial snapshot. If the
+run finishes synchronously, that value is visible immediately; if it returns a
+promise, the hook shows `defaultValue`, `initialData`, or `placeholderData` until
+that same promise resolves.
+
 ## Entry points
 
 | Import path                              | Contents                                                                             |

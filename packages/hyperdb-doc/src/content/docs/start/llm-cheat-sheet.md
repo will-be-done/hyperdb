@@ -320,8 +320,10 @@ export function App({ db }: { db: SubscribableDB }) {
 
 Use `useAsyncSelector` and `useAsyncDispatch` with HybridDB. `useAsyncSelector`
 returns a React Query-style result with `data`, `status`, `error`, fetching
-flags, and `refetch()`. Use `useSyncSelector` / `useDispatch` only for purely
-synchronous drivers.
+flags, and `refetch()`. Its initial snapshot attempts the selector once: sync
+results are visible immediately, while promise results show `defaultValue`,
+`initialData`, or `placeholderData` until that promise resolves. Use
+`useSyncSelector` / `useDispatch` only for purely synchronous drivers.
 
 ## Rules Of Thumb
 
