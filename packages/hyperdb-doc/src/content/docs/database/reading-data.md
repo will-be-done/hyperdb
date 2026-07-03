@@ -216,68 +216,67 @@ Inside React, use [`useSyncSelector` / `useAsyncSelector`](/integrations/react/)
 Outside React, run them directly:
 
 ```ts
-import { select, selectAsync } from "@will-be-done/hyperdb";
+import { selectAsync, selectSync } from "@will-be-done/hyperdb";
 
 // synchronous drivers (in-memory, sync SQLite)
-const tasks = select(db, projectTasks({ projectId: "p1" }));
+const tasks = selectSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 
 // asynchronous drivers (IndexedDB, async SQLite, HybridDB)
-const tasksAsync = await selectAsync(db, projectTasks({ projectId: "p1" }));
+const tasksAsync = await selectAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 ```
 
 For cached, subscribed reads outside React, see
-[`initCachedSelector`](/database/selectors-reactivity/#caching-a-selector).
+[`createCachedSelectorStoreSync`](/database/selectors-reactivity/#caching-a-selector).
 
 ### Lower-level runner helpers
 
-`select` and `selectAsync` are the everyday helpers. HyperDB also exports
-lower-level selector runners from `@will-be-done/hyperdb` for integrations,
-custom stores, and cache bridges:
+`selectSync` and `selectAsync` are the everyday helpers. HyperDB also exports
+cache-aware runners and store creators from `@will-be-done/hyperdb` for
+integrations, custom stores, and preload flows:
 
-| Helper                        | Use                                                                  |
-| ----------------------------- | -------------------------------------------------------------------- |
-| `runSelector`                 | Run a selector generator factory synchronously and collect ranges    |
-| `runSelectorAsync`            | Async version for IndexedDB, async SQLite, and HybridDB              |
-| `runSelectorMaybeAsync`       | Return a value or a `Promise`, depending on whether execution yields |
-| `initSelector`                | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
-| `initCachedSelector`          | Create a sync subscribed store backed by the root selector cache     |
-| `runCachedSelectorMaybeAsync` | Run or reuse the root selector cache, returning value or `Promise`   |
+| Helper                          | Use                                                                  |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `selectSync`                    | Run a selector once with sync drivers                                |
+| `selectAsync`                   | Run a selector once with async drivers and `HybridDB`                |
+| `selectMaybeAsync`              | Return a value or a `Promise`, depending on whether execution yields |
+| `createSelectorStoreSync`       | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
+| `createCachedSelectorStoreSync` | Create a sync subscribed store backed by the root selector cache     |
+| `runCachedSelectorSync`         | Run or reuse the root selector cache synchronously                   |
+| `runCachedSelectorAsync`        | Async cache-aware selector runner                                    |
+| `runCachedSelectorMaybeAsync`   | Cache-aware runner that may return a value or a `Promise`            |
 
-`runSelector`, `runSelectorAsync`, and `runSelectorMaybeAsync` take a generator
-factory, not a generator instance. They also accept a mutable range array that
-the runtime fills with the index ranges read by that run:
-
-```ts
-import { runSelectorAsync } from "@will-be-done/hyperdb";
-
-const ranges = [];
-const tasks = await runSelectorAsync(
-  db,
-  () => projectTasks({ projectId: "p1" }),
-  ranges,
-);
-```
-
-Use `initSelector` when you want a small synchronous external store for one
+Use `createSelectorStoreSync` when you want a small synchronous external store for one
 selector run:
 
 ```ts
-import { initSelector } from "@will-be-done/hyperdb";
+import { createSelectorStoreSync } from "@will-be-done/hyperdb";
 
-const store = initSelector(db, () => projectTasks({ projectId: "p1" }));
+const store = createSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 const unsubscribe = store.subscribe(() => {
   console.log(store.getSnapshot());
 });
 ```
 
-Use `initCachedSelector` when you want the same store shape but backed by the
+Use `createCachedSelectorStoreSync` when you want the same store shape but backed by the
 root selector cache, so repeated calls for the same selector and args can reuse
 the cached result:
 
 ```ts
-import { initCachedSelector } from "@will-be-done/hyperdb";
+import { createCachedSelectorStoreSync } from "@will-be-done/hyperdb";
 
-const cached = initCachedSelector(db, projectTasks, { projectId: "p1" });
+const cached = createCachedSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 cached.refresh();
 ```
 
@@ -289,8 +288,9 @@ async storage.
 ```ts
 import { runCachedSelectorMaybeAsync } from "@will-be-done/hyperdb";
 
-const tasksOrPromise = runCachedSelectorMaybeAsync(db, projectTasks, {
-  projectId: "p1",
+const tasksOrPromise = runCachedSelectorMaybeAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
 });
 const tasks = await Promise.resolve(tasksOrPromise);
 ```

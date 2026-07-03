@@ -182,12 +182,12 @@ Every storage path is either synchronous (in-memory, sync SQLite) or
 asynchronous (IndexedDB, async SQLite, or `HybridDB` when a read misses memory).
 The runtime exposes a matching pair of entry points for almost everything:
 
-| Sync                              | Async                                   |
-| --------------------------------- | --------------------------------------- |
-| `syncDispatch(db, action(args))`  | `asyncDispatch(db, action(args))`       |
-| `select(db, gen)`                 | `selectAsync(db, gen)`                  |
-| `execSync(generator)`             | `execAsync(generator)`                  |
-| `useSyncSelector` / `useDispatch` | `useAsyncSelector` / `useAsyncDispatch` |
+| Sync                                 | Async                                   |
+| ------------------------------------ | --------------------------------------- |
+| `syncDispatch(db, action(args))`     | `asyncDispatch(db, action(args))`       |
+| `selectSync(db, { selector, args })` | `selectAsync(db, { selector, args })`   |
+| `execSync(generator)`                | `execAsync(generator)`                  |
+| `useSyncSelector` / `useDispatch`    | `useAsyncSelector` / `useAsyncDispatch` |
 
 Use the sync variants with the in-memory and synchronous SQLite drivers; use the
 async variants with IndexedDB, async SQLite, and `HybridDB` (because a selector

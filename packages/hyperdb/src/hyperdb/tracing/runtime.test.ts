@@ -17,7 +17,7 @@ import {
   upsert,
 } from "../commands/action/builders";
 import { selectFrom } from "../commands/selector/builder";
-import { createSelector, select } from "../commands/selector/selector";
+import { createSelector, selectSync } from "../commands/selector/selector";
 import { getTraceContextFromTraits } from "./context";
 import {
   hyperDBTraceStore,
@@ -203,15 +203,86 @@ afterEach(() => {
 const action = createAction();
 const selector = createSelector();
 
+const committedTraces = selector({
+  name: "committedTraces",
+  args: { limit: v.number() },
+  *handler({ limit }) {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(limit);
+    return rows;
+  },
+});
+
+const traceNamesByDurationDesc = selector({
+  name: "traceNamesByDurationDesc",
+  args: {},
+  *handler() {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
+      .order("desc")
+      .limit(10);
+    return hyperDBTraceStore.resolveTraceRows(rows).map((item) => item.name);
+  },
+});
+
+const selectorTraceNamesByDurationAsc = selector({
+  name: "selectorTraceNamesByDurationAsc",
+  args: {},
+  *handler() {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
+      .order("asc")
+      .limit(10);
+    return hyperDBTraceStore
+      .resolveTraceRows(rows)
+      .filter((item) => item.kind === "selector")
+      .map((item) => item.name);
+  },
+});
+
+const traceNamesByRowsFetchedDesc = selector({
+  name: "traceNamesByRowsFetchedDesc",
+  args: {},
+  *handler() {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byRowsFetched")
+      .order("desc")
+      .limit(10);
+    return hyperDBTraceStore.resolveTraceRows(rows).map((item) => item.name);
+  },
+});
+
+const visibleTraceNamesByDbDurationAsc = selector({
+  name: "visibleTraceNamesByDbDurationAsc",
+  args: { dbKey: v.string() },
+  *handler({ dbKey }) {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbDurationMs")
+      .where((q) => q.eq("dbKey", dbKey))
+      .order("asc")
+      .limit(10);
+    return hyperDBTraceStore
+      .resolveTraceRows(rows)
+      .filter((item) => item.frames[0]?.cached !== true)
+      .map((item) => item.name);
+  },
+});
+
+const traceNamesByDbStartedAtDesc = selector({
+  name: "traceNamesByDbStartedAtDesc",
+  args: { dbKey: v.string() },
+  *handler({ dbKey }) {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byDbStartedAt")
+      .where((q) => q.eq("dbKey", dbKey))
+      .order("desc")
+      .limit(10);
+    return hyperDBTraceStore.resolveTraceRows(rows).map((item) => item.name);
+  },
+});
+
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
-  select(
-    hyperDBTraceStore.getDB(),
-    (function* () {
-      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(limit);
-      return hyperDBTraceStore.resolveTraceRows(rows);
-    })(),
+  hyperDBTraceStore.resolveTraceRows(
+    selectSync(hyperDBTraceStore.getDB(), {
+      selector: committedTraces,
+      args: { limit },
+    }),
   );
 
 describe("devtool runtime tracing", () => {
@@ -276,7 +347,9 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, readTaskSelector({}))).toEqual([task()]);
+    expect(selectSync(db, { selector: readTaskSelector, args: {} })).toEqual([
+      task(),
+    ]);
 
     hyperDBTraceStore.flushTraceCommits();
     const trace = selectCommittedTraces()[0]!;
@@ -303,7 +376,9 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, readTaskSelector({}))).toEqual([task()]);
+    expect(selectSync(db, { selector: readTaskSelector, args: {} })).toEqual([
+      task(),
+    ]);
     expect(selectCommittedTraces()).toEqual([]);
   });
 
@@ -322,28 +397,16 @@ describe("devtool runtime tracing", () => {
     );
 
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        (function* () {
-          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
-            .order("desc")
-            .limit(10);
-          return hyperDBTraceStore.resolveTraceRows(rows);
-        })(),
-      ).map((item) => item.name),
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: traceNamesByDurationDesc,
+        args: {},
+      }),
     ).toEqual(["slow", "action", "fast", "running"]);
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        (function* () {
-          const rows = yield* selectFrom(traceRootsRuntimeTable, "byDurationMs")
-            .order("asc")
-            .limit(10);
-          return hyperDBTraceStore
-            .resolveTraceRows(rows)
-            .filter((item) => item.kind === "selector");
-        })(),
-      ).map((item) => item.name),
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: selectorTraceNamesByDurationAsc,
+        args: {},
+      }),
     ).toEqual(["running", "fast", "slow"]);
   });
 
@@ -387,18 +450,10 @@ describe("devtool runtime tracing", () => {
     );
 
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        (function* () {
-          const rows = yield* selectFrom(
-            traceRootsRuntimeTable,
-            "byRowsFetched",
-          )
-            .order("desc")
-            .limit(10);
-          return hyperDBTraceStore.resolveTraceRows(rows);
-        })(),
-      ).map((item) => item.name),
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: traceNamesByRowsFetchedDesc,
+        args: {},
+      }),
     ).toEqual(["many", "few", "none"]);
   });
 
@@ -440,36 +495,16 @@ describe("devtool runtime tracing", () => {
     );
 
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        (function* () {
-          const rows = yield* selectFrom(
-            traceRootsRuntimeTable,
-            "byDbDurationMs",
-          )
-            .where((q) => q.eq("dbKey", "db-a"))
-            .order("asc")
-            .limit(10);
-          return hyperDBTraceStore
-            .resolveTraceRows(rows)
-            .filter((item) => item.frames[0]?.cached !== true);
-        })(),
-      ).map((item) => item.name),
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: visibleTraceNamesByDbDurationAsc,
+        args: { dbKey: "db-a" },
+      }),
     ).toEqual(["db-a-visible"]);
     expect(
-      select(
-        hyperDBTraceStore.getDB(),
-        (function* () {
-          const rows = yield* selectFrom(
-            traceRootsRuntimeTable,
-            "byDbStartedAt",
-          )
-            .where((q) => q.eq("dbKey", unassignedTraceDBKey))
-            .order("desc")
-            .limit(10);
-          return hyperDBTraceStore.resolveTraceRows(rows);
-        })(),
-      ).map((item) => item.name),
+      selectSync(hyperDBTraceStore.getDB(), {
+        selector: traceNamesByDbStartedAtDesc,
+        args: { dbKey: unassignedTraceDBKey },
+      }),
     ).toEqual(["unassigned"]);
   });
 
@@ -556,7 +591,7 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, doneTasksSelector({}))).toEqual([
+    expect(selectSync(db, { selector: doneTasksSelector, args: {} })).toEqual([
       task({ state: "done" }),
     ]);
 
@@ -619,7 +654,7 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, readTasks({}))).toEqual([task()]);
+    expect(selectSync(db, { selector: readTasks, args: {} })).toEqual([task()]);
 
     hyperDBTraceStore.flushTraceCommits();
     const trace = selectCommittedTraces()[0]!;
@@ -664,7 +699,9 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, skippedSelector({}))).toEqual([task({ state: "done" })]);
+    expect(selectSync(db, { selector: skippedSelector, args: {} })).toEqual([
+      task({ state: "done" }),
+    ]);
     expect(selectCommittedTraces()).toHaveLength(0);
 
     const parentSelector = selector({
@@ -675,7 +712,9 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(select(db, parentSelector({}))).toEqual([task({ state: "done" })]);
+    expect(selectSync(db, { selector: parentSelector, args: {} })).toEqual([
+      task({ state: "done" }),
+    ]);
 
     hyperDBTraceStore.flushTraceCommits();
     const trace = selectCommittedTraces()[0]!;
@@ -697,7 +736,9 @@ describe("devtool runtime tracing", () => {
       },
     });
 
-    expect(() => select(db, failingSelector({}))).toThrow();
+    expect(() =>
+      selectSync(db, { selector: failingSelector, args: {} }),
+    ).toThrow();
 
     hyperDBTraceStore.flushTraceCommits();
     const trace = selectCommittedTraces()[0]!;

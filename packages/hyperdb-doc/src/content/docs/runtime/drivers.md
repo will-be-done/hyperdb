@@ -20,7 +20,7 @@ the sync or async runtime helpers, which depends on the storage path.
 | `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js)  |
 | `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including browser SQLite as a `HybridDB` primary |
 
-Sync drivers work with `execSync` / `syncDispatch` / `select`. Async drivers
+Sync drivers work with `execSync` / `syncDispatch` / `selectSync`. Async drivers
 require `execAsync` / `asyncDispatch` / `selectAsync`. `HybridDB` also uses the
 async helpers, because a read may miss the memory cache and fall through to the
 primary store.
@@ -142,7 +142,7 @@ execSync(db.loadTables([tasksTable]));
 ```
 
 `SqlDriver` is synchronous. Even if sql.js initialization is async, use the
-created driver with `select`, `syncDispatch`, and `execSync`.
+created driver with `selectSync`, `syncDispatch`, and `execSync`.
 
 ### wa-sqlite async
 
@@ -293,7 +293,10 @@ import { tasksTable, createTask, projectTasks } from "@your-app/slices";
 
 // server (Bun + native SQLite)
 syncDispatch(serverDb, createTask({ id, projectId, title }));
-const tasks = select(serverDb, projectTasks({ projectId }));
+const tasks = selectSync(serverDb, {
+  selector: projectTasks,
+  args: { projectId },
+});
 ```
 
 This is the foundation of the [sync engine](/guides/sync-engine/): the server
@@ -339,7 +342,7 @@ and failure logs easier to correlate in browser consoles.
 ## Sync vs. async, in practice
 
 Use a synchronous driver when the whole read path can stay in memory or in a
-sync SQLite binding. That gives you `select`, `syncDispatch`, `useSyncSelector`,
+sync SQLite binding. That gives you `selectSync`, `syncDispatch`, `useSyncSelector`,
 and `useDispatch` with no promises.
 
 Use an asynchronous driver when storage itself is asynchronous, such as
@@ -349,4 +352,4 @@ may touch an uncached range and need the primary store.
 
 The rule is simple: a generator that might touch an async storage path must be
 run with `execAsync` / `asyncDispatch` / `selectAsync`; purely sync paths may use
-`execSync` / `syncDispatch` / `select`.
+`execSync` / `syncDispatch` / `selectSync`.

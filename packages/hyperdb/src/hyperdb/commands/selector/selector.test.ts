@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { DB, execSync } from "../../db";
 import {
   createSelector,
-  initSelector,
-  initCachedSelector,
-  preloadSelector,
+  createSelectorStoreSync,
+  createCachedSelectorStoreSync,
+  preloadSelectorAsync,
   runCachedSelectorMaybeAsync,
-  select,
+  selectSync,
   selectAsync,
 } from "./selector";
 import { unwrap } from "../async";
@@ -33,15 +33,23 @@ type Task = {
 };
 const selector = createSelector();
 
+const committedTraces = selector({
+  name: "committedTraces",
+  args: { limit: v.number() },
+  *handler({ limit }) {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(limit);
+    return rows;
+  },
+});
+
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
-  select(
-    hyperDBTraceStore.getDB(),
-    (function* () {
-      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(limit);
-      return hyperDBTraceStore.resolveTraceRows(rows);
-    })(),
+  hyperDBTraceStore.resolveTraceRows(
+    selectSync(hyperDBTraceStore.getDB(), {
+      selector: committedTraces,
+      args: { limit },
+    }),
   );
 
 const tasksTable = defineTable("tasks", {
@@ -179,7 +187,10 @@ describe("selector", () => {
     });
 
     expect(
-      select(testDb, doneProjectTasks({ projectId: "project-1" })),
+      selectSync(testDb, {
+        selector: doneProjectTasks,
+        args: { projectId: "project-1" },
+      }),
     ).toEqual([
       {
         id: "task-1",
@@ -216,7 +227,10 @@ describe("selector", () => {
     });
 
     await expect(
-      selectAsync(testDb, projectTasks({ projectId: "project-1" })),
+      selectAsync(testDb, {
+        selector: projectTasks,
+        args: { projectId: "project-1" },
+      }),
     ).resolves.toEqual([
       { id: "task-1", title: "Task 1", projectId: "project-1" },
     ]);
@@ -351,10 +365,10 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, cachedTasks, {
+    const first = createCachedSelectorStoreSync(testDb, cachedTasks, {
       projectId: "project-1",
     });
-    const second = initCachedSelector(testDb, cachedTasks, {
+    const second = createCachedSelectorStoreSync(testDb, cachedTasks, {
       projectId: "project-1",
     });
     const unsubscribeFirst = first.subscribe(() => {});
@@ -395,7 +409,7 @@ describe("selector", () => {
       },
     });
 
-    initCachedSelector(testDb, freezeArgsTasks, args);
+    createCachedSelectorStoreSync(testDb, freezeArgsTasks, args);
 
     expect(Object.isFrozen(args)).toBe(true);
     expect(Object.isFrozen(args.filter)).toBe(true);
@@ -431,10 +445,10 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, orderedTasks, {
+    const first = createCachedSelectorStoreSync(testDb, orderedTasks, {
       filter: { projectId: "project-1", orderToken: "a" },
     });
-    const second = initCachedSelector(testDb, orderedTasks, {
+    const second = createCachedSelectorStoreSync(testDb, orderedTasks, {
       filter: { orderToken: "a", projectId: "project-1" },
     });
     const unsubscribeFirst = first.subscribe(() => {});
@@ -460,8 +474,12 @@ describe("selector", () => {
       },
     });
 
-    const negative = initCachedSelector(testDb, signedZero, { value: -0 });
-    const positive = initCachedSelector(testDb, signedZero, { value: 0 });
+    const negative = createCachedSelectorStoreSync(testDb, signedZero, {
+      value: -0,
+    });
+    const positive = createCachedSelectorStoreSync(testDb, signedZero, {
+      value: 0,
+    });
 
     expect(negative.getSnapshot()).toBe("negative zero");
     expect(positive.getSnapshot()).toBe("positive zero");
@@ -483,13 +501,13 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, binarySelector, {
+    const first = createCachedSelectorStoreSync(testDb, binarySelector, {
       bytes: buffer(1, 2),
     });
-    const equivalent = initCachedSelector(testDb, binarySelector, {
+    const equivalent = createCachedSelectorStoreSync(testDb, binarySelector, {
       bytes: buffer(1, 2),
     });
-    const different = initCachedSelector(testDb, binarySelector, {
+    const different = createCachedSelectorStoreSync(testDb, binarySelector, {
       bytes: buffer(2, 1),
     });
 
@@ -520,20 +538,24 @@ describe("selector", () => {
     arrayWithProp.extra = "value";
 
     expect(() =>
-      initCachedSelector(testDb, rejectedArgsTasks, {
+      createCachedSelectorStoreSync(testDb, rejectedArgsTasks, {
         projectId: undefined,
       } as never),
     ).toThrow(/undefined is not supported/);
     expect(() =>
-      initCachedSelector(testDb, rejectedArgsTasks, {
+      createCachedSelectorStoreSync(testDb, rejectedArgsTasks, {
         projectId: () => "project-1",
       } as never),
     ).toThrow(/functions are not supported/);
     expect(() =>
-      initCachedSelector(testDb, rejectedArgsTasks, circular as never),
+      createCachedSelectorStoreSync(
+        testDb,
+        rejectedArgsTasks,
+        circular as never,
+      ),
     ).toThrow(/circular reference/);
     expect(() =>
-      initCachedSelector(testDb, rejectedArgsTasks, {
+      createCachedSelectorStoreSync(testDb, rejectedArgsTasks, {
         projectId: arrayWithProp,
       } as never),
     ).toThrow(/array properties are not supported/);
@@ -563,8 +585,16 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, uncachedSelector, args as never);
-    const second = initCachedSelector(testDb, uncachedSelector, args as never);
+    const first = createCachedSelectorStoreSync(
+      testDb,
+      uncachedSelector,
+      args as never,
+    );
+    const second = createCachedSelectorStoreSync(
+      testDb,
+      uncachedSelector,
+      args as never,
+    );
 
     expect(first.getSnapshot()).toBe(1);
     expect(second.getSnapshot()).toBe(2);
@@ -588,10 +618,10 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, cachedTasks, {
+    const first = createCachedSelectorStoreSync(testDb, cachedTasks, {
       projectId: "project-1",
     });
-    const second = initCachedSelector(testDb, cachedTasks, {
+    const second = createCachedSelectorStoreSync(testDb, cachedTasks, {
       projectId: "project-2",
     });
     const unsubscribeFirst = first.subscribe(() => {});
@@ -624,7 +654,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, projectTasks, {
+    const cached = createCachedSelectorStoreSync(testDb, projectTasks, {
       projectId: "project-1",
     });
     const unsubscribe = cached.subscribe(() => {
@@ -673,7 +703,7 @@ describe("selector", () => {
     });
 
     await expect(
-      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+      preloadSelectorAsync(testDb, projectTasks, { projectId: "project-1" }),
     ).resolves.toEqual([]);
     expect(runCount).toBe(1);
     expect(testDb.subscribers).toHaveLength(1);
@@ -685,7 +715,7 @@ describe("selector", () => {
     );
 
     await expect(
-      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+      preloadSelectorAsync(testDb, projectTasks, { projectId: "project-1" }),
     ).resolves.toEqual([]);
     expect(runCount).toBe(1);
 
@@ -697,7 +727,7 @@ describe("selector", () => {
 
     expect(runCount).toBe(1);
     await expect(
-      preloadSelector(testDb, projectTasks, { projectId: "project-1" }),
+      preloadSelectorAsync(testDb, projectTasks, { projectId: "project-1" }),
     ).resolves.toEqual([
       { id: "matching", projectId: "project-1", orderToken: "a" },
     ]);
@@ -725,7 +755,7 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(testDb, projectTasks, {
+    const first = createCachedSelectorStoreSync(testDb, projectTasks, {
       projectId: "project-1",
     });
 
@@ -739,7 +769,7 @@ describe("selector", () => {
       ]),
     );
 
-    const second = initCachedSelector(testDb, projectTasks, {
+    const second = createCachedSelectorStoreSync(testDb, projectTasks, {
       projectId: "project-1",
     });
 
@@ -839,10 +869,14 @@ describe("selector", () => {
         },
       });
 
-      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      createCachedSelectorStoreSync(testDb, cachedTasks, {
+        projectId: "project-1",
+      });
       hyperDBTraceStore.clear();
 
-      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      createCachedSelectorStoreSync(testDb, cachedTasks, {
+        projectId: "project-1",
+      });
 
       expect(runCount).toBe(1);
       hyperDBTraceStore.flushTraceCommits();
@@ -880,10 +914,14 @@ describe("selector", () => {
         },
       });
 
-      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      createCachedSelectorStoreSync(testDb, cachedTasks, {
+        projectId: "project-1",
+      });
       hyperDBTraceStore.clear();
 
-      initCachedSelector(testDb, cachedTasks, { projectId: "project-1" });
+      createCachedSelectorStoreSync(testDb, cachedTasks, {
+        projectId: "project-1",
+      });
 
       hyperDBTraceStore.flushTraceCommits();
       expect(selectCommittedTraces()).toEqual([]);
@@ -919,7 +957,7 @@ describe("selector", () => {
         },
       });
 
-      const cached = initCachedSelector(testDb, projectTasks, {
+      const cached = createCachedSelectorStoreSync(testDb, projectTasks, {
         projectId: "project-1",
       });
       unsubscribeSelector = cached.subscribe(() => {});
@@ -965,11 +1003,11 @@ describe("selector", () => {
       },
     });
 
-    initCachedSelector(testDb, defaultGcTasks, {
+    createCachedSelectorStoreSync(testDb, defaultGcTasks, {
       projectId: "project-1",
     }).subscribe(() => {})();
 
-    const cachedAgain = initCachedSelector(testDb, defaultGcTasks, {
+    const cachedAgain = createCachedSelectorStoreSync(testDb, defaultGcTasks, {
       projectId: "project-1",
     });
 
@@ -978,7 +1016,7 @@ describe("selector", () => {
     cachedAgain.subscribe(() => {})();
     vi.advanceTimersByTime(31_000);
 
-    initCachedSelector(testDb, defaultGcTasks, {
+    createCachedSelectorStoreSync(testDb, defaultGcTasks, {
       projectId: "project-1",
     });
 
@@ -1006,7 +1044,7 @@ describe("selector", () => {
       },
     });
 
-    const first = initCachedSelector(
+    const first = createCachedSelectorStoreSync(
       testDb,
       gcTasks,
       { projectId: "project-1" },
@@ -1016,7 +1054,7 @@ describe("selector", () => {
 
     expect(testDb.subscribers).toHaveLength(1);
 
-    const second = initCachedSelector(
+    const second = createCachedSelectorStoreSync(
       testDb,
       gcTasks,
       { projectId: "project-1" },
@@ -1030,13 +1068,15 @@ describe("selector", () => {
     unsubscribeSecond();
     vi.advanceTimersByTime(2000);
 
-    initCachedSelector(testDb, gcTasks, { projectId: "project-1" });
+    createCachedSelectorStoreSync(testDb, gcTasks, { projectId: "project-1" });
 
     expect(runCount).toBe(2);
   });
 
   test("works with range", () => {
-    const selector = initSelector(db, () => allDoneTasks({ state: "done" }));
+    const selector = createSelectorStoreSync(db, () =>
+      allDoneTasks({ state: "done" }),
+    );
 
     const results = [selector.getSnapshot()?.[0]?.id];
     selector.subscribe(() => {
@@ -1090,7 +1130,9 @@ describe("selector", () => {
       },
     });
 
-    const initializedSelector = initSelector(testDb, () => taskSelector({}));
+    const initializedSelector = createSelectorStoreSync(testDb, () =>
+      taskSelector({}),
+    );
     expect(initializedSelector.getSnapshot()).toBeUndefined();
 
     const task = {
@@ -1116,7 +1158,9 @@ describe("selector", () => {
   });
 
   test("works with equal", () => {
-    const selector = initSelector(db, () => specificTask({ id: "task-1" }));
+    const selector = createSelectorStoreSync(db, () =>
+      specificTask({ id: "task-1" }),
+    );
 
     console.log("current state", selector.getSnapshot());
     selector.subscribe(() => {
@@ -1190,8 +1234,12 @@ describe("selector", () => {
       },
     });
 
-    const selector1 = initSelector(testDb, () => project1Selector({}));
-    const selector2 = initSelector(testDb, () => project2Selector({}));
+    const selector1 = createSelectorStoreSync(testDb, () =>
+      project1Selector({}),
+    );
+    const selector2 = createSelectorStoreSync(testDb, () =>
+      project2Selector({}),
+    );
 
     const project1Results: Item[][] = [selector1.getSnapshot()];
     const project2Results: Item[][] = [selector2.getSnapshot()];
@@ -1274,7 +1322,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const snapshots: unknown[] = [];
     const unsubscribe = cached.subscribe(() => {
       snapshots.push(cached.getSnapshot());
@@ -1358,7 +1406,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     execSync(
@@ -1405,7 +1453,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const snapshots: unknown[] = [];
     const unsubscribe = cached.subscribe(() => {
       snapshots.push(cached.getSnapshot());
@@ -1461,7 +1509,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(childRuns).toBe(1);
@@ -1515,7 +1563,7 @@ describe("selector", () => {
         },
       });
 
-      const cached = initCachedSelector(testDb, parent, {});
+      const cached = createCachedSelectorStoreSync(testDb, parent, {});
       const unsubscribe = cached.subscribe(() => {});
 
       hyperDBTraceStore.clear();
@@ -1597,7 +1645,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(cached.getSnapshot()).toEqual({ a: 12, b: 0 });
@@ -1652,7 +1700,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     const firstA = cached.getSnapshot().a;
@@ -1712,7 +1760,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, top, {});
+    const cached = createCachedSelectorStoreSync(testDb, top, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(midRuns).toBe(2);
@@ -1771,7 +1819,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, top, {});
+    const cached = createCachedSelectorStoreSync(testDb, top, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(cached.getSnapshot()).toEqual({ a: 0, b: 0 });
@@ -1845,7 +1893,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, top, {});
+    const cached = createCachedSelectorStoreSync(testDb, top, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(leafRuns).toEqual({ a1: 1, a2: 1, b: 1 });
@@ -1907,7 +1955,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(cached.getSnapshot()).toEqual([]);
@@ -1990,7 +2038,7 @@ describe("selector", () => {
       },
     });
 
-    const cached = initCachedSelector(testDb, parent, {});
+    const cached = createCachedSelectorStoreSync(testDb, parent, {});
     const unsubscribe = cached.subscribe(() => {});
 
     expect(cached.getSnapshot()).toEqual({
@@ -2078,7 +2126,9 @@ describe("selector", () => {
       },
     });
 
-    const initializedSelector = initSelector(testDb, () => orderedSelector({}));
+    const initializedSelector = createSelectorStoreSync(testDb, () =>
+      orderedSelector({}),
+    );
     const snapshots: string[][] = [];
     initializedSelector.subscribe(() => {
       snapshots.push(initializedSelector.getSnapshot().map((item) => item.id));
@@ -2119,7 +2169,7 @@ describe("selector", () => {
       ]),
     );
 
-    const ids = select(
+    const ids = selectSync(
       testDb,
       (function* () {
         const rows = yield* selectFrom(itemsTable, "byIds")

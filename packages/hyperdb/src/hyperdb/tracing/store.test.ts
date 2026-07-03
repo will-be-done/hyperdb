@@ -12,39 +12,52 @@ import {
   startRootTrace,
   traceRootsRuntimeTable,
 } from "./store";
-import { select } from "../commands/selector/selector";
+import { createSelector, selectSync } from "../commands/selector/selector";
 import { selectFrom } from "../commands/selector/builder";
 
+const selector = createSelector();
+
+const committedTraceNames = selector({
+  name: "committedTraceNames",
+  args: {},
+  *handler() {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(10);
+    return rows.map((row) => row.name);
+  },
+});
+
+const committedRows = selector({
+  name: "committedRows",
+  args: {},
+  *handler() {
+    return yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(10);
+  },
+});
+
+const committedTraces = selector({
+  name: "committedTraces",
+  args: {},
+  *handler() {
+    const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
+      .order("desc")
+      .limit(10);
+    return rows;
+  },
+});
+
 const selectCommittedTraceNames = (store: HyperDBTraceStore): string[] =>
-  select(
-    store.getDB(),
-    (function* () {
-      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(10);
-      return rows.map((row) => row.name);
-    })(),
-  );
+  selectSync(store.getDB(), { selector: committedTraceNames, args: {} });
 
 const selectCommittedRows = (store: HyperDBTraceStore) =>
-  select(
-    store.getDB(),
-    (function* () {
-      return yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(10);
-    })(),
-  );
+  selectSync(store.getDB(), { selector: committedRows, args: {} });
 
 const selectCommittedTraces = (store: HyperDBTraceStore) =>
-  select(
-    store.getDB(),
-    (function* () {
-      const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
-        .order("desc")
-        .limit(10);
-      return store.resolveTraceRows(rows);
-    })(),
+  store.resolveTraceRows(
+    selectSync(store.getDB(), { selector: committedTraces, args: {} }),
   );
 
 describe("devtool tracing store", () => {

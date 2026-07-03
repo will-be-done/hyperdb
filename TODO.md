@@ -37,6 +37,7 @@ Doc:
 1. DONE adopt styling of trpc
 1. DONE move devtool to separate package
 1. Copy-paste button of full page
+1. Mention that if no data was loaded from async storage - then useAsyncSelector will run sync
 
 Others:
 

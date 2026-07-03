@@ -13,10 +13,10 @@ import { v } from "../schema/values";
 import {
   createSelector,
   getSubscribableHybridCacheDB,
-  initCachedSelector,
-  preloadSelector,
+  createCachedSelectorStoreSync,
+  preloadSelectorAsync,
   runCachedSelectorMaybeAsync,
-  select,
+  selectSync,
   selectAsync,
 } from "../commands/selector/selector";
 import { selectFrom } from "../commands/selector/builder";
@@ -87,7 +87,7 @@ const deferred = () => {
 const waitOneTurn = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 const selectCommittedTraces = (limit = 20): RootTrace[] =>
-  select(
+  selectSync(
     hyperDBTraceStore.getDB(),
     (function* () {
       const rows = yield* selectFrom(traceRootsRuntimeTable, "byCreatedSeq")
@@ -234,7 +234,7 @@ describe("HybridDB", () => {
 
     primaryScanSpy.mockClear();
 
-    expect(select(cache, selectByValue(1, 3))).toEqual(tasks);
+    expect(selectSync(cache, selectByValue(1, 3))).toEqual(tasks);
     expect(primaryScanSpy).not.toHaveBeenCalled();
   });
 
@@ -292,13 +292,13 @@ describe("HybridDB", () => {
     });
 
     await expect(
-      preloadSelector(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
     ).resolves.toEqual(tasks);
     expect(runCount).toBe(1);
 
     const cacheDB = getSubscribableHybridCacheDB(db);
     expect(cacheDB).toBeDefined();
-    const cached = initCachedSelector(cacheDB!, projectTasks, {
+    const cached = createCachedSelectorStoreSync(cacheDB!, projectTasks, {
       projectId: "a",
     });
 
@@ -325,12 +325,12 @@ describe("HybridDB", () => {
     });
 
     await expect(
-      preloadSelector(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
     ).resolves.toEqual(tasks);
     expect(runCount).toBe(1);
 
     await expect(
-      preloadSelector(db, projectTasks, { projectId: "a" }),
+      preloadSelectorAsync(db, projectTasks, { projectId: "a" }),
     ).resolves.toEqual(tasks);
 
     expect(runCount).toBe(1);
@@ -432,8 +432,8 @@ describe("HybridDB", () => {
     const tx = await db.beginTx();
     await tx.upsert(tasksTable, [updated]);
 
-    expect(select(cache, selectByValue(1, 1))).toEqual([original]);
-    expect(select(cache, selectByValue(2, 2))).toEqual([]);
+    expect(selectSync(cache, selectByValue(1, 1))).toEqual([original]);
+    expect(selectSync(cache, selectByValue(2, 2))).toEqual([]);
     await expect(
       tx.intervalScan(tasksTable, "byValue", [
         { eq: [{ col: "value", val: 2 }] },
@@ -442,8 +442,8 @@ describe("HybridDB", () => {
 
     await tx.commit();
 
-    expect(select(cache, selectByValue(1, 1))).toEqual([]);
-    expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
+    expect(selectSync(cache, selectByValue(1, 1))).toEqual([]);
+    expect(selectSync(cache, selectByValue(2, 2))).toEqual([updated]);
   });
 
   it("commits cache writes before persistence and blocks intersecting uncached reads", async () => {
@@ -483,8 +483,8 @@ describe("HybridDB", () => {
     await waitOneTurn();
     await expect(persistCommitStarted.promise).resolves.toBeUndefined();
 
-    expect(select(cache, selectByValue(1, 1))).toEqual([]);
-    expect(select(cache, selectByValue(2, 2))).toEqual([updated]);
+    expect(selectSync(cache, selectByValue(1, 1))).toEqual([]);
+    expect(selectSync(cache, selectByValue(2, 2))).toEqual([updated]);
     await expect(
       db.intervalScan(tasksTable, "byValue", [
         { eq: [{ col: "value", val: 1 }] },

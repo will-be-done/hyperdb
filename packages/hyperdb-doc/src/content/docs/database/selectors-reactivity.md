@@ -38,13 +38,16 @@ index range either way, independent of which storage tier returned the rows.
 
 ## Caching a selector
 
-`initCachedSelector` gives you a subscribable store for a selector + args,
+`createCachedSelectorStoreSync` gives you a subscribable store for a selector + args,
 outside of React. (The React hooks are built on it.)
 
 ```ts
-import { initCachedSelector } from "@will-be-done/hyperdb";
+import { createCachedSelectorStoreSync } from "@will-be-done/hyperdb";
 
-const store = initCachedSelector(db, projectTasks, { projectId: "p1" });
+const store = createCachedSelectorStoreSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 
 store.getSnapshot(); // current value
 const unsub = store.subscribe(() => {
@@ -74,14 +77,17 @@ Cached selector reads always use the selector cache. If the runtime is
 
 ## Preloading a selector
 
-`preloadSelector` runs a selector through the root selector cache without
+`preloadSelectorAsync` runs a selector through the root selector cache without
 creating a React subscription. Use it in route loaders or hover prefetches when
 you know the selector args a screen is about to render.
 
 ```ts
-import { preloadSelector } from "@will-be-done/hyperdb";
+import { preloadSelectorAsync } from "@will-be-done/hyperdb";
 
-await preloadSelector(db, projectTasks, { projectId: "p1" });
+await preloadSelectorAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 ```
 
 Preloading is execution-based, not static analysis. HyperDB runs the selector
@@ -101,14 +107,16 @@ identity and args can reuse that warmed entry when its async run starts, without
 doing a synchronous cache read during render.
 
 ```ts
-const categories = await preloadSelector(db, projectCategoriesByProjectId, {
-  projectId,
+const categories = await preloadSelectorAsync(db, {
+  selector: projectCategoriesByProjectId,
+  args: { projectId },
 });
 
 await Promise.all(
   categories.map((category) =>
-    preloadSelector(db, projectCategoryCardsForDisplayChildren, {
-      projectCategoryId: category.id,
+    preloadSelectorAsync(db, {
+      selector: projectCategoryCardsForDisplayChildren,
+      args: { projectCategoryId: category.id },
     }),
   ),
 );
@@ -129,10 +137,18 @@ overlapping mutations can mark it stale for the next read.
 
 ```ts
 // keep an unused entry around for 30s
-initCachedSelector(db, projectTasks, { projectId: "p1" }, { gcTime: 30_000 });
+createCachedSelectorStoreSync(
+  db,
+  { selector: projectTasks, args: { projectId: "p1" } },
+  { gcTime: 30_000 },
+);
 
 // drop immediately when unsubscribed
-initCachedSelector(db, projectTasks, { projectId: "p1" }, { gcTime: 0 });
+createCachedSelectorStoreSync(
+  db,
+  { selector: projectTasks, args: { projectId: "p1" } },
+  { gcTime: 0 },
+);
 ```
 
 ## Memoization controls
@@ -153,7 +169,7 @@ const projectTasks = selector({
 ### `root` (default `true`)
 
 Root memoization is the top-level cache described above. With `root: true`, calls
-to `initCachedSelector` (and the React hooks) share a cached, subscribed entry
+to `createCachedSelectorStoreSync` (and the React hooks) share a cached, subscribed entry
 per args. Set `root: false` to opt out, so each use gets an uncached store that
 still tracks ranges and stays reactive, but isn't shared or retained between uses.
 
@@ -205,7 +221,7 @@ const unsub = db.subscribe((ops, traits, revision) => {
   large or unstable objects.
 - Prefer indexed reads over filtering large arrays in selector code. Reactivity
   is precise when the runtime can see the range you read.
-- Use `preloadSelector` when you know the exact selector args a screen will
+- Use `preloadSelectorAsync` when you know the exact selector args a screen will
   render. Use `preloadTables` on `HybridDB` when an entire table should be warm.
 - Reach for `selfChild` only when profiling (or the [devtool](/integrations/devtools/))
   shows an expensive nested selector recomputing needlessly.

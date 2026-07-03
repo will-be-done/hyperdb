@@ -287,7 +287,7 @@ describe("IdbDriver", () => {
         ]),
       );
 
-      await selectAsync(db, selector({}));
+      await selectAsync(db, { selector: selector, args: {} });
 
       const messages = logSpy.mock.calls.map(([message]) => String(message));
       expect(

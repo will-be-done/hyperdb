@@ -12,8 +12,8 @@ commands.
 
 | Runtime shape                   | Use when                                                                                   | Tradeoff                                                                                                                                                                                                                                     |
 | ------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DB`                            | You only need `select`, `insert`, `upsert`, `deleteRows`, and transactions.                | Lowest overhead. No subscriptions, reactive selector cache, revisions, or lifecycle hooks.                                                                                                                                                   |
-| `SubscribableDB` + sync driver  | Your reactive app can load its working state into memory.                                  | Best interactive path: selectors and actions can stay synchronous with `useSyncSelector`, `useDispatch`, `select`, and `syncDispatch`.                                                                                                       |
+| `DB`                            | You only need `selectSync`, `insert`, `upsert`, `deleteRows`, and transactions.            | Lowest overhead. No subscriptions, reactive selector cache, revisions, or lifecycle hooks.                                                                                                                                                   |
+| `SubscribableDB` + sync driver  | Your reactive app can load its working state into memory.                                  | Best interactive path: selectors and actions can stay synchronous with `useSyncSelector`, `useDispatch`, `selectSync`, and `syncDispatch`.                                                                                                   |
 | `SubscribableDB` + async driver | Your reactive app should keep memory low and read directly from IndexedDB or async SQLite. | Uses async selectors/actions. Simpler than `HybridDB`, but every read follows the async driver path.                                                                                                                                         |
 | `SubscribableDB` + `HybridDB`   | Local-first browser apps that want persistent storage plus fast reads for hot data.        | Uses async APIs, but reads check the in-memory cache first. Missing index ranges fall through to the primary store, then get cached for next time. Writes update the cache first for immediate UI response, then flush to the primary store. |
 
@@ -242,14 +242,14 @@ their interval.
 Selectors and actions are generators. The dispatch and select helpers run them
 for you, but you can also drive a generator directly:
 
-| Helper                            | Use                                            |
-| --------------------------------- | ---------------------------------------------- |
-| `syncDispatch(db, action(args))`  | Run an action in a transaction (sync drivers)  |
-| `asyncDispatch(db, action(args))` | Run an action in a transaction (async drivers) |
-| `select(db, gen)`                 | Run a selector once (sync drivers)             |
-| `selectAsync(db, gen)`            | Run a selector once (async drivers)            |
-| `execSync(generator)`             | Drive a raw DB-command generator (sync)        |
-| `execAsync(generator)`            | Drive a raw DB-command generator (async)       |
+| Helper                                | Use                                            |
+| ------------------------------------- | ---------------------------------------------- |
+| `syncDispatch(db, action(args))`      | Run an action in a transaction (sync drivers)  |
+| `asyncDispatch(db, action(args))`     | Run an action in a transaction (async drivers) |
+| `selectSync(db, { selector, args })`  | Run a selector once (sync drivers)             |
+| `selectAsync(db, { selector, args })` | Run a selector once (async drivers)            |
+| `execSync(generator)`                 | Drive a raw DB-command generator (sync)        |
+| `execAsync(generator)`                | Drive a raw DB-command generator (async)       |
 
 `execSync` throws if the generator yields an async command, which is how the
 sync/async split is enforced. Async drivers must go through `execAsync` /

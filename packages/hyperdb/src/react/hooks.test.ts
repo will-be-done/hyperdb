@@ -18,10 +18,10 @@ const mocks = {
   db: undefined as unknown as MockDB,
   refs: [] as { current: unknown }[],
   setState: vi.fn(),
-  initCachedSelector: vi.fn(),
+  createCachedSelectorStoreSync: vi.fn(),
   runCachedSelectorMaybeAsync: vi.fn(),
-  runSelectorAsync: vi.fn(),
-  runSelectorMaybeAsync: vi.fn(),
+  selectAsync: vi.fn(),
+  selectMaybeAsync: vi.fn(),
   isNeedToRerunRange: vi.fn(),
   stableSerializeSelectorArgs: vi.fn(),
 };
@@ -94,21 +94,22 @@ describe("useAsyncSelector", () => {
     mocks.db = createMockDB();
     mocks.refs = [];
     mocks.setState.mockReset();
-    mocks.initCachedSelector.mockReset();
+    mocks.createCachedSelectorStoreSync.mockReset();
     mocks.runCachedSelectorMaybeAsync.mockReset();
-    mocks.runSelectorAsync.mockReset();
-    mocks.runSelectorMaybeAsync.mockReset();
+    mocks.selectAsync.mockReset();
+    mocks.selectMaybeAsync.mockReset();
     mocks.isNeedToRerunRange.mockReset();
     mocks.stableSerializeSelectorArgs.mockReset();
     mocks.stableSerializeSelectorArgs.mockReturnValue("args-key");
     restoreHookDeps = setHyperDBHookDepsForTest({
       ...fakeReactHooks,
       useDB: () => mocks.db,
-      initCachedSelector: (...args) => mocks.initCachedSelector(...args),
+      createCachedSelectorStoreSync: (...args) =>
+        mocks.createCachedSelectorStoreSync(...args),
       runCachedSelectorMaybeAsync: (...args) =>
         mocks.runCachedSelectorMaybeAsync(...args),
-      runSelectorAsync: (...args) => mocks.runSelectorAsync(...args),
-      runSelectorMaybeAsync: (...args) => mocks.runSelectorMaybeAsync(...args),
+      selectAsync: (...args) => mocks.selectAsync(...args),
+      selectMaybeAsync: (...args) => mocks.selectMaybeAsync(...args),
       isNeedToRerunRange: (...args) => mocks.isNeedToRerunRange(...args),
       stableSerializeSelectorArgs: (...args) =>
         mocks.stableSerializeSelectorArgs(...args),
@@ -128,7 +129,7 @@ describe("useAsyncSelector", () => {
       subscribe: vi.fn(() => vi.fn()),
       getSnapshot: vi.fn(() => ["task-1"]),
     };
-    mocks.initCachedSelector.mockReturnValue(store);
+    mocks.createCachedSelectorStoreSync.mockReturnValue(store);
 
     const result = useSyncSelector({
       selector,
@@ -137,8 +138,9 @@ describe("useAsyncSelector", () => {
     });
 
     expect(result).toEqual(["task-1"]);
-    expect(mocks.initCachedSelector).toHaveBeenCalledWith(mocks.db, selector, {
-      projectId: "project-1",
+    expect(mocks.createCachedSelectorStoreSync).toHaveBeenCalledWith(mocks.db, {
+      selector,
+      args: { projectId: "project-1" },
     });
   });
 
@@ -156,7 +158,7 @@ describe("useAsyncSelector", () => {
 
     expect(result).toEqual([]);
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
   });
 
   it("collapses overlapping subscription reruns and applies only the latest async result", async () => {
@@ -166,18 +168,17 @@ describe("useAsyncSelector", () => {
     const secondCmd = { table: "tasks", range: "second" };
     let runCount = 0;
 
-    mocks.runSelectorMaybeAsync.mockImplementation(
-      (_db, _gen, cmds: unknown[]) => {
-        runCount++;
-        if (runCount === 1) {
-          cmds.push(firstCmd);
-          return first.promise;
-        }
+    mocks.selectMaybeAsync.mockImplementation((_db, _input, options) => {
+      const cmds = options.selectRangeCmds;
+      runCount++;
+      if (runCount === 1) {
+        cmds.push(firstCmd);
+        return first.promise;
+      }
 
-        cmds.push(secondCmd);
-        return second.promise;
-      },
-    );
+      cmds.push(secondCmd);
+      return second.promise;
+    });
 
     useAsyncSelector({
       selector: function* selector() {
@@ -186,7 +187,7 @@ describe("useAsyncSelector", () => {
       args: {},
     });
 
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
     mocks.setState.mockClear();
 
@@ -194,13 +195,13 @@ describe("useAsyncSelector", () => {
     mocks.db.emit([{ id: "op-2" }]);
     mocks.db.emit([{ id: "op-3" }]);
 
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(1);
 
     first.resolve("stale");
     await flushPromises();
 
     expect(mocks.setState).not.toHaveBeenCalled();
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(2);
 
     second.resolve("latest");
     await flushPromises();
@@ -223,19 +224,17 @@ describe("useAsyncSelector", () => {
       [secondCmd],
       ignoredOps,
     );
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(2);
   });
 
   it("ignores a pending async selector result after unmount cleanup", async () => {
     const pending = deferred<string>();
     const cmd = { table: "tasks", range: "pending" };
 
-    mocks.runSelectorMaybeAsync.mockImplementation(
-      (_db, _gen, cmds: unknown[]) => {
-        cmds.push(cmd);
-        return pending.promise;
-      },
-    );
+    mocks.selectMaybeAsync.mockImplementation((_db, _input, options) => {
+      options.selectRangeCmds.push(cmd);
+      return pending.promise;
+    });
 
     useAsyncSelector({
       selector: function* selector() {
@@ -276,7 +275,7 @@ describe("useAsyncSelector", () => {
     expect(result.fetchStatus).toBe("idle");
     expect(result.isEnabled).toBe(false);
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
-    expect(mocks.runSelectorMaybeAsync).not.toHaveBeenCalled();
+    expect(mocks.selectMaybeAsync).not.toHaveBeenCalled();
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
   });
 
@@ -295,8 +294,8 @@ describe("useAsyncSelector", () => {
     const cmd = { table: "tasks", range: "hybrid" };
 
     mocks.runCachedSelectorMaybeAsync.mockImplementation(
-      (_db, _selector, _args, cmds: unknown[]) => {
-        cmds.push(cmd);
+      (_db, _input, options) => {
+        options.selectRangeCmds.push(cmd);
         selector({ projectId: "project-1" });
         return Promise.resolve(["fresh"]);
       },
@@ -312,14 +311,13 @@ describe("useAsyncSelector", () => {
     expect(result.status).toBe("pending");
     expect(result.isLoading).toBe(true);
     expect(result.isRefetching).toBe(false);
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
     expect(mocks.runCachedSelectorMaybeAsync).toHaveBeenCalledWith(
       mocks.db,
-      selector,
-      { projectId: "project-1" },
-      expect.any(Array),
+      { selector, args: { projectId: "project-1" } },
+      { selectRangeCmds: expect.any(Array) },
     );
-    expect(mocks.runSelectorMaybeAsync).not.toHaveBeenCalled();
+    expect(mocks.selectMaybeAsync).not.toHaveBeenCalled();
 
     await flushPromises();
 
@@ -347,7 +345,7 @@ describe("useAsyncSelector", () => {
     });
 
     mocks.runCachedSelectorMaybeAsync.mockImplementation(
-      (_db, _selector, _args, _cmds: unknown[]) => {
+      (_db, _input, _options) => {
         selector({ projectId: "project-1" });
         return pending.promise;
       },
@@ -359,7 +357,7 @@ describe("useAsyncSelector", () => {
       defaultValue: [],
     });
 
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
     expect(mocks.runCachedSelectorMaybeAsync).toHaveBeenCalledTimes(1);
 
     await flushPromises();
@@ -383,20 +381,19 @@ describe("useAsyncSelector", () => {
     const freshCmd = { table: "tasks", range: "fresh" };
     let runCount = 0;
 
-    mocks.runSelectorMaybeAsync.mockImplementation(
-      (_db, _gen, cmds: unknown[]) => {
-        runCount++;
+    mocks.selectMaybeAsync.mockImplementation((_db, _input, options) => {
+      const cmds = options.selectRangeCmds;
+      runCount++;
 
-        if (runCount === 1) {
-          cmds.push(staleCmd);
-          mocks.db.emit([{ id: "between-render-and-effect" }]);
-          return stale.promise;
-        }
+      if (runCount === 1) {
+        cmds.push(staleCmd);
+        mocks.db.emit([{ id: "between-render-and-effect" }]);
+        return stale.promise;
+      }
 
-        cmds.push(freshCmd);
-        return fresh.promise;
-      },
-    );
+      cmds.push(freshCmd);
+      return fresh.promise;
+    });
 
     useAsyncSelector({
       selector: function* selector() {
@@ -406,7 +403,7 @@ describe("useAsyncSelector", () => {
       defaultValue: [],
     });
 
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(2);
 
     stale.resolve(["stale"]);
     await flushPromises();
@@ -441,10 +438,10 @@ describe("useAsyncSelector", () => {
     const second = deferred<string[]>();
 
     mocks.runCachedSelectorMaybeAsync
-      .mockImplementationOnce((_db, _selector, _args, _cmds: unknown[]) => {
+      .mockImplementationOnce((_db, _input, _options) => {
         return first.promise;
       })
-      .mockImplementationOnce((_db, _selector, _args, _cmds: unknown[]) => {
+      .mockImplementationOnce((_db, _input, _options) => {
         return second.promise;
       });
     mocks.stableSerializeSelectorArgs
@@ -469,7 +466,7 @@ describe("useAsyncSelector", () => {
       defaultValue: [],
     });
 
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
 
     first.resolve(["stale-1"]);
     await flushPromises();
@@ -528,13 +525,15 @@ describe("useAsyncSelector", () => {
       defaultValue: [],
     });
 
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
     expect(mocks.runCachedSelectorMaybeAsync).toHaveBeenCalledTimes(3);
-    expect(mocks.runCachedSelectorMaybeAsync.mock.calls[0]?.[2]).toEqual({
-      projectId: "project-1",
+    expect(mocks.runCachedSelectorMaybeAsync.mock.calls[0]?.[1]).toEqual({
+      selector,
+      args: { projectId: "project-1" },
     });
-    expect(mocks.runCachedSelectorMaybeAsync.mock.calls[2]?.[2]).toEqual({
-      projectId: "project-1",
+    expect(mocks.runCachedSelectorMaybeAsync.mock.calls[2]?.[1]).toEqual({
+      selector,
+      args: { projectId: "project-1" },
     });
   });
 
@@ -543,7 +542,7 @@ describe("useAsyncSelector", () => {
     const selector = vi.fn(function* selector() {
       return ["unused"];
     });
-    mocks.runSelectorMaybeAsync.mockReturnValue(pending.promise);
+    mocks.selectMaybeAsync.mockReturnValue(pending.promise);
 
     const result = useAsyncSelector({
       selector,
@@ -561,7 +560,7 @@ describe("useAsyncSelector", () => {
     expect(refetchResult.status).toBe("success");
     expect(refetchResult.isSuccess).toBe(true);
     expect(refetchResult.isFetching).toBe(false);
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
   });
 
@@ -583,7 +582,7 @@ describe("useAsyncSelector", () => {
       subscribed: false,
     });
 
-    expect(mocks.initCachedSelector).not.toHaveBeenCalled();
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
     expect(mocks.db.subscribe).not.toHaveBeenCalled();
   });
 
@@ -593,13 +592,11 @@ describe("useAsyncSelector", () => {
       return ["unused"];
     });
 
-    mocks.runSelectorMaybeAsync.mockImplementation(
-      (_db, gen, cmds: unknown[]) => {
-        cmds.push(cmd);
-        gen();
-        return ["task-1"];
-      },
-    );
+    mocks.selectMaybeAsync.mockImplementation((_db, input, options) => {
+      options.selectRangeCmds.push(cmd);
+      input.selector(input.args);
+      return ["task-1"];
+    });
 
     const result = useAsyncSelector({
       selector,
@@ -611,8 +608,8 @@ describe("useAsyncSelector", () => {
     expect(result.status).toBe("success");
     expect(result.isLoading).toBe(false);
     expect(selector).toHaveBeenCalledWith({ projectId: "project-1" });
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
-    expect(mocks.runSelectorAsync).not.toHaveBeenCalled();
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.selectAsync).not.toHaveBeenCalled();
     expect(mocks.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({
         data: ["task-1"],
@@ -627,8 +624,8 @@ describe("useAsyncSelector", () => {
       return ["unused"];
     });
 
-    mocks.runSelectorMaybeAsync.mockImplementation((_db, gen) => {
-      gen();
+    mocks.selectMaybeAsync.mockImplementation((_db, input) => {
+      input.selector(input.args);
       return Promise.resolve(["task-1"]);
     });
 
@@ -641,7 +638,7 @@ describe("useAsyncSelector", () => {
     await flushPromises();
 
     expect(selector).toHaveBeenCalledWith({ projectId: "project-1" });
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(1);
     expect(mocks.db.subscribe).toHaveBeenCalledTimes(1);
     expect(mocks.setState).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -655,7 +652,7 @@ describe("useAsyncSelector", () => {
     const selector = vi.fn(function* selector(_args: { projectId: string }) {
       return ["unused"];
     });
-    mocks.runSelectorMaybeAsync.mockReturnValue(new Promise(() => {}));
+    mocks.selectMaybeAsync.mockReturnValue(new Promise(() => {}));
     mocks.stableSerializeSelectorArgs
       .mockReturnValueOnce("project-1")
       .mockReturnValueOnce("project-2");
@@ -678,6 +675,6 @@ describe("useAsyncSelector", () => {
     expect(mocks.setState).toHaveBeenCalledWith(
       expect.objectContaining({ data: ["loading-2"] }),
     );
-    expect(mocks.runSelectorMaybeAsync).toHaveBeenCalledTimes(2);
+    expect(mocks.selectMaybeAsync).toHaveBeenCalledTimes(2);
   });
 });

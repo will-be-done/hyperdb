@@ -125,7 +125,7 @@ export async function createAppDB() {
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
 reads and writes synchronous, so you can use `useSyncSelector`,
-`useDispatch`, `select`, and `syncDispatch` without promise or cache-miss
+`useDispatch`, `selectSync`, and `syncDispatch` without promise or cache-miss
 tradeoffs.
 
 ## 6. Read and write outside React
@@ -142,7 +142,10 @@ await asyncDispatch(
   createTask({ id: "task-1", projectId: "p1", title: "Ship it" }),
 );
 
-const tasks = await selectAsync(db, projectTasks({ projectId: "p1" }));
+const tasks = await selectAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 console.log(tasks); // [{ id: "task-1", ... }]
 ```
 

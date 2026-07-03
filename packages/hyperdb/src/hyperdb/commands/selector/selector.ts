@@ -132,6 +132,11 @@ export type SelectorArgs<TSelector> = TSelector extends (
   ? TArgs
   : never;
 
+export type SelectorInput<TSelector extends AnyObjectSelector> = {
+  selector: TSelector;
+  args: SelectorArgs<TSelector>;
+};
+
 export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
@@ -350,6 +355,47 @@ export function createSelector(
 }
 
 type RunSelectorOptions = Pick<CommandRunnerOptions, "ops" | "childMemo">;
+type SelectorRunOptions = {
+  selectRangeCmds?: SelectRangeCmd[];
+};
+type CachedSelectorRunOptions = SelectorRunOptions & {
+  freezeArgs?: boolean;
+  gcTime?: number;
+};
+type SelectorStoreOptions = {
+  freezeArgs?: boolean;
+};
+type CachedSelectorStoreOptions = SelectorStoreOptions & {
+  gcTime?: number;
+};
+type PreloadSelectorOptions = CachedSelectorRunOptions & {
+  cacheDB?: SubscribableDB | false;
+};
+
+const isSelectorInput = <TSelector extends AnyObjectSelector>(
+  input: unknown,
+): input is SelectorInput<TSelector> =>
+  input !== null &&
+  typeof input === "object" &&
+  typeof (input as { selector?: unknown }).selector === "function" &&
+  "args" in input;
+
+const normalizeSelectorInput = <TSelector extends AnyObjectSelector>(
+  input: SelectorInput<TSelector> | TSelector,
+  args: SelectorArgs<TSelector> | undefined,
+): SelectorInput<TSelector> =>
+  isSelectorInput<TSelector>(input)
+    ? input
+    : { selector: input as TSelector, args: args as SelectorArgs<TSelector> };
+
+const selectorGeneratorFactory = <TSelector extends AnyObjectSelector>(
+  input:
+    | SelectorInput<TSelector>
+    | Generator<unknown, SelectorReturn<TSelector>, unknown>,
+): (() => Generator<unknown, SelectorReturn<TSelector>, unknown>) =>
+  isSelectorInput<TSelector>(input)
+    ? () => input.selector(input.args)
+    : () => input;
 
 // When a childMemo is tracked, collect the selectors referenced this run so
 // entries that were not referenced can be pruned afterwards (correctness for
@@ -383,7 +429,7 @@ function* runCommandGeneratorWithReadonlyTransaction<TReturn>(
   }
 }
 
-export function runSelector<TReturn>(
+function runSelectorGeneratorSync<TReturn>(
   db: HyperDB,
   gen: () => Generator<unknown, TReturn, unknown>,
   selectRangeCmds: SelectRangeCmd[],
@@ -405,7 +451,7 @@ export function runSelector<TReturn>(
   return result;
 }
 
-export async function runSelectorAsync<TReturn>(
+async function runSelectorGeneratorAsync<TReturn>(
   db: HyperDB,
   gen: () => Generator<unknown, TReturn, unknown>,
   selectRangeCmds: SelectRangeCmd[] = [],
@@ -427,7 +473,7 @@ export async function runSelectorAsync<TReturn>(
   return result;
 }
 
-export function runSelectorMaybeAsync<TReturn>(
+function runSelectorGeneratorMaybeAsync<TReturn>(
   db: HyperDB,
   gen: () => Generator<unknown, TReturn, unknown>,
   selectRangeCmds: SelectRangeCmd[] = [],
@@ -457,56 +503,6 @@ export function runSelectorMaybeAsync<TReturn>(
     pruneChildMemo(options.childMemo, visited);
   }
   return result;
-}
-
-export function initSelector<TReturn>(
-  db: SubscribableDB,
-  gen: () => Generator<unknown, TReturn, unknown>,
-): {
-  subscribe: (callback: () => void) => () => void;
-  getSnapshot: () => TReturn;
-} {
-  let currentResult: TReturn | undefined;
-  let currentRevision: number;
-  const selectRangeCmds: SelectRangeCmd[] = [];
-
-  currentResult = runSelector(db, gen, selectRangeCmds);
-  currentRevision = db.getRevision();
-
-  const rerun = () => {
-    currentResult = runSelector(db, gen, selectRangeCmds);
-    currentRevision = db.getRevision();
-  };
-
-  return {
-    subscribe: (callback: () => void) => {
-      const dbUnsubscribes: (() => void)[] = [];
-
-      const unsubscribe = db.subscribe((ops, _traits, revision) => {
-        currentRevision = revision;
-        if (!isNeedToRerunRange(selectRangeCmds, ops)) {
-          return;
-        }
-
-        rerun();
-        callback();
-      });
-
-      dbUnsubscribes.push(unsubscribe);
-
-      if (currentRevision !== db.getRevision()) {
-        rerun();
-        callback();
-      }
-
-      return () => {
-        for (const unsubscribe of dbUnsubscribes) {
-          unsubscribe();
-        }
-      };
-    },
-    getSnapshot: () => currentResult!,
-  };
 }
 
 type SelectorCacheEntry<TReturn> = {
@@ -708,7 +704,7 @@ const rerunSelectorCacheEntry = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
   ops?: Op[],
 ) => {
-  entry.currentResult = runSelector(
+  entry.currentResult = runSelectorGeneratorSync(
     entry.db,
     entry.gen,
     entry.selectRangeCmds,
@@ -732,7 +728,7 @@ const refreshSelectorCacheEntryMaybeAsync = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
 ): TReturn | Promise<TReturn> => {
   const revision = entry.db.getRevision();
-  const result = runSelectorMaybeAsync(
+  const result = runSelectorGeneratorMaybeAsync(
     entry.db,
     entry.gen,
     entry.selectRangeCmds,
@@ -754,6 +750,24 @@ const refreshSelectorCacheEntryMaybeAsync = <TReturn>(
       return value;
     });
   }
+
+  entry.currentResult = result;
+  entry.currentRevision = entry.db.getRevision();
+  entry.needsRerun = false;
+  return result;
+};
+
+const refreshSelectorCacheEntrySync = <TReturn>(
+  entry: SelectorCacheEntry<TReturn>,
+): TReturn => {
+  const result = runSelectorGeneratorSync(
+    entry.db,
+    entry.gen,
+    entry.selectRangeCmds,
+    {
+      childMemo: entry.childMemo,
+    },
+  );
 
   entry.currentResult = result;
   entry.currentRevision = entry.db.getRevision();
@@ -837,7 +851,77 @@ const primeCachedSelector = <TSelector extends AnyObjectSelector>(
   }
 };
 
-export function runCachedSelectorMaybeAsync<
+const runCachedSelectorSyncInternal = <TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  selector: TSelector,
+  args: SelectorArgs<TSelector>,
+  selectRangeCmds: SelectRangeCmd[] = [],
+  options: {
+    freezeArgs?: boolean;
+    gcTime?: number;
+  } = {},
+): SelectorReturn<TSelector> => {
+  if (!getSelectorMemoization(selector).root) {
+    return runSelectorGeneratorSync(db, () => selector(args), selectRangeCmds);
+  }
+
+  const argsKey = stableSerializeSelectorArgs(args);
+  const freezeArgs =
+    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+  const cachedArgs = freezeArgs ? deepFreeze(args) : args;
+  const byArgs = getSelectorCacheMap(db, selector);
+  runSelectorCacheGc();
+  let entry = byArgs.get(argsKey) as
+    | SelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
+  const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
+
+  if (entry) {
+    cancelSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>);
+
+    if (!entry.needsRerun && entry.currentRevision === db.getRevision()) {
+      traceSelectorCacheHit(entry as SelectorCacheEntry<unknown>);
+      copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
+      scheduleSelectorCacheEntryGc(
+        entry as SelectorCacheEntry<unknown>,
+        gcTime,
+      );
+      return entry.currentResult;
+    }
+
+    const result = refreshSelectorCacheEntrySync(entry);
+    copySelectRangeCmds(selectRangeCmds, entry.selectRangeCmds);
+    scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+    return result;
+  }
+
+  const entrySelectRangeCmds: SelectRangeCmd[] = [];
+  const childMemo: ChildMemo = new Map();
+  const gen = () => selector(cachedArgs);
+  const result = runSelectorGeneratorSync(db, gen, entrySelectRangeCmds, {
+    childMemo,
+  });
+
+  entry = {
+    argsKey,
+    args: cachedArgs,
+    db,
+    selector,
+    gen,
+    currentResult: result,
+    currentRevision: db.getRevision(),
+    selectRangeCmds: entrySelectRangeCmds,
+    childMemo,
+    subscribers: new Set(),
+  };
+  byArgs.set(argsKey, entry as SelectorCacheEntry<unknown>);
+  copySelectRangeCmds(selectRangeCmds, entrySelectRangeCmds);
+  ensureSelectorCacheEntrySubscribed(entry);
+  scheduleSelectorCacheEntryGc(entry as SelectorCacheEntry<unknown>, gcTime);
+  return result;
+};
+
+const runCachedSelectorMaybeAsyncInternal = <
   TSelector extends AnyObjectSelector,
 >(
   db: SubscribableDB,
@@ -848,9 +932,13 @@ export function runCachedSelectorMaybeAsync<
     freezeArgs?: boolean;
     gcTime?: number;
   } = {},
-): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> {
+): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> => {
   if (!getSelectorMemoization(selector).root) {
-    return runSelectorMaybeAsync(db, () => selector(args), selectRangeCmds);
+    return runSelectorGeneratorMaybeAsync(
+      db,
+      () => selector(args),
+      selectRangeCmds,
+    );
   }
 
   const argsKey = stableSerializeSelectorArgs(args);
@@ -900,7 +988,7 @@ export function runCachedSelectorMaybeAsync<
   const childMemo: ChildMemo = new Map();
   const gen = () => selector(cachedArgs);
   const revision = db.getRevision();
-  const result = runSelectorMaybeAsync(db, gen, entrySelectRangeCmds, {
+  const result = runSelectorGeneratorMaybeAsync(db, gen, entrySelectRangeCmds, {
     childMemo,
   });
   const storeEntry = (value: SelectorReturn<TSelector>, needsRerun = false) => {
@@ -931,42 +1019,137 @@ export function runCachedSelectorMaybeAsync<
   }
 
   return storeEntry(result);
+};
+
+export function runCachedSelectorSync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector>,
+  options?: CachedSelectorRunOptions,
+): SelectorReturn<TSelector>;
+export function runCachedSelectorSync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector> | TSelector,
+  optionsOrArgs: CachedSelectorRunOptions | SelectorArgs<TSelector> = {},
+  ...legacy: [CachedSelectorRunOptions?]
+): SelectorReturn<TSelector> {
+  const normalized = normalizeSelectorInput(
+    input,
+    optionsOrArgs as SelectorArgs<TSelector> | undefined,
+  );
+  const callOptions = isSelectorInput(input)
+    ? (optionsOrArgs as CachedSelectorRunOptions)
+    : (legacy[0] ?? {});
+
+  return runCachedSelectorSyncInternal(
+    db,
+    normalized.selector,
+    normalized.args,
+    callOptions.selectRangeCmds,
+    callOptions,
+  );
 }
 
-export async function preloadSelector<TSelector extends AnyObjectSelector>(
+export async function runCachedSelectorAsync<
+  TSelector extends AnyObjectSelector,
+>(
   db: SubscribableDB,
-  selector: TSelector,
-  args: SelectorArgs<TSelector>,
-  options: {
-    freezeArgs?: boolean;
-    gcTime?: number;
-    cacheDB?: SubscribableDB | false;
-  } = {},
+  input: SelectorInput<TSelector>,
+  options: CachedSelectorRunOptions = {},
 ): Promise<SelectorReturn<TSelector>> {
+  return runCachedSelectorMaybeAsync(db, input, options);
+}
+
+export function runCachedSelectorMaybeAsync<
+  TSelector extends AnyObjectSelector,
+>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector>,
+  options?: CachedSelectorRunOptions,
+): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>>;
+export function runCachedSelectorMaybeAsync<
+  TSelector extends AnyObjectSelector,
+>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector> | TSelector,
+  optionsOrArgs: CachedSelectorRunOptions | SelectorArgs<TSelector> = {},
+  ...legacy: [
+    (SelectRangeCmd[] | CachedSelectorRunOptions)?,
+    CachedSelectorRunOptions?,
+  ]
+): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> {
+  const normalized = normalizeSelectorInput(
+    input,
+    optionsOrArgs as SelectorArgs<TSelector> | undefined,
+  );
+  let callOptions = optionsOrArgs as CachedSelectorRunOptions;
+
+  if (!isSelectorInput(input)) {
+    const legacyFourth = legacy[0];
+    callOptions = Array.isArray(legacyFourth)
+      ? {
+          ...(legacy[1] ?? {}),
+          selectRangeCmds: legacyFourth,
+        }
+      : (legacyFourth ?? {});
+  }
+
+  return runCachedSelectorMaybeAsyncInternal(
+    db,
+    normalized.selector,
+    normalized.args,
+    callOptions.selectRangeCmds,
+    callOptions,
+  );
+}
+
+export async function preloadSelectorAsync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector>,
+  options?: PreloadSelectorOptions,
+): Promise<SelectorReturn<TSelector>>;
+export async function preloadSelectorAsync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector> | TSelector,
+  optionsOrArgs: PreloadSelectorOptions | SelectorArgs<TSelector> = {},
+  ...legacy: [PreloadSelectorOptions?]
+): Promise<SelectorReturn<TSelector>> {
+  const normalized = normalizeSelectorInput(
+    input,
+    optionsOrArgs as SelectorArgs<TSelector> | undefined,
+  );
+  const callOptions = isSelectorInput(input)
+    ? (optionsOrArgs as PreloadSelectorOptions)
+    : (legacy[0] ?? {});
   const selectRangeCmds: SelectRangeCmd[] = [];
   const value = await Promise.resolve(
-    runCachedSelectorMaybeAsync(db, selector, args, selectRangeCmds, options),
+    runCachedSelectorMaybeAsyncInternal(
+      db,
+      normalized.selector,
+      normalized.args,
+      selectRangeCmds,
+      callOptions,
+    ),
   );
   const cacheDB =
-    options.cacheDB === undefined
+    callOptions.cacheDB === undefined
       ? getSubscribableHybridCacheDB(db)
-      : options.cacheDB || undefined;
+      : callOptions.cacheDB || undefined;
 
   if (cacheDB) {
     primeCachedSelector(
       cacheDB,
-      selector,
-      args,
+      normalized.selector,
+      normalized.args,
       value,
       selectRangeCmds,
-      options,
+      callOptions,
     );
   }
 
   return value;
 }
 
-const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
+const createUncachedSelectorStoreSync = <TSelector extends AnyObjectSelector>(
   db: SubscribableDB,
   selector: TSelector,
   args: SelectorArgs<TSelector>,
@@ -980,11 +1163,13 @@ const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
   const gen = () => selector(cachedArgs);
   const selectRangeCmds: SelectRangeCmd[] = [];
   const childMemo: ChildMemo = new Map();
-  let currentResult = runSelector(db, gen, selectRangeCmds, { childMemo });
+  let currentResult = runSelectorGeneratorSync(db, gen, selectRangeCmds, {
+    childMemo,
+  });
   let currentRevision = db.getRevision();
 
   const rerun = (ops?: Op[]) => {
-    currentResult = runSelector(db, gen, selectRangeCmds, {
+    currentResult = runSelectorGeneratorSync(db, gen, selectRangeCmds, {
       ops,
       childMemo,
     });
@@ -1021,6 +1206,33 @@ const initUncachedSelectorStore = <TSelector extends AnyObjectSelector>(
   };
 };
 
+export function createSelectorStoreSync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector>,
+  options?: SelectorStoreOptions,
+): SelectorCacheStore<SelectorReturn<TSelector>>;
+export function createSelectorStoreSync<TSelector extends AnyObjectSelector>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector> | TSelector,
+  optionsOrArgs: SelectorStoreOptions | SelectorArgs<TSelector> = {},
+  ...legacy: [SelectorStoreOptions?]
+): SelectorCacheStore<SelectorReturn<TSelector>> {
+  const normalized = normalizeSelectorInput(
+    input,
+    optionsOrArgs as SelectorArgs<TSelector> | undefined,
+  );
+  const callOptions = isSelectorInput(input)
+    ? (optionsOrArgs as SelectorStoreOptions)
+    : (legacy[0] ?? {});
+
+  return createUncachedSelectorStoreSync(
+    db,
+    normalized.selector,
+    normalized.args,
+    callOptions,
+  );
+}
+
 const ensureSelectorCacheEntrySubscribed = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
 ) => {
@@ -1046,22 +1258,37 @@ const ensureSelectorCacheEntrySubscribed = <TReturn>(
   });
 };
 
-export function initCachedSelector<TSelector extends AnyObjectSelector>(
+export function createCachedSelectorStoreSync<
+  TSelector extends AnyObjectSelector,
+>(
   db: SubscribableDB,
-  selector: TSelector,
-  args: SelectorArgs<TSelector>,
-  options: {
-    freezeArgs?: boolean;
-    gcTime?: number;
-  } = {},
+  input: SelectorInput<TSelector>,
+  options?: CachedSelectorStoreOptions,
+): SelectorCacheStore<SelectorReturn<TSelector>>;
+export function createCachedSelectorStoreSync<
+  TSelector extends AnyObjectSelector,
+>(
+  db: SubscribableDB,
+  input: SelectorInput<TSelector> | TSelector,
+  optionsOrArgs: CachedSelectorStoreOptions | SelectorArgs<TSelector> = {},
+  ...legacy: [CachedSelectorStoreOptions?]
 ): SelectorCacheStore<SelectorReturn<TSelector>> {
+  const normalized = normalizeSelectorInput(
+    input,
+    optionsOrArgs as SelectorArgs<TSelector> | undefined,
+  );
+  const callOptions = isSelectorInput(input)
+    ? (optionsOrArgs as CachedSelectorStoreOptions)
+    : (legacy[0] ?? {});
+  const { selector, args } = normalized;
+
   if (!getSelectorMemoization(selector).root) {
-    return initUncachedSelectorStore(db, selector, args, options);
+    return createUncachedSelectorStoreSync(db, selector, args, callOptions);
   }
 
   const argsKey = stableSerializeSelectorArgs(args);
   const freezeArgs =
-    options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
+    callOptions.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
   const cachedArgs = freezeArgs ? deepFreeze(args) : args;
   const byArgs = getSelectorCacheMap(db, selector);
   runSelectorCacheGc();
@@ -1073,7 +1300,9 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
     const selectRangeCmds: SelectRangeCmd[] = [];
     const childMemo: ChildMemo = new Map();
     const gen = () => selector(cachedArgs);
-    const currentResult = runSelector(db, gen, selectRangeCmds, { childMemo });
+    const currentResult = runSelectorGeneratorSync(db, gen, selectRangeCmds, {
+      childMemo,
+    });
     entry = {
       argsKey,
       args: cachedArgs,
@@ -1114,7 +1343,7 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
 
         if (entry.subscribers.size > 0) return;
 
-        const gcTime = options.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
+        const gcTime = callOptions.gcTime ?? DEFAULT_SELECTOR_CACHE_GC_TIME;
         scheduleSelectorCacheEntryGc(
           entry as SelectorCacheEntry<unknown>,
           gcTime,
@@ -1133,23 +1362,38 @@ export function initCachedSelector<TSelector extends AnyObjectSelector>(
   };
 }
 
-export function select<TReturn>(
+export function selectSync<TSelector extends AnyObjectSelector>(
   db: HyperDB,
-  gen: Generator<unknown, TReturn, unknown>,
-): TReturn {
-  return runSelector(db, () => gen, []);
+  input: SelectorInput<TSelector>,
+  options: SelectorRunOptions = {},
+): SelectorReturn<TSelector> {
+  return runSelectorGeneratorSync(
+    db,
+    selectorGeneratorFactory(input),
+    options.selectRangeCmds ?? [],
+  );
 }
 
-export async function selectAsync<TReturn>(
+export async function selectAsync<TSelector extends AnyObjectSelector>(
   db: HyperDB,
-  gen: Generator<unknown, TReturn, unknown>,
-): Promise<TReturn> {
-  return runSelectorAsync(db, () => gen, []);
+  input: SelectorInput<TSelector>,
+  options: SelectorRunOptions = {},
+): Promise<SelectorReturn<TSelector>> {
+  return runSelectorGeneratorAsync(
+    db,
+    selectorGeneratorFactory(input),
+    options.selectRangeCmds ?? [],
+  );
 }
 
-export function selectMaybeAsync<TReturn>(
+export function selectMaybeAsync<TSelector extends AnyObjectSelector>(
   db: HyperDB,
-  gen: Generator<unknown, TReturn, unknown>,
-): Promise<TReturn> | TReturn {
-  return runSelectorMaybeAsync(db, () => gen, []);
+  input: SelectorInput<TSelector>,
+  options: SelectorRunOptions = {},
+): Promise<SelectorReturn<TSelector>> | SelectorReturn<TSelector> {
+  return runSelectorGeneratorMaybeAsync(
+    db,
+    selectorGeneratorFactory(input),
+    options.selectRangeCmds ?? [],
+  );
 }

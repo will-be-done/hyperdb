@@ -36,7 +36,7 @@ and views that should re-run only when the exact index ranges they read change.
   setup, and core types.
 - `@will-be-done/hyperdb/react`: `DBProvider`, `useDB`, `useOptionalDB`,
   `useSyncSelector`, `useAsyncSelector`, `useDispatch`, `useAsyncDispatch`,
-  `useSelect`, and `useAsyncSelect`.
+  `useSelectSync`, and `useSelectAsync`.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
   trace metadata helpers.
 - `@will-be-done/hyperdb/drivers/inmemory`: `BptreeInmemDriver`.
@@ -65,9 +65,9 @@ import {
   getCurrentTraits,
   insert,
   or,
-  preloadSelector,
-  select,
+  preloadSelectorAsync,
   selectAsync,
+  selectSync,
   selectFrom,
   syncDispatch,
   upsert,
@@ -148,13 +148,19 @@ yield *
   );
 ```
 
-Run selectors outside React with `select`, `selectAsync`, or
-`preloadSelector`. Use sync helpers with sync drivers and async helpers with
+Run selectors outside React with `selectSync`, `selectAsync`, or
+`preloadSelectorAsync`. Use sync helpers with sync drivers and async helpers with
 async drivers:
 
 ```ts
-const rows = select(db, projectTasks({ projectId: "p1" }));
-const asyncRows = await selectAsync(db, projectTasks({ projectId: "p1" }));
+const rows = selectSync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
+const asyncRows = await selectAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+});
 ```
 
 ## Actions And Writes

@@ -76,13 +76,13 @@ check the matching docs below and also check the root `README.md`.
   guide. Covers selector object fields, `selectFrom`, immutable query builders,
   `where` comparisons, OR queries with `or(...)` or arrays, ordering, limits,
   many-row results, `first()` and `firstOr()`, composing selectors, and
-  `select`/`selectAsync`.
+  `selectSync`/`selectAsync`.
 - `src/content/docs/database/indexes.md`: Index behavior and valid query
   shapes. Covers declaring B-tree and hash indexes, built-in `byId`, equality,
   range, ordering, composite-key support, indexable value rules, equality-prefix
   and trailing-range rules, query-builder validation errors, and index ordering.
 - `src/content/docs/database/selectors-reactivity.md`: Reactive selector cache.
-  Covers range tracking, cached selectors, `initCachedSelector`, garbage
+  Covers range tracking, cached selectors, `createCachedSelectorStoreSync`, garbage
   collection, selector memoization controls (`root` and `selfChild`),
   subscriptions, revisions, and practical guidance for writing selectors that
   invalidate precisely.
@@ -107,7 +107,7 @@ check the matching docs below and also check the root `README.md`.
 
 - `src/content/docs/integrations/react.md`: React integration guide. Covers
   `DBProvider`, `useDB`, `useSyncSelector`, `useAsyncSelector`, `useDispatch`,
-  `useAsyncDispatch`, `useSelect`, `useAsyncSelect`, selector options, default
+  `useAsyncDispatch`, `useSelectSync`, `useSelectAsync`, selector options, default
   values, `enabled`, the React Query-style async selector result, and the full
   hook reference table.
 - `src/content/docs/integrations/devtools.md`: Devtool and tracing guide. Covers

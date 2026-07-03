@@ -7,14 +7,15 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  createCachedSelectorStoreSync,
   getSubscribableHybridCacheDB,
-  initCachedSelector,
   runCachedSelectorMaybeAsync,
-  runSelectorAsync,
-  runSelectorMaybeAsync,
-  select,
+  selectAsync,
+  selectMaybeAsync,
+  selectSync,
   type AnyObjectSelector,
   type SelectorArgs,
+  type SelectorInput,
   type SelectorReturn,
 } from "../hyperdb/commands/selector/selector";
 import {
@@ -393,11 +394,11 @@ const defaultHookDeps = {
   useState,
   useSyncExternalStore,
   useDB,
-  initCachedSelector,
+  createCachedSelectorStoreSync,
   runCachedSelectorMaybeAsync,
-  runSelectorAsync,
-  runSelectorMaybeAsync,
-  select,
+  selectAsync,
+  selectMaybeAsync,
+  selectSync,
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
   syncDispatch,
@@ -440,7 +441,10 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
       );
     }
 
-    return hookDeps.initCachedSelector(db, input.selector, input.args);
+    return hookDeps.createCachedSelectorStoreSync(db, {
+      selector: input.selector,
+      args: input.args,
+    });
   }, [db, input.selector, argsKey, enabled, input.defaultValue]);
 
   return hookDeps.useSyncExternalStore(
@@ -488,14 +492,13 @@ export function useAsyncSelector<
           const value = hybridCacheDB
             ? hookDeps.runCachedSelectorMaybeAsync(
                 db,
-                input.selector,
-                input.args,
-                cmds,
+                { selector: input.selector, args: input.args },
+                { selectRangeCmds: cmds },
               )
-            : hookDeps.runSelectorMaybeAsync(
+            : hookDeps.selectMaybeAsync(
                 db,
-                () => input.selector(input.args),
-                cmds,
+                { selector: input.selector, args: input.args },
+                { selectRangeCmds: cmds },
               );
 
           if (isPromiseLike(value)) {
@@ -545,15 +548,11 @@ export function useAsyncSelector<
       TError
     >,
   );
-  const genRef = hookDeps.useRef<
-    () => Generator<unknown, SelectorReturn<TSelector>, unknown>
-  >(() => input.selector(input.args));
   const runRef = hookDeps.useRef<
     (
       options?: UseAsyncSelectorRefetchOptions,
     ) => Promise<UseAsyncSelectorResult<SelectorReturn<TSelector>, TError>>
   >(() => Promise.resolve(resultRef.current));
-  genRef.current = () => input.selector(input.args);
   valueSnapshotStoreRef.current = valueSnapshotStore;
 
   const setQueryState = hookDeps.useCallback(
@@ -740,11 +739,14 @@ export function useAsyncSelector<
                 value = hybridCacheDB
                   ? hookDeps.runCachedSelectorMaybeAsync(
                       db,
-                      input.selector,
-                      input.args,
-                      cmds,
+                      { selector: input.selector, args: input.args },
+                      { selectRangeCmds: cmds },
                     )
-                  : hookDeps.runSelectorMaybeAsync(db, genRef.current, cmds);
+                  : hookDeps.selectMaybeAsync(
+                      db,
+                      { selector: input.selector, args: input.args },
+                      { selectRangeCmds: cmds },
+                    );
               }
 
               if (isPromiseLike(value)) {
@@ -872,23 +874,27 @@ export function useAsyncDispatch() {
   );
 }
 
-export function useSelect() {
+export function useSelectSync() {
   const db = hookDeps.useDB();
 
   return hookDeps.useCallback(
-    <TReturn>(selector: Generator<unknown, TReturn, unknown>): TReturn => {
-      return hookDeps.select(db, selector);
+    <TSelector extends AnyObjectSelector>(
+      input: SelectorInput<TSelector>,
+    ): SelectorReturn<TSelector> => {
+      return hookDeps.selectSync(db, input);
     },
     [db],
   );
 }
 
-export function useAsyncSelect() {
+export function useSelectAsync() {
   const db = hookDeps.useDB();
 
   return hookDeps.useCallback(
-    <TReturn>(gen: Generator<unknown, TReturn, unknown>): Promise<TReturn> => {
-      return hookDeps.runSelectorAsync(db, () => gen);
+    <TSelector extends AnyObjectSelector>(
+      input: SelectorInput<TSelector>,
+    ): Promise<SelectorReturn<TSelector>> => {
+      return hookDeps.selectAsync(db, input);
     },
     [db],
   );

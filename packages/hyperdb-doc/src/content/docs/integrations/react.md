@@ -121,20 +121,26 @@ Returns:
 | `promise`                                             | Promise for the current run's data                                              |
 | `refetch(options)`                                    | Manually rerun the selector; pass `{ throwOnError: true }` to reject on error   |
 
-For route loaders or intent prefetches, use `preloadSelector` with the same
+For route loaders or intent prefetches, use `preloadSelectorAsync` with the same
 `SubscribableDB`, selector, and args the component will render. With HybridDB it
 loads missing primary-store ranges and primes the selector cache that
 `useAsyncSelector` can reuse when its async run starts.
 
 ```ts
-import { preloadSelector, type SubscribableDB } from "@will-be-done/hyperdb";
+import {
+  preloadSelectorAsync,
+  type SubscribableDB,
+} from "@will-be-done/hyperdb";
 import { projectTasks } from "./tasks";
 
 export async function preloadProjectRoute(
   db: SubscribableDB,
   projectId: string,
 ) {
-  await preloadSelector(db, projectTasks, { projectId });
+  await preloadSelectorAsync(db, {
+    selector: projectTasks,
+    args: { projectId },
+  });
 }
 ```
 
@@ -207,28 +213,31 @@ the primary store in order.
 
 ## One-off reads
 
-`useSelect` and `useAsyncSelect` return a function for imperative, non-reactive
+`useSelectSync` and `useSelectAsync` return a function for imperative, non-reactive
 reads, for example reading inside an event handler. They don't subscribe.
 
 ```tsx
-import { useAsyncSelect } from "@will-be-done/hyperdb/react";
+import { useSelectAsync } from "@will-be-done/hyperdb/react";
 
-const select = useAsyncSelect();
+const select = useSelectAsync();
 const handleClick = async () => {
-  const tasks = await select(projectTasks({ projectId: "p1" }));
+  const tasks = await select({
+    selector: projectTasks,
+    args: { projectId: "p1" },
+  });
 };
 ```
 
-Use `useSelect` for synchronous drivers.
+Use `useSelectSync` for synchronous drivers.
 
 ## Hook reference
 
-| Hook                     | Returns                        | Use with                            |
-| ------------------------ | ------------------------------ | ----------------------------------- |
-| `useDB()`                | the `SubscribableDB`           | accessing the DB directly           |
-| `useAsyncSelector(opts)` | query-style result object      | `HybridDB`, IndexedDB, async SQLite |
-| `useSyncSelector(opts)`  | the selector result            | in-memory and sync SQLite           |
-| `useAsyncDispatch()`     | `(action) => Promise<TReturn>` | `HybridDB`, IndexedDB, async SQLite |
-| `useDispatch()`          | `(action) => TReturn`          | in-memory and sync SQLite           |
-| `useAsyncSelect()`       | `(gen) => Promise<TReturn>`    | one-off read, async runtimes        |
-| `useSelect()`            | `(gen) => TReturn`             | one-off read, sync runtimes         |
+| Hook                     | Returns                                    | Use with                            |
+| ------------------------ | ------------------------------------------ | ----------------------------------- |
+| `useDB()`                | the `SubscribableDB`                       | accessing the DB directly           |
+| `useAsyncSelector(opts)` | query-style result object                  | `HybridDB`, IndexedDB, async SQLite |
+| `useSyncSelector(opts)`  | the selector result                        | in-memory and sync SQLite           |
+| `useAsyncDispatch()`     | `(action) => Promise<TReturn>`             | `HybridDB`, IndexedDB, async SQLite |
+| `useDispatch()`          | `(action) => TReturn`                      | in-memory and sync SQLite           |
+| `useSelectAsync()`       | `({ selector, args }) => Promise<TReturn>` | one-off read, async runtimes        |
+| `useSelectSync()`        | `({ selector, args }) => TReturn`          | one-off read, sync runtimes         |
