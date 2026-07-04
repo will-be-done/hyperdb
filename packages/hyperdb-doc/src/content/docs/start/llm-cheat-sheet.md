@@ -56,7 +56,10 @@ import {
   SubscribableDB,
   asyncDispatch,
   createAction,
+  createAsyncSelectorStore,
+  createCachedSelectorStoreAsync,
   createSelector,
+  createCachedSelectorStoreSync,
   defineTable,
   deleteRows,
   execAsync,
@@ -169,6 +172,27 @@ const cachedRows = await Promise.resolve(
   }),
 );
 ```
+
+For subscriptions outside React, use a selector store. Pick sync vs async by
+whether the selector may yield a promise, and cached vs uncached by whether the
+root selector result should be shared:
+
+```ts
+const store = createCachedSelectorStoreAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+  defaultValue: [],
+});
+
+const unsubscribe = store.subscribe(() => {
+  const snapshot = store.getSnapshot();
+  if (snapshot.status === "success") console.log(snapshot.data);
+});
+```
+
+Store helpers: `createSelectorStoreSync` (sync uncached),
+`createCachedSelectorStoreSync` (sync cached), `createAsyncSelectorStore`
+(async uncached), and `createCachedSelectorStoreAsync` (async cached).
 
 ## Actions And Writes
 

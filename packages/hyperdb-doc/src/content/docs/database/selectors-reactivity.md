@@ -51,16 +51,18 @@ const tasks = await Promise.resolve(tasksOrPromise);
 
 HyperDB exports these selector runners and store creators:
 
-| Helper                          | Use                                                                  |
-| ------------------------------- | -------------------------------------------------------------------- |
-| `selectSync`                    | Run a selector once with sync drivers                                |
-| `selectAsync`                   | Run a selector once with async drivers and `HybridDB`                |
-| `selectMaybeAsync`              | Return a value or a `Promise`, depending on whether execution yields |
-| `selectCachedSync`              | Run or reuse the root selector cache synchronously                   |
-| `selectCachedAsync`             | Async cache-aware selector read                                      |
-| `selectCachedMaybeAsync`        | Cache-aware read that may return a value or a `Promise`              |
-| `createSelectorStoreSync`       | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
-| `createCachedSelectorStoreSync` | Create a sync subscribed store backed by the root selector cache     |
+| Helper                           | Use                                                                  |
+| -------------------------------- | -------------------------------------------------------------------- |
+| `selectSync`                     | Run a selector once with sync drivers                                |
+| `selectAsync`                    | Run a selector once with async drivers and `HybridDB`                |
+| `selectMaybeAsync`               | Return a value or a `Promise`, depending on whether execution yields |
+| `selectCachedSync`               | Run or reuse the root selector cache synchronously                   |
+| `selectCachedAsync`              | Async cache-aware selector read                                      |
+| `selectCachedMaybeAsync`         | Cache-aware read that may return a value or a `Promise`              |
+| `createSelectorStoreSync`        | Create a sync subscribed store with `subscribe()` / `getSnapshot()`  |
+| `createCachedSelectorStoreSync`  | Create a sync subscribed store backed by the root selector cache     |
+| `createAsyncSelectorStore`       | Create an uncached async subscribed store with query state snapshots |
+| `createCachedSelectorStoreAsync` | Create an async subscribed store backed by the root selector cache   |
 
 Use `createSelectorStoreSync` when you want a small synchronous external store
 for one selector run:
@@ -76,6 +78,63 @@ const unsubscribe = store.subscribe(() => {
   console.log(store.getSnapshot());
 });
 ```
+
+### Async selector stores
+
+Sync stores expose raw selector data because `getSnapshot()` can return the
+selector result immediately. Async stores expose query state because the first
+result may require a promise.
+
+Use `createAsyncSelectorStore` when you want an isolated async subscription that
+does not read or populate the root selector cache. Use
+`createCachedSelectorStoreAsync` when repeated reads for the same selector and
+args should share the root selector cache, matching `useAsyncSelector`.
+
+```ts
+import {
+  createAsyncSelectorStore,
+  createCachedSelectorStoreAsync,
+} from "@will-be-done/hyperdb";
+
+const store = createCachedSelectorStoreAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+  defaultValue: [],
+});
+
+const unsubscribe = store.subscribe(() => {
+  const snapshot = store.getSnapshot();
+  if (snapshot.status === "success") {
+    console.log(snapshot.data);
+  }
+});
+
+const latest = await store.refetch({ throwOnError: true });
+unsubscribe();
+store.destroy();
+```
+
+Snapshots include `status`, `fetchStatus`, `data`, timestamps, error and
+failure counters, placeholder flags, a `promise` for the current run, and the
+same loading/refetching booleans returned by `useAsyncSelector`. The first
+`getSnapshot()` attempts the maybe-async selector run immediately: if it returns
+synchronously, the snapshot is already `"success"`; otherwise it is pending
+until the promise resolves.
+
+The store subscribes directly to `SubscribableDB`, records the scanned ranges
+from each run, skips irrelevant DB changes, collapses overlapping reruns, and
+ignores late async results after `destroy()` or unsubscribe. `useAsyncSelector`
+uses this cached async store internally, so the same behavior is available
+outside React.
+
+The four store helpers form a matrix:
+
+| Helper                           | Execution | Root selector cache |
+| -------------------------------- | --------- | ------------------- |
+| `createSelectorStoreSync`        | sync      | no                  |
+| `createCachedSelectorStoreSync`  | sync      | yes                 |
+| `createAsyncSelectorStore`       | async     | no                  |
+| `createCachedSelectorStoreAsync` | async     | yes                 |
 
 ## Range tracking
 

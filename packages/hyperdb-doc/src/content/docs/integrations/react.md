@@ -90,6 +90,11 @@ visible immediately; if it returns a promise, the hook shows `defaultValue`,
 `initialData`, or `placeholderData` until the same promise resolves. It does not
 read a cached selector snapshot during render.
 
+`useAsyncSelector` is built on the framework-agnostic
+`createCachedSelectorStoreAsync` from `@will-be-done/hyperdb`. Use that store
+directly when you need the same async selector subscription behavior outside
+React.
+
 Options:
 
 | Option                 | Description                                                                |

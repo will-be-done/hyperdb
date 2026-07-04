@@ -210,5 +210,6 @@ In that example, `projectDoneTasks` should use an index such as
 list in JavaScript. Composition keeps code ergonomic, but each selector should
 still choose the index that matches the data it needs.
 
-To run selectors, cache selector results, or create subscribed selector stores,
-see [Selectors & Reactivity](/database/selectors-reactivity/#running-selectors).
+To run selectors, cache selector results, or create subscribed sync/async
+selector stores, see
+[Selectors & Reactivity](/database/selectors-reactivity/#running-selectors).

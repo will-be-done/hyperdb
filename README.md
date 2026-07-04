@@ -178,7 +178,11 @@ If your whole app state can be loaded into memory at startup, you may not need
 reads and writes synchronous, so you can use `useSyncSelector`, `useDispatch`,
 `selectSync`, and `syncDispatch` without promise or cache-miss tradeoffs.
 For one-off reads that should reuse the selector cache, use `selectCachedSync`,
-`selectCachedAsync`, or `selectCachedMaybeAsync`.
+`selectCachedAsync`, or `selectCachedMaybeAsync`. For subscriptions outside
+React, use `createSelectorStoreSync` / `createCachedSelectorStoreSync` when
+selector results are available synchronously. Use `createAsyncSelectorStore` /
+`createCachedSelectorStoreAsync` when a `HybridDB`/async driver run may need to
+resolve a promise and expose query state.
 
 `SubscribableDB` also exposes lifecycle hooks: mutation hooks such as
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
@@ -243,7 +247,8 @@ export function App({ db }: { db: SubscribableDB }) {
 `useAsyncSelector` attempts the selector once for its initial snapshot. If the
 run finishes synchronously, that value is visible immediately; if it returns a
 promise, the hook shows `defaultValue`, `initialData`, or `placeholderData` until
-that same promise resolves.
+that same promise resolves. The hook uses `createCachedSelectorStoreAsync`
+internally, so the same async subscription behavior is available without React.
 
 ## Entry points
 
