@@ -170,6 +170,40 @@ describe("createCachedSelectorStoreAsync", () => {
     store.destroy();
   });
 
+  it("reruns subscribed full-index selectors after inserts", () => {
+    const spacesTable = defineTable("asyncStoreFullScanSpaces", {
+      id: v.string(),
+      name: v.string(),
+    }).index("byIds", ["id"]);
+    const db = createTestDB(spacesTable);
+    const listSpaces = selector({
+      name: "asyncStoreFullScanListSpaces",
+      args: {},
+      *handler() {
+        return yield* selectFrom(spacesTable, "byIds");
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: listSpaces,
+      args: {},
+      defaultValue: [],
+    });
+
+    expect(store.getSnapshot().data).toEqual([]);
+    const subscriber = vi.fn();
+    const unsubscribe = store.subscribe(subscriber);
+
+    execSync(db.insert(spacesTable, [{ id: "space-1", name: "First space" }]));
+
+    expect(subscriber).toHaveBeenCalled();
+    expect(store.getSnapshot().data).toEqual([
+      { id: "space-1", name: "First space" },
+    ]);
+
+    unsubscribe();
+    store.destroy();
+  });
+
   it("collapses overlapping reruns and publishes the latest result", async () => {
     const tasksTable = defineTable("asyncStoreOverlapTasks", {
       id: v.string(),
@@ -390,9 +424,8 @@ describe("createCachedSelectorStoreAsync", () => {
     await flushPromises();
   });
 
-  it("restarts after unsubscribe and resubscribe while a selector run is in-flight", async () => {
+  it("reuses an in-flight subscribed run after unsubscribe and resubscribe", async () => {
     const first = deferred<string>();
-    const second = deferred<string>();
     const db = createTestDB();
     let runCount = 0;
     const asyncValue = selector({
@@ -400,12 +433,7 @@ describe("createCachedSelectorStoreAsync", () => {
       args: {},
       *handler() {
         runCount++;
-
-        if (runCount === 1) {
-          return yield* unwrap(first.promise);
-        }
-
-        return yield* unwrap(second.promise);
+        return yield* unwrap(first.promise);
       },
     });
     const store = createCachedSelectorStoreAsync(db, {
@@ -426,10 +454,40 @@ describe("createCachedSelectorStoreAsync", () => {
     const subscriber = vi.fn();
     const secondUnsubscribe = store.subscribe(subscriber);
 
-    expect(runCount).toBe(2);
+    expect(runCount).toBe(1);
 
-    first.resolve("stale");
+    first.resolve("fresh");
     await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: "fresh",
+        fetchStatus: "idle",
+        status: "success",
+      }),
+    );
+    expect(subscriber).toHaveBeenCalled();
+
+    secondUnsubscribe();
+    store.destroy();
+  });
+
+  it("reuses an in-flight getSnapshot run after subscribe churn", async () => {
+    const gate = deferred<string>();
+    const db = createTestDB();
+    let runCount = 0;
+    const asyncValue = selector({
+      name: "asyncStoreSnapshotStartedValue",
+      args: {},
+      *handler() {
+        runCount++;
+        return yield* unwrap(gate.promise);
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: asyncValue,
+      args: {},
+    });
 
     expect(store.getSnapshot()).toEqual(
       expect.objectContaining({
@@ -438,13 +496,178 @@ describe("createCachedSelectorStoreAsync", () => {
         status: "pending",
       }),
     );
+    expect(runCount).toBe(1);
 
-    second.resolve("fresh");
+    const firstUnsubscribe = store.subscribe(vi.fn());
+    firstUnsubscribe();
+    const subscriber = vi.fn();
+    const secondUnsubscribe = store.subscribe(subscriber);
+
+    expect(runCount).toBe(1);
+
+    gate.resolve("fresh");
     await flushPromises();
 
     expect(store.getSnapshot()).toEqual(
       expect.objectContaining({
         data: "fresh",
+        fetchStatus: "idle",
+        status: "success",
+      }),
+    );
+    expect(subscriber).toHaveBeenCalled();
+
+    secondUnsubscribe();
+    store.destroy();
+  });
+
+  it("reruns a reused in-flight getSnapshot run after missed DB changes", async () => {
+    const tasksTable = defineTable("asyncStoreSnapshotMissedTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      title: v.string(),
+    }).index("byProject", ["projectId"]);
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    const db = createTestDB(tasksTable);
+    let runCount = 0;
+    const projectTasks = selector({
+      name: "asyncStoreSnapshotMissedProjectTasks",
+      args: { projectId: v.string() },
+      *handler({ projectId }) {
+        runCount++;
+        const rows = yield* selectFrom(tasksTable, "byProject").where((q) =>
+          q.eq("projectId", projectId),
+        );
+
+        if (runCount === 1) {
+          yield* unwrap(firstGate.promise);
+        } else if (runCount === 2) {
+          yield* unwrap(secondGate.promise);
+        }
+
+        return rows;
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: projectTasks,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: [],
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+    expect(runCount).toBe(1);
+
+    execSync(
+      db.insert(tasksTable, [
+        { id: "task-1", projectId: "project-1", title: "Fresh" },
+      ]),
+    );
+    const subscriber = vi.fn();
+    const unsubscribe = store.subscribe(subscriber);
+
+    expect(runCount).toBe(1);
+
+    firstGate.resolve();
+    await flushPromises();
+
+    expect(runCount).toBe(2);
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: [],
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    secondGate.resolve();
+    await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: [{ id: "task-1", projectId: "project-1", title: "Fresh" }],
+        fetchStatus: "idle",
+        status: "success",
+      }),
+    );
+    expect(subscriber).toHaveBeenCalled();
+
+    unsubscribe();
+    store.destroy();
+  });
+
+  it("reruns a reused in-flight subscribed run after missed DB changes", async () => {
+    const tasksTable = defineTable("asyncStoreResubscribeMissedTasks", {
+      id: v.string(),
+      projectId: v.string(),
+      title: v.string(),
+    }).index("byProject", ["projectId"]);
+    const firstGate = deferred<void>();
+    const secondGate = deferred<void>();
+    const db = createTestDB(tasksTable);
+    let runCount = 0;
+    const projectTasks = selector({
+      name: "asyncStoreResubscribeMissedProjectTasks",
+      args: { projectId: v.string() },
+      *handler({ projectId }) {
+        runCount++;
+        const rows = yield* selectFrom(tasksTable, "byProject").where((q) =>
+          q.eq("projectId", projectId),
+        );
+
+        if (runCount === 1) {
+          yield* unwrap(firstGate.promise);
+        } else if (runCount === 2) {
+          yield* unwrap(secondGate.promise);
+        }
+
+        return rows;
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: projectTasks,
+      args: { projectId: "project-1" },
+      defaultValue: [],
+    });
+    const firstUnsubscribe = store.subscribe(vi.fn());
+
+    expect(runCount).toBe(1);
+
+    firstUnsubscribe();
+    execSync(
+      db.insert(tasksTable, [
+        { id: "task-1", projectId: "project-1", title: "Fresh" },
+      ]),
+    );
+    const subscriber = vi.fn();
+    const secondUnsubscribe = store.subscribe(subscriber);
+
+    expect(runCount).toBe(1);
+
+    firstGate.resolve();
+    await flushPromises();
+
+    expect(runCount).toBe(2);
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: [],
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    secondGate.resolve();
+    await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: [{ id: "task-1", projectId: "project-1", title: "Fresh" }],
         fetchStatus: "idle",
         status: "success",
       }),

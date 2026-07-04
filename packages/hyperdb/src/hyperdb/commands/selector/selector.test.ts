@@ -953,6 +953,106 @@ describe("selector", () => {
     expect(runCount).toBe(3);
   });
 
+  test("async cached selector joins a pending run for the same revision", async () => {
+    const gate = deferred<string>();
+    const testDb = createTestDB();
+    let runCount = 0;
+    const asyncValue = selector({
+      name: "asyncPendingSharedValue",
+      args: {},
+      *handler() {
+        runCount++;
+        return yield* unwrap(gate.promise);
+      },
+    });
+
+    const first = runCachedSelectorMaybeAsync(testDb, {
+      selector: asyncValue,
+      args: {},
+    });
+    const second = runCachedSelectorMaybeAsync(testDb, {
+      selector: asyncValue,
+      args: {},
+    });
+
+    expect(first).toBeInstanceOf(Promise);
+    expect(second).toBeInstanceOf(Promise);
+    expect(runCount).toBe(1);
+
+    gate.resolve("ready");
+
+    await expect(first).resolves.toBe("ready");
+    await expect(second).resolves.toBe("ready");
+    expect(
+      runCachedSelectorMaybeAsync(testDb, {
+        selector: asyncValue,
+        args: {},
+      }),
+    ).toBe("ready");
+    expect(runCount).toBe(1);
+  });
+
+  test("older pending async cached selector does not overwrite newer revision", async () => {
+    const firstGate = deferred<string>();
+    const secondGate = deferred<string>();
+    const testDb = createTestDB(tasksTable);
+    let runCount = 0;
+    const asyncValue = selector({
+      name: "asyncPendingRevisionValue",
+      args: {},
+      *handler() {
+        runCount++;
+
+        if (runCount === 1) {
+          return yield* unwrap(firstGate.promise);
+        }
+
+        return yield* unwrap(secondGate.promise);
+      },
+    });
+
+    const first = runCachedSelectorMaybeAsync(testDb, {
+      selector: asyncValue,
+      args: {},
+    });
+
+    execSync(
+      testDb.insert(tasksTable, [
+        {
+          type: "task",
+          id: "task-1",
+          title: "Fresh",
+          state: "todo",
+          projectId: "project-1",
+          orderToken: "a",
+        },
+      ]),
+    );
+
+    const second = runCachedSelectorMaybeAsync(testDb, {
+      selector: asyncValue,
+      args: {},
+    });
+
+    expect(first).toBeInstanceOf(Promise);
+    expect(second).toBeInstanceOf(Promise);
+    expect(runCount).toBe(2);
+
+    secondGate.resolve("fresh");
+    await expect(second).resolves.toBe("fresh");
+
+    firstGate.resolve("stale");
+    await expect(first).resolves.toBe("stale");
+
+    expect(
+      runCachedSelectorMaybeAsync(testDb, {
+        selector: asyncValue,
+        args: {},
+      }),
+    ).toBe("fresh");
+    expect(runCount).toBe(2);
+  });
+
   test("cached object-form selector reuse is recorded as cached in the trace", async () => {
     const deactivateTrace = hyperDBTraceStore.activate();
     hyperDBTraceStore.clear();

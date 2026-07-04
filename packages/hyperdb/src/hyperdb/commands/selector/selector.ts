@@ -515,6 +515,12 @@ type SelectorCacheEntry<TReturn> = {
   gcExpiresAt?: number;
 };
 
+type PendingSelectorCacheEntry<TReturn> = {
+  revision: number;
+  promise: Promise<TReturn>;
+  selectRangeCmds: SelectRangeCmd[];
+};
+
 type SelectorCacheStore<TReturn> = {
   subscribe: (callback: () => void) => () => void;
   getSnapshot: () => TReturn;
@@ -525,6 +531,10 @@ type SelectorCacheStore<TReturn> = {
 const selectorCache = new WeakMap<
   SubscribableDB,
   WeakMap<object, Map<string, SelectorCacheEntry<unknown>>>
+>();
+const pendingSelectorCache = new WeakMap<
+  SubscribableDB,
+  WeakMap<object, Map<string, PendingSelectorCacheEntry<unknown>>>
 >();
 const DEFAULT_SELECTOR_CACHE_GC_TIME = 30_000;
 const SELECTOR_CACHE_GC_TICK_MS = 1_000;
@@ -583,6 +593,25 @@ const getSelectorCacheMap = (
   if (!bySelector) {
     bySelector = new WeakMap();
     selectorCache.set(db, bySelector);
+  }
+
+  let byArgs = bySelector.get(selector);
+  if (!byArgs) {
+    byArgs = new Map();
+    bySelector.set(selector, byArgs);
+  }
+
+  return byArgs;
+};
+
+const getPendingSelectorCacheMap = (
+  db: SubscribableDB,
+  selector: object,
+): Map<string, PendingSelectorCacheEntry<unknown>> => {
+  let bySelector = pendingSelectorCache.get(db);
+  if (!bySelector) {
+    bySelector = new WeakMap();
+    pendingSelectorCache.set(db, bySelector);
   }
 
   let byArgs = bySelector.get(selector);
@@ -938,6 +967,7 @@ const runCachedSelectorMaybeAsyncInternal = <
     options.freezeArgs ?? db.getOptions?.().freezeArgs ?? false;
   const cachedArgs = freezeArgs ? deepFreeze(args) : args;
   const byArgs = getSelectorCacheMap(db, selector);
+  const pendingByArgs = getPendingSelectorCacheMap(db, selector);
   runSelectorCacheGc();
   let entry = byArgs.get(argsKey) as
     | SelectorCacheEntry<SelectorReturn<TSelector>>
@@ -976,6 +1006,20 @@ const runCachedSelectorMaybeAsyncInternal = <
     return result;
   }
 
+  const pending = pendingByArgs.get(argsKey) as
+    | PendingSelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
+  if (pending) {
+    if (pending.revision === db.getRevision()) {
+      return pending.promise.then((value) => {
+        copySelectRangeCmds(selectRangeCmds, pending.selectRangeCmds);
+        return value;
+      });
+    }
+
+    pendingByArgs.delete(argsKey);
+  }
+
   const entrySelectRangeCmds: SelectRangeCmd[] = [];
   const childMemo: ChildMemo = new Map();
   const gen = () => selector(cachedArgs);
@@ -983,7 +1027,19 @@ const runCachedSelectorMaybeAsyncInternal = <
   const result = runSelectorGeneratorMaybeAsync(db, gen, entrySelectRangeCmds, {
     childMemo,
   });
+  let pendingEntry:
+    | PendingSelectorCacheEntry<SelectorReturn<TSelector>>
+    | undefined;
   const storeEntry = (value: SelectorReturn<TSelector>, needsRerun = false) => {
+    if (pendingEntry && pendingByArgs.get(argsKey) !== pendingEntry) {
+      copySelectRangeCmds(selectRangeCmds, entrySelectRangeCmds);
+      return value;
+    }
+
+    if (pendingEntry) {
+      pendingByArgs.delete(argsKey);
+    }
+
     entry = {
       argsKey,
       args: cachedArgs,
@@ -1005,9 +1061,24 @@ const runCachedSelectorMaybeAsyncInternal = <
   };
 
   if (result instanceof Promise) {
-    return result.then((value) =>
-      storeEntry(value, db.getRevision() !== revision),
+    pendingEntry = {
+      revision,
+      promise: undefined as unknown as Promise<SelectorReturn<TSelector>>,
+      selectRangeCmds: entrySelectRangeCmds,
+    };
+    const promise = result.then(
+      (value) => storeEntry(value, db.getRevision() !== revision),
+      (error: unknown) => {
+        if (pendingByArgs.get(argsKey) === pendingEntry) {
+          pendingByArgs.delete(argsKey);
+        }
+
+        throw error;
+      },
     );
+    pendingEntry.promise = promise;
+    pendingByArgs.set(argsKey, pendingEntry);
+    return promise;
   }
 
   return storeEntry(result);

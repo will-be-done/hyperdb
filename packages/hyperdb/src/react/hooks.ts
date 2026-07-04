@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   createCachedSelectorStoreSync,
   runCachedSelectorMaybeAsync,
@@ -146,7 +140,6 @@ const createDisabledStore = <TReturn>(getDefaultValue: () => TReturn) => ({
 
 const defaultHookDeps = {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useSyncExternalStore,
@@ -350,12 +343,6 @@ export function useAsyncSelector<
     }),
     [snapshot, refetch],
   );
-
-  hookDeps.useEffect(() => {
-    return () => {
-      store.destroy();
-    };
-  }, [store]);
 
   if (!result.isPlaceholderData) {
     previousDataRef.current = result.data;
