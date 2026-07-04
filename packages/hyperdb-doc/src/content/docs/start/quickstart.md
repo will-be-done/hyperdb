@@ -20,7 +20,7 @@ npm install @will-be-done/hyperdb-devtool
 
 ## 2. Define a table
 
-A table needs a string `id`. HyperDB automatically adds a unique hash index
+A table needs a string `id`. HyperDB automatically adds a `uniqhash` index
 named `byId`; declare any additional indexes you want to query by.
 The `byIds` index below is a B-tree full-table scan index used by the optional
 HybridDB preload step.

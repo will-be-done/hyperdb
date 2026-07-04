@@ -42,10 +42,10 @@ HyperDB?](/start/why/) gives the technical background.
     index columns are fully type-checked end to end.
   </Card>
   <Card title="Indexed queries" icon="magnifier">
-    Query through B-tree and hash indexes with a fluent, type-safe builder.
-    Every table index is a B-tree, so sorted inserts and range scans stay `O(log
-    n)`. This fits local-first fractional ordering, where reordering an item
-    touches a single token instead of rebuilding the list.
+    Query through B-tree and `uniqhash` indexes with a fluent, type-safe
+    builder. B-tree indexes keep sorted inserts and range scans `O(log n)`. This
+    fits local-first fractional ordering, where reordering an item touches a
+    single token instead of rebuilding the list.
   </Card>
   <Card title="Reactive by default" icon="random">
     Selectors are cached and subscribed. They re-run only when a mutation

@@ -123,7 +123,8 @@ select options, and returned rows.
 ```
 
 Ordering follows the B-tree index's natural key order; `"desc"` walks it in
-reverse. Hash indexes are for equality lookups and do not provide ordering.
+reverse. `uniqhash` indexes are for equality lookups and do not provide
+ordering.
 
 ## Retrieving results
 

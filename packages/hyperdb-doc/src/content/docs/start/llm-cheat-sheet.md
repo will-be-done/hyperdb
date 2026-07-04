@@ -84,10 +84,9 @@ import {
 
 ## Schema Pattern
 
-Every table needs a string `id`. HyperDB creates a built-in unique hash index
-named `byId`. Add B-tree indexes for sorted/range reads, hash indexes for
-non-unique exact single-column lookups, and `uniqhash` indexes for exact values
-that must be unique.
+Every table needs a string `id`. HyperDB creates a built-in `uniqhash` index
+named `byId`. Add B-tree indexes for sorted/range reads and `uniqhash` indexes
+for exact values that must be unique.
 
 ```ts
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
@@ -279,7 +278,7 @@ export async function createAppDB() {
 ```
 
 Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
-`byId` index is a unique hash index for exact id lookups. `SubscribableDB` adds
+`byId` index is a `uniqhash` index for exact id lookups. `SubscribableDB` adds
 revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure
 in-memory apps can skip `HybridDB` and use `new SubscribableDB(new DB(new
 BptreeInmemDriver()))`.
@@ -293,9 +292,7 @@ pending old or new row values can affect those primary-read portions. Exact
 `uniqhash` lookups are marked cached when rows are loaded from
 persistence or when the cache transaction commits, so `byId` and other unique
 equality reads can return from memory while persistence is still pending.
-Non-unique hash buckets are only marked cached when the hash scan itself proves
-the whole bucket. Write transaction scans reuse coverage already known by the
-committed cache.
+Write transaction scans reuse coverage already known by the committed cache.
 
 Use `new HybridDB(primary, cache, { debug: true })` to log why an uncached scan
 fell through to persistence, waited for pending persistence, or retried a
@@ -375,8 +372,7 @@ may be a value or a zero-argument function that returns the value. Use
   cache, async selectors, and async dispatch.
 - Use B-tree indexes for ordering, ranges, composite keys, and full-table
   preloading.
-- Use hash indexes only for exact non-unique single-column equality; use
-  `uniqhash` when the value must be unique.
+- Use `uniqhash` when an exact single-column value must be unique.
 - For partial updates, read the current row and `upsert` the complete next row.
 - Keep schema, selectors, and actions in shared modules/packages so client and server can
   import the same data layer.

@@ -171,9 +171,8 @@ Limited B-tree reads cache the covered prefix or suffix when the runtime can
 prove the returned rows are enough to answer the same limited query from memory.
 Rows loaded by any primary-store scan also mark their exact `uniqhash` values as
 cached, because those values are driver-enforced unique. That means a later
-exact lookup on `byId` or another unique hash index can hit memory even if the
-row was first loaded through a different index. Normal non-unique hash buckets
-are only marked covered when the hash scan itself proves the whole bucket.
+exact lookup on `byId` or another `uniqhash` index can hit memory even if the
+row was first loaded through a different index.
 
 With an IndexedDB primary, no readonly IndexedDB transaction is opened until a
 selector actually misses the cache. If the primary store is read, readonly
@@ -185,7 +184,7 @@ do not share one IndexedDB transaction.
 Use `preloadTables` when you know a whole table should be resident from startup
 or before a workflow begins. `scanIndex` must be a B-tree index that can scan the
 whole table, commonly an explicit `.index("byIds", ["id"])`; the built-in
-`byId` index is a unique hash index for exact id lookups, not full-table scans.
+`byId` index is a `uniqhash` index for exact id lookups, not full-table scans.
 
 After a table preload finishes, HybridDB marks that table's index ranges as
 cached, so later selectors over other indexes can read from memory.

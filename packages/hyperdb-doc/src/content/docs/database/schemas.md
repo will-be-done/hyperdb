@@ -16,7 +16,7 @@ decide which access paths your application has.
 ## Defining a table
 
 Every table has a name and a set of fields. A table must have a string `id`
-field. HyperDB automatically creates a built-in unique hash index named `byId`
+field. HyperDB automatically creates a built-in `uniqhash` index named `byId`
 on `id`; declare the other indexes your selectors will read through.
 
 ```ts
@@ -32,7 +32,6 @@ export const tasksTable = defineTable("tasks", {
   note: v.optional(v.string()),
 })
   .index("byProjectOrder", ["projectId", "orderToken"])
-  .index("byTitle", ["title"], { type: "hash" })
   .index("bySlug", ["slug"], { type: "uniqhash" })
   .index("byIds", ["id"]);
 
@@ -141,14 +140,12 @@ defineTable("tasks", {
   /* fields */
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // btree (default)
-  .index("byTitle", ["title"], { type: "hash" }) // non-unique hash
-  .index("bySlug", ["slug"], { type: "uniqhash" }) // unique hash
+  .index("bySlug", ["slug"], { type: "uniqhash" }) // unique exact lookup
   .index("byIds", ["id"]); // btree full-table scan
 ```
 
 - `btree` (the default) supports equality _and_ range queries, ordering, and
   composite (multi-column) keys.
-- `hash` supports equality lookups only and must have exactly one column.
 - `uniqhash` supports equality lookups only, must have exactly one column, and
   rejects duplicate values in every storage driver. The built-in `byId` index is
   a `uniqhash`.
@@ -171,7 +168,7 @@ Start from the reads your app needs:
 - Exact lookup by id: use the built-in `byId`.
 - Ordered list inside a parent: use a B-tree such as
   `["projectId", "orderToken"]`.
-- Exact lookup by a non-unique field: use `hash`.
+- Exact lookup by a non-unique field: use a B-tree over that field.
 - Exact lookup by a unique field such as a slug: use `uniqhash`.
 - Whole-table preload or ordered full scan: add a B-tree full-scan index such as
   `["id"]`.

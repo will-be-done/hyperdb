@@ -1,6 +1,6 @@
 ---
 title: Indexes
-description: B-tree, hash, and unique hash indexes, composite keys, and the prefix rules that govern which queries are valid.
+description: B-tree and `uniqhash` indexes, composite keys, and the prefix rules that govern which queries are valid.
 sidebar:
   order: 4
 ---
@@ -23,30 +23,28 @@ defineTable("tasks", {
 })
   .index("byProjectOrder", ["projectId", "orderToken"]) // composite B-tree
   .index("byIds", ["id"]) // B-tree full-table scan / preload index
-  .index("byState", ["state"], { type: "hash" }) // non-unique exact lookup
   .index("bySlug", ["slug"], { type: "uniqhash" }); // unique exact lookup
 ```
 
-The built-in `byId` unique hash index on `id` is always present, so you never
+The built-in `byId` `uniqhash` index on `id` is always present, so you never
 declare it. If you need to scan or preload a whole table, add a B-tree index
 such as `byIds`; the built-in `byId` is optimized for exact id lookups, not
 full-table scans.
 
-### B-tree vs. hash
+### B-tree vs. `uniqhash`
 
-| Capability                    | B-tree (default) | Hash                    | Unique hash             |
-| ----------------------------- | ---------------- | ----------------------- | ----------------------- |
-| Equality (`eq`)               | Yes              | Yes                     | Yes                     |
-| Range (`gt`/`gte`/`lt`/`lte`) | Yes              | No                      | No                      |
-| `order("asc" \| "desc")`      | Yes              | No                      | No                      |
-| Full-table scan               | Yes              | No                      | No                      |
-| Composite (multi-column)      | Yes              | No (exactly one column) | No (exactly one column) |
-| Duplicate values              | Yes              | Yes                     | No, driver-enforced     |
+| Capability                    | B-tree (default) | `uniqhash`              |
+| ----------------------------- | ---------------- | ----------------------- |
+| Equality (`eq`)               | Yes              | Yes                     |
+| Range (`gt`/`gte`/`lt`/`lte`) | Yes              | No                      |
+| `order("asc" \| "desc")`      | Yes              | No                      |
+| Full-table scan               | Yes              | No                      |
+| Composite (multi-column)      | Yes              | No (exactly one column) |
+| Duplicate values              | Yes              | No, driver-enforced     |
 
-Reach for a hash index when you only ever look up a column by exact value;
-use a unique hash index when that exact value must identify at most one row.
-Use a B-tree index when you need ranges, ordering, ordered full-table scans,
-preloading, or multi-column keys.
+Use `uniqhash` when an exact value must identify at most one row. Use a B-tree
+index when you need ranges, ordering, ordered full-table scans, preloading, or
+multi-column keys.
 
 ### What can be indexed
 
@@ -145,9 +143,9 @@ Start from the selectors your UI and actions need:
 
 - Put equality filters first, in the order that narrows the read.
 - Put the ordered or ranged column after the equality prefix.
-- Use a hash index for exact lookup by a single non-unique value.
 - Use `uniqhash` for slugs, ids from another system, or any exact lookup that
   should return at most one row.
+- Use a B-tree over the field for exact lookup by a non-unique value.
 - Add a B-tree full-scan index such as `byIds` when you want to preload or scan
   a whole table.
 

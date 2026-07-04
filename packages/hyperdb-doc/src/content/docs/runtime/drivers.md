@@ -331,8 +331,8 @@ driver reuses it instead of opening one transaction per scan. Concurrent
 selector runs get separate readonly transactions, and an inactive or finished
 readonly transaction is reopened once for the current scan.
 IndexedDB `uniqhash` indexes are native unique indexes. If an index changes
-between `hash` and `uniqhash`, HyperDB recreates the IndexedDB index during the
-schema upgrade.
+between non-unique and `uniqhash`, HyperDB recreates the IndexedDB index during
+the schema upgrade.
 
 IDB operation logs include a per-driver transaction id (`tx 3`) and, when the
 operation comes from an object selector or action, the run context

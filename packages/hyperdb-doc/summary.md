@@ -78,7 +78,7 @@ check the matching docs below and also check the root `README.md`.
   many-row results, `first()` and `firstOr()`, composing selectors, and links
   to sync and async selector store APIs.
 - `src/content/docs/database/indexes.md`: Index behavior and valid query
-  shapes. Covers declaring B-tree and hash indexes, built-in `byId`, equality,
+  shapes. Covers declaring B-tree and `uniqhash` indexes, built-in `byId`, equality,
   range, ordering, composite-key support, indexable value rules, equality-prefix
   and trailing-range rules, query-builder validation errors, and index ordering.
 - `src/content/docs/database/reading-data.md`: Runtime reads and reactive

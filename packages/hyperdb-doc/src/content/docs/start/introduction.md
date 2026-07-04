@@ -25,8 +25,8 @@ both the client and server.
   shape of each row and its indexes. Row types, query columns, and index columns
   are all checked by TypeScript.
 - Indexed queries: a fluent, type-safe query builder (`selectFrom`) reads
-  through B-tree and hash indexes with equality, range bounds, ordering, and
-  limits. Every table is backed by a real B+tree, so inserting into a sorted
+  through named indexes with equality, range bounds, ordering, and limits. Every
+  table is backed by a real B+tree, so inserting into a sorted
   collection stays `O(log n)` instead of the `O(n)` you pay rebuilding or
   shifting an array.
 - Explicit access paths: SQL is powerful, but the query text usually does not
