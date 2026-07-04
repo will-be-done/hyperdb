@@ -5,6 +5,10 @@ import starlight from "@astrojs/starlight";
 // https://astro.build/config
 export default defineConfig({
   site: "https://hyperdb.will-be-done.app",
+  redirects: {
+    "/database/selectors-reactivity": "/database/reading-data",
+    "/database/writing-data": "/database/actions",
+  },
   integrations: [
     starlight({
       title: "HyperDB",
@@ -39,12 +43,9 @@ export default defineConfig({
             { label: "Schemas", slug: "database/schemas" },
             { label: "Indexes", slug: "database/indexes" },
             { label: "Data Types", slug: "database/data-types" },
+            { label: "Selectors", slug: "database/selectors" },
             { label: "Reading Data", slug: "database/reading-data" },
-            {
-              label: "Selectors & Reactivity",
-              slug: "database/selectors-reactivity",
-            },
-            { label: "Writing Data", slug: "database/writing-data" },
+            { label: "Actions", slug: "database/actions" },
           ],
         },
         {

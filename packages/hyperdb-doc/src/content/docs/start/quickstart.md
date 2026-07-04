@@ -125,7 +125,7 @@ export async function createAppDB() {
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
 reads and writes synchronous, so you can use `useSyncSelector`,
-`useDispatch`, `selectSync`, and `syncDispatch` without promise or cache-miss
+`useSyncDispatch`, `selectSync`, and `syncDispatch` without promise or cache-miss
 tradeoffs.
 
 ## 6. Read and write outside React
@@ -217,7 +217,7 @@ from the primary store.
 ## Where to next
 
 - [Schemas](/database/schemas/): tables, validators, tagged unions.
-- [Reading Data](/database/reading-data/) and [Indexes](/database/indexes/):
+- [Selectors](/database/selectors/) and [Indexes](/database/indexes/):
   the full query builder.
-- [Writing Data](/database/writing-data/): actions, mutations, transactions.
+- [Actions](/database/actions/): actions, mutations, transactions.
 - [Storage Drivers](/runtime/drivers/): persist to SQLite or IndexedDB.

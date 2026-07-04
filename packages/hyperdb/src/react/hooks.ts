@@ -375,7 +375,7 @@ export function useAsyncSelector<
   return result;
 }
 
-export function useDispatch() {
+export function useSyncDispatch() {
   const db = hookDeps.useDB();
 
   return hookDeps.useCallback(

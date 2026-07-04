@@ -12,8 +12,9 @@ Good deep links:
 
 - Quickstart: https://hyperdb.will-be-done.app/start/quickstart/
 - Schemas: https://hyperdb.will-be-done.app/database/schemas/
+- Selectors: https://hyperdb.will-be-done.app/database/selectors/
 - Reading data: https://hyperdb.will-be-done.app/database/reading-data/
-- Writing data: https://hyperdb.will-be-done.app/database/writing-data/
+- Actions: https://hyperdb.will-be-done.app/database/actions/
 - React: https://hyperdb.will-be-done.app/integrations/react/
 - Drivers: https://hyperdb.will-be-done.app/runtime/drivers/
 
@@ -35,7 +36,7 @@ and views that should re-run only when the exact index ranges they read change.
   actions, runtimes, command executors, `HybridDB`, `SubscribableDB`, tracing
   setup, and core types.
 - `@will-be-done/hyperdb/react`: `DBProvider`, `useDB`, `useOptionalDB`,
-  `useSyncSelector`, `useAsyncSelector`, `useDispatch`, `useAsyncDispatch`,
+  `useSyncSelector`, `useAsyncSelector`, `useSyncDispatch`, `useAsyncDispatch`,
   `useSelectSync`, and `useSelectAsync`.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
   trace metadata helpers.
@@ -361,7 +362,7 @@ flags, and `refetch()`. Its initial snapshot attempts the selector once: sync
 results are visible immediately, while promise results show `defaultValue`,
 `initialData`, or `placeholderData` until that promise resolves. `defaultValue`
 may be a value or a zero-argument function that returns the value. Use
-`useSyncSelector` / `useDispatch` only for purely synchronous drivers.
+`useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
 
 ## Rules Of Thumb
 

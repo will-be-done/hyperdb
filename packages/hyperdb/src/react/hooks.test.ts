@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   setHyperDBHookDepsForTest,
+  useSyncDispatch,
   useAsyncSelector,
   useSyncSelector,
 } from "./hooks";
@@ -22,6 +23,7 @@ const mocks = {
   selectCachedMaybeAsync: vi.fn(),
   selectAsync: vi.fn(),
   selectMaybeAsync: vi.fn(),
+  syncDispatch: vi.fn(),
   isNeedToRerunRange: vi.fn(),
   stableSerializeSelectorArgs: vi.fn(),
 };
@@ -194,6 +196,7 @@ describe("useAsyncSelector", () => {
     mocks.selectCachedMaybeAsync.mockReset();
     mocks.selectAsync.mockReset();
     mocks.selectMaybeAsync.mockReset();
+    mocks.syncDispatch.mockReset();
     mocks.isNeedToRerunRange.mockReset();
     mocks.stableSerializeSelectorArgs.mockReset();
     mocks.stableSerializeSelectorArgs.mockReturnValue("args-key");
@@ -206,6 +209,7 @@ describe("useAsyncSelector", () => {
         mocks.selectCachedMaybeAsync(...args),
       selectAsync: (...args) => mocks.selectAsync(...args),
       selectMaybeAsync: (...args) => mocks.selectMaybeAsync(...args),
+      syncDispatch: (...args) => mocks.syncDispatch(...args),
       isNeedToRerunRange: (...args) => mocks.isNeedToRerunRange(...args),
       stableSerializeSelectorArgs: (...args) =>
         mocks.stableSerializeSelectorArgs(...args),
@@ -318,6 +322,18 @@ describe("useAsyncSelector", () => {
 
     expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
     reactHooks.cleanup();
+  });
+
+  it("dispatches sync actions against the context database", () => {
+    const action = (function* action() {
+      return "unused";
+    })();
+    mocks.syncDispatch.mockReturnValue("created");
+
+    const dispatch = useSyncDispatch();
+
+    expect(dispatch(action)).toBe("created");
+    expect(mocks.syncDispatch).toHaveBeenCalledWith(mocks.db, action);
   });
 
   it("collapses overlapping subscription reruns and applies only the latest async result", async () => {

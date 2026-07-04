@@ -343,7 +343,7 @@ and failure logs easier to correlate in browser consoles.
 
 Use a synchronous driver when the whole read path can stay in memory or in a
 sync SQLite binding. That gives you `selectSync`, `syncDispatch`, `useSyncSelector`,
-and `useDispatch` with no promises.
+and `useSyncDispatch` with no promises.
 
 Use an asynchronous driver when storage itself is asynchronous, such as
 IndexedDB, async SQLite, or `HybridDB`. `HybridDB` can still serve warm reads

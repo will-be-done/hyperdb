@@ -175,7 +175,7 @@ export async function createAppDB() {
 
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
-reads and writes synchronous, so you can use `useSyncSelector`, `useDispatch`,
+reads and writes synchronous, so you can use `useSyncSelector`, `useSyncDispatch`,
 `selectSync`, and `syncDispatch` without promise or cache-miss tradeoffs.
 For one-off reads that should reuse the selector cache, use `selectCachedSync`,
 `selectCachedAsync`, or `selectCachedMaybeAsync`. For subscriptions outside

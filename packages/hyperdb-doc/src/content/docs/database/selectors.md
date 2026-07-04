@@ -1,0 +1,214 @@
+---
+title: Selectors
+description: Define selector reads with the selectFrom builder, filters, ordering, limits, and first-result helpers.
+sidebar:
+  order: 4
+---
+
+You read data by defining selectors: generator functions that describe what to
+read. Inside a selector you build queries with `selectFrom` and `yield*` them.
+Selectors can call other selectors but can never write; the runtime rejects any
+mutation emitted from a read.
+
+Every read starts from a named index. That makes the access path explicit in
+your application code: `selectFrom(tasksTable, "byProjectOrder")` means "scan
+this table through this index", then `.where(...)`, `.order(...)`, and
+`.limit(...)` describe the bounds and result shape.
+
+## A first selector
+
+```ts
+import { selectFrom, v } from "@will-be-done/hyperdb";
+import { selector } from "./builders"; // createSelector()
+import { tasksTable } from "./schema";
+
+export const projectTasks = selector({
+  name: "projectTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectOrder")
+      .where((q) => q.eq("projectId", projectId))
+      .order("asc");
+  },
+});
+```
+
+Object-form selectors accept:
+
+| Field         | Description                                                                          |
+| ------------- | ------------------------------------------------------------------------------------ |
+| `name`        | Required display/debug name (shown in traces)                                        |
+| `args`        | Validator map for the single args object                                             |
+| `handler`     | Generator function that does the reading                                             |
+| `skipTrace`   | `true`, or `{ rootTrace, childTrace }` to skip tracing                               |
+| `memoization` | `{ root?, selfChild? }` cache controls (see [Reading Data](/database/reading-data/)) |
+
+You can also wrap a bare generator function instead of using the object form.
+
+## The query builder
+
+`selectFrom(table, indexName)` returns a builder. You always query through an
+index. The builder is immutable: each method returns a new builder. With
+`HybridDB`, the same indexed read checks the in-memory cache first; missing
+ranges fall through to the primary store and are cached for later reads.
+
+```ts
+selectFrom(tasksTable, "byProjectOrder")
+  .where((q) => q.eq("projectId", "p1"))
+  .order("desc")
+  .limit(20);
+```
+
+### `where`
+
+`where` takes a callback that receives a query object. Chain comparison methods
+on it; each column you constrain must belong to the index you selected.
+
+```ts
+.where((q) => q.eq("projectId", "p1"))
+.where((q) => q.eq("projectId", "p1").gte("orderToken", "m"))
+```
+
+Available comparisons:
+
+| Method            | Meaning               |
+| ----------------- | --------------------- |
+| `q.eq(col, val)`  | equal to              |
+| `q.gt(col, val)`  | greater than          |
+| `q.gte(col, val)` | greater than or equal |
+| `q.lt(col, val)`  | less than             |
+| `q.lte(col, val)` | less than or equal    |
+
+Comparisons apply to index columns, and which combinations are legal depends
+on the column order of the index. The rules (equality prefix + one trailing
+range) are explained in detail in [Indexes](/database/indexes/).
+
+### OR queries
+
+To express an OR, return an array of query branches from `where`, or use the
+`or(...)` helper. Each branch is scanned and the results are combined.
+With `.order(...)`, the combined rows are ordered by the index globally, not by
+the order of the OR branches.
+
+```ts
+import { selectFrom, or } from "@will-be-done/hyperdb";
+
+selectFrom(tasksTable, "byProjectState").where((q) =>
+  or(q.eq("projectId", "p1").eq("state", "todo"), q.eq("projectId", "p2")),
+);
+
+// equivalent, returning an array directly:
+selectFrom(tasksTable, "byProjectState").where((q) => [
+  q.eq("projectId", "p1").eq("state", "todo"),
+  q.eq("projectId", "p2"),
+]);
+```
+
+This is the idiom for batched lookups, for example fetching many rows by id in
+one query:
+
+```ts
+selectFrom(tasksTable, "byId").where((q) => ids.map((id) => q.eq("id", id)));
+```
+
+When reads go through a [`SubscribableDB`](/runtime/db/), `afterScan` lifecycle
+hooks can observe each successful scan with the table, index, where clauses,
+select options, and returned rows.
+
+### `order` and `limit`
+
+```ts
+.order("asc")   // or "desc"; follows the index's key order
+.limit(50)      // cap the number of returned rows
+```
+
+Ordering follows the B-tree index's natural key order; `"desc"` walks it in
+reverse. Hash indexes are for equality lookups and do not provide ordering.
+
+## Retrieving results
+
+### Many rows
+
+`yield*`-ing a query returns an array of rows:
+
+```ts
+const tasks =
+  yield *
+  selectFrom(tasksTable, "byProjectOrder").where((q) =>
+    q.eq("projectId", projectId),
+  );
+```
+
+### The first row
+
+`first()` returns the first matching row or `undefined`. `firstOr(fallback)`
+returns a fallback instead of `undefined`.
+
+```ts
+const task =
+  yield *
+  selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", taskId))
+    .first();
+
+const stateOrDefault =
+  yield *
+  selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", taskId))
+    .firstOr({ id: taskId, state: "todo" } as Task);
+```
+
+Both apply a `limit(1)` internally, so they stop after the first match.
+
+## Composing selectors
+
+Selectors call other selectors with `yield*`, which lets you build larger reads
+from smaller ones. The runtime tracks the index ranges scanned across the whole
+tree, so a composed selector stays just as precisely reactive as its parts.
+
+```ts
+import { selectFrom, v } from "@will-be-done/hyperdb";
+import { selector } from "./builders"; // createSelector()
+import { tasksTable } from "./schema";
+
+export const projectTasks = selector({
+  name: "projectTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectOrder")
+      .where((q) => q.eq("projectId", projectId))
+      .order("asc");
+  },
+});
+
+const projectDoneTasks = selector({
+  name: "projectDoneTasks",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    return yield* selectFrom(tasksTable, "byProjectState").where((q) =>
+      q.eq("projectId", projectId).eq("state", "done"),
+    );
+  },
+});
+
+const projectSummary = selector({
+  name: "projectSummary",
+  args: { projectId: v.string() },
+  handler: function* ({ projectId }) {
+    const tasks = yield* projectTasks({ projectId });
+    const doneTasks = yield* projectDoneTasks({ projectId });
+    return {
+      total: tasks.length,
+      done: doneTasks.length,
+    };
+  },
+});
+```
+
+In that example, `projectDoneTasks` should use an index such as
+`byProjectState = ["projectId", "state"]` instead of filtering the full project
+list in JavaScript. Composition keeps code ergonomic, but each selector should
+still choose the index that matches the data it needs.
+
+To run selectors, cache selector results, or create subscribed sync/async
+selector stores, see [Reading Data](/database/reading-data/#running-selectors).

@@ -12,7 +12,7 @@ reads. React 18 is a peer dependency.
 HyperDB hands your components plain, immutable rows: frozen
 data, never proxies. There is no `observer()` wrapper to remember and
 nothing leaking into your view layer. The selector hooks use HyperDB's
-[range-tracked reads](/database/selectors-reactivity/), so a component re-runs
+[range-tracked reads](/database/reading-data/), so a component re-runs
 only when a mutation touches a range its selector actually scanned, giving
 fine-grained updates that compose with React's rendering model directly.
 
@@ -187,7 +187,7 @@ Options:
 
 ## Writing
 
-### `useDispatch` / `useAsyncDispatch`
+### `useSyncDispatch` / `useAsyncDispatch`
 
 Return a function that dispatches an action against the context database.
 
@@ -212,7 +212,7 @@ function AddButton({ projectId }: { projectId: string }) {
 ```
 
 Use `useAsyncDispatch` with `HybridDB`, IndexedDB, and async SQLite. Use
-`useDispatch` only with synchronous drivers. With HybridDB, writes update the
+`useSyncDispatch` only with synchronous drivers. With HybridDB, writes update the
 in-memory cache first so subscribed UI can respond immediately, then flush to
 the primary store in order.
 
@@ -243,6 +243,6 @@ Use `useSelectSync` for synchronous drivers.
 | `useAsyncSelector(opts)` | query-style result object                  | `HybridDB`, IndexedDB, async SQLite |
 | `useSyncSelector(opts)`  | the selector result                        | in-memory and sync SQLite           |
 | `useAsyncDispatch()`     | `(action) => Promise<TReturn>`             | `HybridDB`, IndexedDB, async SQLite |
-| `useDispatch()`          | `(action) => TReturn`                      | in-memory and sync SQLite           |
+| `useSyncDispatch()`      | `(action) => TReturn`                      | in-memory and sync SQLite           |
 | `useSelectAsync()`       | `({ selector, args }) => Promise<TReturn>` | one-off read, async runtimes        |
 | `useSelectSync()`        | `({ selector, args }) => TReturn`          | one-off read, sync runtimes         |

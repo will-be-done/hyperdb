@@ -1,8 +1,8 @@
 ---
-title: Writing Data
+title: Actions
 description: Change data with actions and the insert, upsert, and deleteRows mutations, dispatched in transactions.
 sidebar:
-  order: 5
+  order: 6
 ---
 
 You change data through actions, generator functions that may both read and
@@ -143,8 +143,8 @@ await asyncDispatch(
 );
 ```
 
-Inside React use [`useDispatch` / `useAsyncDispatch`](/integrations/react/), which
-bind the dispatcher to the database from context.
+Inside React use [`useSyncDispatch` / `useAsyncDispatch`](/integrations/react/),
+which bind the dispatcher to the database from context.
 
 With `HybridDB`, use the async dispatch path. Writes update the in-memory cache
 first so subscribers and React can respond immediately, then flush to the

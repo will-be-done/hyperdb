@@ -63,7 +63,7 @@ HyperDB tracks dependencies at the level of indexed ranges. Because every
 selector reads through indexes, the runtime records exactly which index ranges it
 scanned. When a mutation commits, only the selectors whose ranges actually
 contain the changed rows re-run. See
-[Selectors & Reactivity](/database/selectors-reactivity/). A write to
+[Reading Data](/database/reading-data/). A write to
 `projectId = "p2"` does not wake a selector that read `projectId = "p1"`.
 
 You get fine-grained invalidation without mutable observable objects. HyperDB
