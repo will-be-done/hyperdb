@@ -453,8 +453,7 @@ const createAsyncSelectorStoreInternal = <
       token: currentToken,
       dataController: promiseController,
       resultController,
-      cancelOnLastUnsubscribe:
-        runOptions.cancelOnLastUnsubscribe !== false,
+      cancelOnLastUnsubscribe: runOptions.cancelOnLastUnsubscribe !== false,
     };
 
     const resultPromise = resultController.promise;

@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   createCachedSelectorStoreSync,
   runCachedSelectorMaybeAsync,

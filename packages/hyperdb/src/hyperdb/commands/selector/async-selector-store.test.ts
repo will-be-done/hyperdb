@@ -193,9 +193,7 @@ describe("createCachedSelectorStoreAsync", () => {
     const subscriber = vi.fn();
     const unsubscribe = store.subscribe(subscriber);
 
-    execSync(
-      db.insert(spacesTable, [{ id: "space-1", name: "First space" }]),
-    );
+    execSync(db.insert(spacesTable, [{ id: "space-1", name: "First space" }]));
 
     expect(subscriber).toHaveBeenCalled();
     expect(store.getSnapshot().data).toEqual([
