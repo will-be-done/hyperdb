@@ -176,7 +176,7 @@ function createStatefulFakeReactHooks() {
     useSyncExternalStore: vi.fn((subscribe, getSnapshot) => {
       const slot = index++;
       const previous = state[slot];
-      if (!previous || previous.value !== subscribe) {
+      if (!previous || previous.value !== subscribe || !previous.cleanup) {
         previous?.cleanup?.();
         state[slot] = { cleanup: subscribe(() => undefined), value: subscribe };
       }
@@ -559,6 +559,123 @@ describe("useAsyncSelector", () => {
     render();
 
     expect(createCachedSelectorStoreAsync).toHaveBeenCalledTimes(1);
+    reactHooks.cleanup();
+  });
+
+  it("does not destroy a stable async selector store during strict cleanup", () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    const store = {
+      subscribe: vi.fn(() => vi.fn()),
+      getSnapshot: vi.fn(() => ({
+        data: [],
+        dataUpdatedAt: 0,
+        error: null,
+        errorUpdatedAt: 0,
+        errorUpdateCount: 0,
+        failureCount: 0,
+        failureReason: null,
+        fetchStatus: "idle",
+        isEnabled: true,
+        isError: false,
+        isFetched: true,
+        isFetchedAfterMount: true,
+        isFetching: false,
+        isInitialLoading: false,
+        isLoading: false,
+        isLoadingError: false,
+        isPaused: false,
+        isPending: false,
+        isPlaceholderData: false,
+        isRefetchError: false,
+        isRefetching: false,
+        isStale: false,
+        isSuccess: true,
+        promise: Promise.resolve([]),
+        status: "success",
+      })),
+      refetch: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const createCachedSelectorStoreAsync = vi.fn(() => store);
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useDB: () => mocks.db,
+      createCachedSelectorStoreAsync,
+      stableSerializeSelectorArgs: () => "args-key",
+    });
+    const render = () => {
+      reactHooks.resetRender();
+      useAsyncSelector({
+        selector,
+        args: {},
+        defaultValue: [],
+      });
+    };
+
+    render();
+    reactHooks.cleanup();
+    render();
+
+    expect(createCachedSelectorStoreAsync).toHaveBeenCalledTimes(1);
+    expect(store.subscribe).toHaveBeenCalledTimes(2);
+    expect(store.destroy).not.toHaveBeenCalled();
+
+    reactHooks.cleanup();
+  });
+
+  it("does not rerun a getSnapshot-started async selector across strict cleanup", async () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const useSyncExternalStore = vi.fn((subscribe, getSnapshot) => {
+      const snapshot = getSnapshot();
+
+      reactHooks.useSyncExternalStore(subscribe, () => snapshot);
+      return snapshot;
+    });
+    const gate = deferred<string>();
+    const runCachedSelectorMaybeAsync = vi.fn(() => gate.promise);
+    const selector = vi.fn(function* selector() {
+      return "unused";
+    });
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useSyncExternalStore,
+      useDB: () => mocks.db,
+      runCachedSelectorMaybeAsync,
+      stableSerializeSelectorArgs: () => "args-key",
+    });
+    const render = () => {
+      reactHooks.resetRender();
+      return useAsyncSelector({
+        selector,
+        args: {},
+      });
+    };
+
+    expect(render()).toEqual(
+      expect.objectContaining({
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+    reactHooks.cleanup();
+    expect(render()).toEqual(
+      expect.objectContaining({
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    expect(runCachedSelectorMaybeAsync).toHaveBeenCalledTimes(1);
+
+    gate.resolve("fresh");
+    await flushPromises();
+
+    expect(runCachedSelectorMaybeAsync).toHaveBeenCalledTimes(1);
     reactHooks.cleanup();
   });
 

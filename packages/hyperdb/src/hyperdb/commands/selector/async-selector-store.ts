@@ -283,6 +283,7 @@ const createAsyncSelectorStoreInternal = <
     token: number;
     dataController: PromiseController<TData>;
     resultController: PromiseController<AsyncSelectorStateLike<TData, TError>>;
+    cancelOnLastUnsubscribe: boolean;
   } | null = null;
   let dbUnsubscribe: (() => void) | undefined;
   let runToken = 0;
@@ -308,11 +309,25 @@ const createAsyncSelectorStoreInternal = <
     }
   };
 
+  const refreshStaleSnapshot = () => {
+    if (
+      queryState.status !== "success" ||
+      staleTime <= 0 ||
+      snapshot.isStale ||
+      Date.now() <= queryState.dataUpdatedAt + staleTime
+    ) {
+      return;
+    }
+
+    snapshot = buildSnapshot(queryState, { enabled, staleTime });
+  };
+
   const scheduleStaleTimer = () => {
     clearStaleTimer();
 
     if (
       destroyed ||
+      listeners.size === 0 ||
       queryState.status !== "success" ||
       staleTime <= 0 ||
       snapshot.isStale
@@ -399,6 +414,7 @@ const createAsyncSelectorStoreInternal = <
 
   const run = (
     options?: AsyncSelectorRefetchOptions,
+    runOptions: { cancelOnLastUnsubscribe?: boolean } = {},
   ): Promise<AsyncSelectorStateLike<TData, TError>> => {
     const applyRefetchOptions = (
       resultPromise: Promise<AsyncSelectorStateLike<TData, TError>>,
@@ -437,6 +453,8 @@ const createAsyncSelectorStoreInternal = <
       token: currentToken,
       dataController: promiseController,
       resultController,
+      cancelOnLastUnsubscribe:
+        runOptions.cancelOnLastUnsubscribe !== false,
     };
 
     const resultPromise = resultController.promise;
@@ -448,7 +466,10 @@ const createAsyncSelectorStoreInternal = <
       resultController.resolve(snapshot);
     };
     const finishSuccess = (value: TData, cmds: SelectRangeCmd[]) => {
-      if (!isCurrentRun()) return;
+      const currentRun = activeRun;
+      if (!isCurrentRun() || !currentRun) return;
+
+      const cancelOnLastUnsubscribe = currentRun.cancelOnLastUnsubscribe;
 
       selectRangeCmds = cmds;
       setQueryState((previous) => ({
@@ -471,7 +492,7 @@ const createAsyncSelectorStoreInternal = <
       resolveCurrentSnapshot();
 
       if (rerunRequested && !destroyed) {
-        void run();
+        void run(undefined, { cancelOnLastUnsubscribe });
       }
     };
     const finishError = (error: unknown) => {
@@ -564,7 +585,7 @@ const createAsyncSelectorStoreInternal = <
   const ensureStarted = () => {
     if (started || !canAutoFetch || destroyed) return;
 
-    void run();
+    void run(undefined, { cancelOnLastUnsubscribe: false });
   };
 
   const ensureDBSubscription = () => {
@@ -583,13 +604,15 @@ const createAsyncSelectorStoreInternal = <
         return;
       }
 
-      void run();
+      void run(undefined, { cancelOnLastUnsubscribe: false });
     });
   };
 
   return {
     subscribe: (callback) => {
       listeners.add(callback);
+      refreshStaleSnapshot();
+      scheduleStaleTimer();
       ensureDBSubscription();
       ensureStarted();
 
@@ -597,7 +620,7 @@ const createAsyncSelectorStoreInternal = <
         if (isRunning) {
           rerunRequested = true;
         } else {
-          void run();
+          void run(undefined, { cancelOnLastUnsubscribe: false });
         }
       }
 
@@ -607,13 +630,19 @@ const createAsyncSelectorStoreInternal = <
         if (listeners.size > 0) return;
 
         stopDBSubscription();
-        cancelInFlightRun();
-        started = false;
+        rerunRequested = false;
+        if (activeRun?.cancelOnLastUnsubscribe !== false) {
+          cancelInFlightRun();
+        }
+        if (!activeRun && queryState.status !== "success") {
+          started = false;
+        }
         clearStaleTimer();
       };
     },
     getSnapshot: () => {
       ensureStarted();
+      refreshStaleSnapshot();
       return snapshot;
     },
     refetch: (options) => run(options),
