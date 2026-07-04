@@ -56,6 +56,6 @@ DB:
 7. In-mem tx for fast action
 8. k-way indexxedb OR merging
 9. Multibe column support in db index
-10. Rename useSelect => useSyncSelect, useDispatch => useSyncDispatch, select -> selectSync, runSelector -> runSelectorSync, initCachedSelector -> initCachedSelectorSync, initSelector -> initSelectorSync
+10. Rename useSelect => useSyncSelect, select -> selectSync, runSelector -> runSelectorSync, initCachedSelector -> initCachedSelectorSync, initSelector -> initSelectorSync
 11. Maybe rename upsert -> put
 12. Move async storage to selector.ts from react hook

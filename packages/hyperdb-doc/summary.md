@@ -72,21 +72,21 @@ check the matching docs below and also check the root `README.md`.
   reference. Lists supported validators and TypeScript types, composite
   validator helpers, binary data behavior, indexable values, `v.any()` rules,
   `undefined` handling, and date/time modeling guidance.
-- `src/content/docs/database/reading-data.md`: Selector and query-builder
+- `src/content/docs/database/selectors.md`: Selector and query-builder
   guide. Covers selector object fields, `selectFrom`, immutable query builders,
   `where` comparisons, OR queries with `or(...)` or arrays, ordering, limits,
-  many-row results, `first()` and `firstOr()`, and composing selectors.
+  many-row results, `first()` and `firstOr()`, composing selectors, and links
+  to sync and async selector store APIs.
 - `src/content/docs/database/indexes.md`: Index behavior and valid query
   shapes. Covers declaring B-tree and hash indexes, built-in `byId`, equality,
   range, ordering, composite-key support, indexable value rules, equality-prefix
   and trailing-range rules, query-builder validation errors, and index ordering.
-- `src/content/docs/database/selectors-reactivity.md`: Reactive selector cache.
-  Covers running selectors with `selectSync`/`selectAsync`, cached selector
-  reads, range tracking, cached selector stores, `createCachedSelectorStoreSync`,
+- `src/content/docs/database/reading-data.md`: Runtime reads and reactive
+  selector cache. Covers one-off selector reads, dedicated selector stores with
+  sync, async, and cached variants, range tracking, caching layers, preloading,
   garbage collection, selector memoization controls (`root` and `selfChild`),
-  subscriptions, revisions, and practical guidance for writing selectors that
-  invalidate precisely.
-- `src/content/docs/database/writing-data.md`: Actions and mutations. Covers
+  subscriptions, revisions, and practical guidance for reading data reactively.
+- `src/content/docs/database/actions.md`: Actions and mutations. Covers
   defining actions, `insert`, `upsert`, `deleteRows`, dispatching with
   `syncDispatch`/`asyncDispatch`, why selectors cannot write, transaction
   behavior and rollback, and bulk write guidance.
@@ -106,10 +106,12 @@ check the matching docs below and also check the root `README.md`.
 ## Integrations
 
 - `src/content/docs/integrations/react.md`: React integration guide. Covers
-  `DBProvider`, `useDB`, `useSyncSelector`, `useAsyncSelector`, `useDispatch`,
-  `useAsyncDispatch`, `useSelectSync`, `useSelectAsync`, selector options, default
-  values, `enabled`, the React Query-style async selector result, and the full
-  hook reference table.
+  `DBProvider`, `useDB`, `useSyncSelector`, `useAsyncSelector`,
+  `useSyncDispatch`, `useAsyncDispatch`, `useSelectSync`, `useSelectAsync`,
+  selector options, default values, `enabled`, the React Query-style async
+  selector result, its
+  `createCachedSelectorStoreAsync` foundation, and the full hook reference
+  table.
 - `src/content/docs/integrations/devtools.md`: Devtool and tracing guide. Covers
   adding `HyperDBDevtools`, devtool tabs and trace inspection, component props,
   embedded panel option, trace contents, cache-hit traces, `HybridDB` source
@@ -128,11 +130,11 @@ check the matching docs below and also check the root `README.md`.
 - Schema, validator, type helper, table, or index changes: check
   `database/schemas.md`, `database/data-types.md`, `database/indexes.md`,
   `start/quickstart.md`, and the root `README.md`.
-- Query builder or selector API changes: check `database/reading-data.md`,
-  `database/selectors-reactivity.md`, `start/how-it-works.md`, React docs if
-  hooks are affected, and the root `README.md`.
+- Query builder or selector API changes: check `database/selectors.md`,
+  `database/reading-data.md`, `start/how-it-works.md`, React docs if hooks are
+  affected, and the root `README.md`.
 - Action, mutation, transaction, hook, trait, or dispatch changes: check
-  `database/writing-data.md`, `runtime/db.md`, guides that use hooks/persistence,
+  `database/actions.md`, `runtime/db.md`, guides that use hooks/persistence,
   and the root `README.md`.
 - Driver, storage codec, sync/async, `HybridDB`, IndexedDB, or SQLite changes:
   check `runtime/drivers.md`, `runtime/db.md`, `start/introduction.md`,

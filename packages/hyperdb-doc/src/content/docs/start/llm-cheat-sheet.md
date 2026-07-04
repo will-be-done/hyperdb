@@ -12,8 +12,9 @@ Good deep links:
 
 - Quickstart: https://hyperdb.will-be-done.app/start/quickstart/
 - Schemas: https://hyperdb.will-be-done.app/database/schemas/
+- Selectors: https://hyperdb.will-be-done.app/database/selectors/
 - Reading data: https://hyperdb.will-be-done.app/database/reading-data/
-- Writing data: https://hyperdb.will-be-done.app/database/writing-data/
+- Actions: https://hyperdb.will-be-done.app/database/actions/
 - React: https://hyperdb.will-be-done.app/integrations/react/
 - Drivers: https://hyperdb.will-be-done.app/runtime/drivers/
 
@@ -35,7 +36,7 @@ and views that should re-run only when the exact index ranges they read change.
   actions, runtimes, command executors, `HybridDB`, `SubscribableDB`, tracing
   setup, and core types.
 - `@will-be-done/hyperdb/react`: `DBProvider`, `useDB`, `useOptionalDB`,
-  `useSyncSelector`, `useAsyncSelector`, `useDispatch`, `useAsyncDispatch`,
+  `useSyncSelector`, `useAsyncSelector`, `useSyncDispatch`, `useAsyncDispatch`,
   `useSelectSync`, and `useSelectAsync`.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
   trace metadata helpers.
@@ -56,7 +57,10 @@ import {
   SubscribableDB,
   asyncDispatch,
   createAction,
+  createAsyncSelectorStore,
+  createCachedSelectorStoreAsync,
   createSelector,
+  createCachedSelectorStoreSync,
   defineTable,
   deleteRows,
   execAsync,
@@ -169,6 +173,27 @@ const cachedRows = await Promise.resolve(
   }),
 );
 ```
+
+For subscriptions outside React, use a selector store. Pick sync vs async by
+whether the selector may yield a promise, and cached vs uncached by whether the
+root selector result should be shared:
+
+```ts
+const store = createCachedSelectorStoreAsync(db, {
+  selector: projectTasks,
+  args: { projectId: "p1" },
+  defaultValue: [],
+});
+
+const unsubscribe = store.subscribe(() => {
+  const snapshot = store.getSnapshot();
+  if (snapshot.status === "success") console.log(snapshot.data);
+});
+```
+
+Store helpers: `createSelectorStoreSync` (sync uncached),
+`createCachedSelectorStoreSync` (sync cached), `createAsyncSelectorStore`
+(async uncached), and `createCachedSelectorStoreAsync` (async cached).
 
 ## Actions And Writes
 
@@ -335,8 +360,9 @@ Use `useAsyncSelector` and `useAsyncDispatch` with HybridDB. `useAsyncSelector`
 returns a React Query-style result with `data`, `status`, `error`, fetching
 flags, and `refetch()`. Its initial snapshot attempts the selector once: sync
 results are visible immediately, while promise results show `defaultValue`,
-`initialData`, or `placeholderData` until that promise resolves. Use
-`useSyncSelector` / `useDispatch` only for purely synchronous drivers.
+`initialData`, or `placeholderData` until that promise resolves. `defaultValue`
+may be a value or a zero-argument function that returns the value. Use
+`useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
 
 ## Rules Of Thumb
 

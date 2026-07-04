@@ -2,6 +2,7 @@ export * from "./db";
 export * from "./commands/action/builders";
 export * from "./commands/selector/builder";
 export * from "./commands/selector/selector";
+export * from "./commands/selector/async-selector-store";
 export { noop } from "./commands/async";
 export type {
   HyperDB,

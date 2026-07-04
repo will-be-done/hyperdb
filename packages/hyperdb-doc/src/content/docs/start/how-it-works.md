@@ -85,7 +85,7 @@ Because commands are _descriptions_, the same selector or action can be executed
 synchronously against an in-memory driver, asynchronously against IndexedDB or
 async SQLite, or through a `HybridDB` that reads from memory first and falls
 through to a primary store on cache misses. The code does not change. See
-[Reading Data](/database/reading-data/) and [Writing Data](/database/writing-data/).
+[Selectors](/database/selectors/) and [Actions](/database/actions/).
 
 Commands also compose with normal `yield*` calls. A selector can call another
 selector, an action can read through selectors, and a larger action can call
@@ -174,7 +174,7 @@ The same mechanism gives the devtool useful traces: it can show which selector
 ran, which indexes it scanned, and whether HybridDB reads came from `in-mem` or
 `persist`.
 
-More details in [Selectors & Reactivity](/database/selectors-reactivity/).
+More details in [Reading Data](/database/reading-data/).
 
 ## Sync vs. async execution
 
@@ -182,12 +182,12 @@ Every storage path is either synchronous (in-memory, sync SQLite) or
 asynchronous (IndexedDB, async SQLite, or `HybridDB` when a read misses memory).
 The runtime exposes a matching pair of entry points for almost everything:
 
-| Sync                                 | Async                                   |
-| ------------------------------------ | --------------------------------------- |
-| `syncDispatch(db, action(args))`     | `asyncDispatch(db, action(args))`       |
-| `selectSync(db, { selector, args })` | `selectAsync(db, { selector, args })`   |
-| `execSync(generator)`                | `execAsync(generator)`                  |
-| `useSyncSelector` / `useDispatch`    | `useAsyncSelector` / `useAsyncDispatch` |
+| Sync                                  | Async                                   |
+| ------------------------------------- | --------------------------------------- |
+| `syncDispatch(db, action(args))`      | `asyncDispatch(db, action(args))`       |
+| `selectSync(db, { selector, args })`  | `selectAsync(db, { selector, args })`   |
+| `execSync(generator)`                 | `execAsync(generator)`                  |
+| `useSyncSelector` / `useSyncDispatch` | `useAsyncSelector` / `useAsyncDispatch` |
 
 Use the sync variants with the in-memory and synchronous SQLite drivers; use the
 async variants with IndexedDB, async SQLite, and `HybridDB` (because a selector
