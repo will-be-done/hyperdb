@@ -277,6 +277,14 @@ export async function createAppDB() {
 }
 ```
 
+Persistent driver diagnostics are opt-in. Pass `debug(event) { ... }` to
+`openIndexedDBDriver(...)` or `new AsyncSqlDriver(...)` for structured low-level
+storage events; without a callback, drivers stay quiet and skip diagnostic event
+preparation. Use `logIdbDriverDebugEvent` from
+`@will-be-done/hyperdb/drivers/idb` to print IDB events in the old one-line
+console style, and `logAsyncSqlDriverDebugEvent` from
+`@will-be-done/hyperdb/drivers/sqlite` for async SQLite.
+
 Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 `byId` index is a `uniqhash` index for exact id lookups. `SubscribableDB` adds
 revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure

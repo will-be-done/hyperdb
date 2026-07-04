@@ -13,7 +13,10 @@ import { HybridDB } from "../../runtime/hybrid-db";
 import { BptreeInmemDriver } from "../inmemory/bptree-inmem-driver";
 import { defineTable } from "../../schema/table";
 import { v } from "../../schema/values";
-import { openIndexedDBDriver } from "./idb-driver";
+import {
+  openIndexedDBDriver,
+  type OpenIndexedDBDriverOptions,
+} from "./idb-driver";
 
 const tasksTable = defineTable("idbTasks", {
   id: v.string(),
@@ -54,11 +57,11 @@ async function deleteDatabase(dbName: string): Promise<void> {
   });
 }
 
-async function createDB(): Promise<DB> {
+async function createDB(options: OpenIndexedDBDriverOptions = {}): Promise<DB> {
   dbCounter += 1;
   const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
   await deleteDatabase(dbName);
-  return new DB(await openIndexedDBDriver(dbName));
+  return new DB(await openIndexedDBDriver(dbName, options));
 }
 
 type GetAllRecordsHost = {
@@ -543,7 +546,8 @@ describe("IdbDriver", () => {
   });
 
   it("retries when opening an object store sees a finished readonly transaction", async () => {
-    const db = await createDB();
+    const debug = vi.fn();
+    const db = await createDB({ debug });
     await execAsync(db.loadTables([tasksTable]));
     await execAsync(
       db.insert(tasksTable, [
@@ -558,10 +562,6 @@ describe("IdbDriver", () => {
 
     const objectStoreSpy = vi.spyOn(IDBTransaction.prototype, "objectStore");
     const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const errorSpy = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
     const finishedError = new DOMException(
       "Failed to execute 'objectStore' on 'IDBTransaction': The transaction has finished.",
       "InvalidStateError",
@@ -594,22 +594,20 @@ describe("IdbDriver", () => {
         txSpy.mock.calls.filter(([, mode]) => mode === "readonly").length,
       ).toBeGreaterThanOrEqual(2);
       expect(
-        logSpy.mock.calls
-          .map(([message]) => String(message))
-          .some((message) =>
-            /IDB transaction reopen .* mode readonly/.test(message),
-          ),
+        debug.mock.calls.some(
+          ([event]) =>
+            event.operation === "transaction reopen" &&
+            event.mode === "readonly",
+        ),
       ).toBe(true);
       expect(
-        errorSpy.mock.calls
-          .map(([message]) => String(message))
-          .some((message) => /FAILED IDB scan/.test(message)),
+        debug.mock.calls.some(
+          ([event]) => event.operation === "scan" && event.status === "error",
+        ),
       ).toBe(false);
     } finally {
       objectStoreSpy.mockRestore();
       txSpy.mockRestore();
-      logSpy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 

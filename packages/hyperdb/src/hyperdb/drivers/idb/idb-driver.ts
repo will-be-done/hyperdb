@@ -40,6 +40,72 @@ type StoredTableMetadata = {
 
 type StoreMode = "readonly" | "readwrite";
 type LockRelease = () => void;
+export type IdbDriverDebugOperation =
+  | "insert"
+  | "upsert"
+  | "delete"
+  | "scan"
+  | "rebuild indexes"
+  | "transaction start"
+  | "transaction commit"
+  | "transaction rollback"
+  | "transaction reopen";
+export type IdbDriverDebugEvent = {
+  operation: IdbDriverDebugOperation;
+  status: "success" | "error";
+  durationMs: number;
+  txId?: number;
+  traceContext?: DBDriverTraceContext;
+  tableName?: string;
+  indexName?: string;
+  mode?: IDBTransactionMode;
+  rowCount?: number;
+  error?: unknown;
+};
+export type IdbDriverDebug = (event: IdbDriverDebugEvent) => void;
+
+function formatIdbDriverDebugDetail(event: IdbDriverDebugEvent): string {
+  const parts: string[] = [];
+
+  if (typeof event.txId === "number") {
+    parts.push(`tx ${event.txId}`);
+  }
+  if (event.traceContext) {
+    const { kind, name, runId } = event.traceContext;
+    parts.push(`${kind} ${name}`);
+    parts.push(`run ${runId}`);
+  }
+  if (typeof event.tableName === "string") {
+    parts.push(`table ${event.tableName}`);
+  }
+  if (typeof event.indexName === "string") {
+    parts.push(`using index ${event.indexName}`);
+  }
+  if (typeof event.mode === "string") {
+    parts.push(`mode ${event.mode}`);
+  }
+  if (typeof event.rowCount === "number") {
+    parts.push(`${event.rowCount} rows`);
+  }
+
+  return parts.length === 0 ? "" : ` | ${parts.join(" | ")}`;
+}
+
+export function formatIdbDriverDebugEvent(event: IdbDriverDebugEvent): string {
+  const prefix = event.status === "error" ? "FAILED " : "";
+  return `${prefix}IDB ${event.operation} | ${event.durationMs}ms${formatIdbDriverDebugDetail(event)}`;
+}
+
+export function logIdbDriverDebugEvent(event: IdbDriverDebugEvent): void {
+  const message = `%c${formatIdbDriverDebugEvent(event)}`;
+
+  if (event.status === "error") {
+    console.error(message, "color: #38bdf8", event.error);
+  } else {
+    console.log(message, "color: #38bdf8");
+  }
+}
+
 type ActiveReadonlyTransaction = {
   id: number;
   tx: IDBTransaction;
@@ -57,6 +123,7 @@ export type OpenIndexedDBDriverOptions = {
   durability?: IDBTransactionDurability;
   onBlocked?: (event: IDBVersionChangeEvent) => void;
   onVersionChange?: (event: IDBVersionChangeEvent) => void;
+  debug?: IdbDriverDebug;
 };
 
 const OLD_ROWS_STORE = "rows";
@@ -89,54 +156,25 @@ function nowMs(): number {
   return typeof performance === "undefined" ? Date.now() : performance.now();
 }
 
-function formatIdbLogDetail(details: Record<string, unknown>): string {
-  const parts: string[] = [];
-
-  if (typeof details.txId === "number") {
-    parts.push(`tx ${details.txId}`);
-  }
-  const traceContext = details.traceContext;
-  if (
-    typeof traceContext === "object" &&
-    traceContext !== null &&
-    "kind" in traceContext &&
-    "name" in traceContext
-  ) {
-    const { kind, name, runId } = traceContext as DBDriverTraceContext;
-    parts.push(`${kind} ${name}`);
-    parts.push(`run ${runId}`);
-  }
-  if (typeof details.tableName === "string") {
-    parts.push(`table ${details.tableName}`);
-  }
-  if (typeof details.indexName === "string") {
-    parts.push(`using index ${details.indexName}`);
-  }
-  if (typeof details.mode === "string") {
-    parts.push(`mode ${details.mode}`);
-  }
-  if (typeof details.rowCount === "number") {
-    parts.push(`${details.rowCount} rows`);
-  }
-
-  return parts.length === 0 ? "" : ` | ${parts.join(" | ")}`;
-}
-
-function logIdbOperation(
-  operation: string,
+function emitIdbDebug(
+  debug: IdbDriverDebug | undefined,
+  operation: IdbDriverDebugOperation,
   startedAt: number,
-  details: Record<string, unknown> = {},
+  details: Omit<
+    Partial<IdbDriverDebugEvent>,
+    "operation" | "status" | "durationMs" | "error"
+  > = {},
   error?: unknown,
 ): void {
-  const durationMs = Math.round(nowMs() - startedAt);
-  const prefix = error ? "FAILED " : "";
-  const message = `%c${prefix}IDB ${operation} | ${durationMs}ms${formatIdbLogDetail(details)}`;
+  if (!debug) return;
 
-  if (error) {
-    console.error(message, "color: #38bdf8", error);
-  } else {
-    console.log(message, "color: #38bdf8");
-  }
+  debug({
+    operation,
+    status: error ? "error" : "success",
+    durationMs: Math.round(nowMs() - startedAt),
+    ...details,
+    ...(error === undefined ? {} : { error }),
+  });
 }
 
 function staleConnectionError(event: IDBVersionChangeEvent): Error {
@@ -674,9 +712,10 @@ async function performInsert(
   values: Row[],
   options: DBDriverOperationOptions = {},
   txId?: number,
+  debug?: IdbDriverDebug,
 ): Promise<void> {
   if (values.length === 0) return;
-  const startedAt = nowMs();
+  const startedAt = debug ? nowMs() : 0;
 
   try {
     validateBatchIds(values);
@@ -686,14 +725,15 @@ async function performInsert(
       requestToPromise(store.add(createNativeRecord(tableDef, value))),
     );
     await Promise.all(requests);
-    logIdbOperation("insert", startedAt, {
+    emitIdbDebug(debug, "insert", startedAt, {
       txId,
       traceContext: options.traceContext,
       tableName: tableDef.tableName,
       rowCount: values.length,
     });
   } catch (error) {
-    logIdbOperation(
+    emitIdbDebug(
+      debug,
       "insert",
       startedAt,
       {
@@ -714,9 +754,10 @@ async function performUpsert(
   values: Row[],
   options: DBDriverOperationOptions = {},
   txId?: number,
+  debug?: IdbDriverDebug,
 ): Promise<void> {
   if (values.length === 0) return;
-  const startedAt = nowMs();
+  const startedAt = debug ? nowMs() : 0;
 
   try {
     validateBatchIds(values);
@@ -726,14 +767,15 @@ async function performUpsert(
       requestToPromise(store.put(createNativeRecord(tableDef, value))),
     );
     await Promise.all(requests);
-    logIdbOperation("upsert", startedAt, {
+    emitIdbDebug(debug, "upsert", startedAt, {
       txId,
       traceContext: options.traceContext,
       tableName: tableDef.tableName,
       rowCount: values.length,
     });
   } catch (error) {
-    logIdbOperation(
+    emitIdbDebug(
+      debug,
       "upsert",
       startedAt,
       {
@@ -754,23 +796,25 @@ async function performDelete(
   ids: string[],
   options: DBDriverOperationOptions = {},
   txId?: number,
+  debug?: IdbDriverDebug,
 ): Promise<void> {
   if (ids.length === 0) return;
-  const startedAt = nowMs();
+  const startedAt = debug ? nowMs() : 0;
 
   try {
     const store = tx.objectStore(tableStoreName(tableDef.tableName));
     const requests = ids.map((id) => requestToPromise(store.delete(id)));
     await Promise.all(requests);
 
-    logIdbOperation("delete", startedAt, {
+    emitIdbDebug(debug, "delete", startedAt, {
       txId,
       traceContext: options.traceContext,
       tableName: tableDef.tableName,
       rowCount: ids.length,
     });
   } catch (error) {
-    logIdbOperation(
+    emitIdbDebug(
+      debug,
       "delete",
       startedAt,
       {
@@ -795,13 +839,14 @@ async function performScan(
   selectOptions: SelectOptions,
   options: DBDriverOperationOptions = {},
   txId?: number,
+  debug?: IdbDriverDebug,
 ): Promise<Row[]> {
   const tableDef = tableDefinitions.get(tableName);
   if (!tableDef) throw new Error(`Table ${tableName} not found`);
 
-  const startedAt = nowMs();
+  const startedAt = debug ? nowMs() : 0;
   if (selectOptions.limit !== undefined && selectOptions.limit <= 0) {
-    logIdbOperation("scan", startedAt, {
+    emitIdbDebug(debug, "scan", startedAt, {
       txId,
       traceContext: options.traceContext,
       tableName,
@@ -823,7 +868,7 @@ async function performScan(
           store.get(exactId),
         );
         const result = record ? [decodeStoredRecord(record)] : [];
-        logIdbOperation("scan", startedAt, {
+        emitIdbDebug(debug, "scan", startedAt, {
           txId,
           traceContext: options.traceContext,
           tableName,
@@ -843,7 +888,7 @@ async function performScan(
           },
         );
         const result = records.map(decodeStoredRecord);
-        logIdbOperation("scan", startedAt, {
+        emitIdbDebug(debug, "scan", startedAt, {
           txId,
           traceContext: options.traceContext,
           tableName,
@@ -879,7 +924,7 @@ async function performScan(
     const sorted = sortAndLimitRecords(records, indexName, selectOptions);
     const result = sorted.map(decodeStoredRecord);
 
-    logIdbOperation("scan", startedAt, {
+    emitIdbDebug(debug, "scan", startedAt, {
       txId,
       traceContext: options.traceContext,
       tableName,
@@ -889,7 +934,8 @@ async function performScan(
     return result;
   } catch (error) {
     if (!isInactiveTransactionError(error)) {
-      logIdbOperation(
+      emitIdbDebug(
+        debug,
         "scan",
         startedAt,
         {
@@ -917,6 +963,7 @@ class IdbDriverTx implements DBDriverTX {
   private done: Promise<void>;
   private startedAt: number;
   private traceContext: DBDriverTraceContext | undefined;
+  private debug: IdbDriverDebug | undefined;
 
   constructor(
     id: number,
@@ -926,6 +973,7 @@ class IdbDriverTx implements DBDriverTX {
     onFinish: () => void,
     startedAt: number,
     traceContext: DBDriverTraceContext | undefined,
+    debug: IdbDriverDebug | undefined,
   ) {
     this.id = id;
     this.factory = factory;
@@ -935,6 +983,7 @@ class IdbDriverTx implements DBDriverTX {
     this.done = txDone(tx);
     this.startedAt = startedAt;
     this.traceContext = traceContext;
+    this.debug = debug;
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -945,13 +994,14 @@ class IdbDriverTx implements DBDriverTX {
         this.tx.commit?.();
         await this.done;
         this.committed = true;
-        logIdbOperation("transaction commit", this.startedAt, {
+        emitIdbDebug(this.debug, "transaction commit", this.startedAt, {
           txId: this.id,
           traceContext: this.traceContext,
           mode: this.tx.mode,
         });
       } catch (error) {
-        logIdbOperation(
+        emitIdbDebug(
+          this.debug,
           "transaction commit",
           this.startedAt,
           {
@@ -979,7 +1029,7 @@ class IdbDriverTx implements DBDriverTX {
         // Abort is the expected rollback path.
       } finally {
         this.rolledback = true;
-        logIdbOperation("transaction rollback", this.startedAt, {
+        emitIdbDebug(this.debug, "transaction rollback", this.startedAt, {
           txId: this.id,
           traceContext: this.traceContext,
           mode: this.tx.mode,
@@ -997,7 +1047,14 @@ class IdbDriverTx implements DBDriverTX {
     this.throwIfDone();
     const tableDef = this.getTableDefinition(tableName);
     yield* unwrapCb(async () => {
-      await performInsert(this.tx, tableDef, values, options, this.id);
+      await performInsert(
+        this.tx,
+        tableDef,
+        values,
+        options,
+        this.id,
+        this.debug,
+      );
     });
   }
 
@@ -1009,7 +1066,14 @@ class IdbDriverTx implements DBDriverTX {
     this.throwIfDone();
     const tableDef = this.getTableDefinition(tableName);
     yield* unwrapCb(async () => {
-      await performUpsert(this.tx, tableDef, values, options, this.id);
+      await performUpsert(
+        this.tx,
+        tableDef,
+        values,
+        options,
+        this.id,
+        this.debug,
+      );
     });
   }
 
@@ -1021,7 +1085,14 @@ class IdbDriverTx implements DBDriverTX {
     this.throwIfDone();
     const tableDef = this.getTableDefinition(tableName);
     yield* unwrapCb(async () => {
-      await performDelete(this.tx, tableDef, values, options, this.id);
+      await performDelete(
+        this.tx,
+        tableDef,
+        values,
+        options,
+        this.id,
+        this.debug,
+      );
     });
   }
 
@@ -1045,6 +1116,7 @@ class IdbDriverTx implements DBDriverTX {
         selectOptions,
         options,
         this.id,
+        this.debug,
       ),
     );
   }
@@ -1078,6 +1150,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
   private createTransaction: () => IDBTransaction;
   private throwIfClosed: () => void;
   private onDispose: (tx: IdbDriverReadonlyTx) => void;
+  private debug: IdbDriverDebug | undefined;
   private closed = false;
 
   constructor(
@@ -1089,6 +1162,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     createTransaction: () => IDBTransaction,
     throwIfClosed: () => void,
     onDispose: (tx: IdbDriverReadonlyTx) => void,
+    debug: IdbDriverDebug | undefined,
   ) {
     this.active = active;
     this.factory = factory;
@@ -1098,6 +1172,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     this.createTransaction = createTransaction;
     this.throwIfClosed = throwIfClosed;
     this.onDispose = onDispose;
+    this.debug = debug;
     this.watchActive(active);
   }
 
@@ -1144,6 +1219,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
             selectOptions,
             options,
             active.id,
+            this.debug,
           );
         } catch (error) {
           if (
@@ -1151,7 +1227,8 @@ class IdbDriverReadonlyTx implements DBDriverTX {
             isInactiveTransactionError(error)
           ) {
             canRetryInactiveTransaction = false;
-            logIdbOperation("transaction reopen", nowMs(), {
+            const startedAt = this.debug ? nowMs() : 0;
+            emitIdbDebug(this.debug, "transaction reopen", startedAt, {
               txId: active.id,
               traceContext: options.traceContext,
               mode: active.tx.mode,
@@ -1178,7 +1255,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     }
 
     const release = await this.acquireRead();
-    const startedAt = nowMs();
+    const startedAt = this.debug ? nowMs() : 0;
     try {
       this.throwIfClosed();
       const id = this.nextTransactionId();
@@ -1194,7 +1271,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
         released: false,
       };
       this.active = active;
-      logIdbOperation("transaction start", startedAt, {
+      emitIdbDebug(this.debug, "transaction start", startedAt, {
         txId: id,
         traceContext,
         mode: tx.mode,
@@ -1203,7 +1280,8 @@ class IdbDriverReadonlyTx implements DBDriverTX {
       return active;
     } catch (error) {
       release();
-      logIdbOperation(
+      emitIdbDebug(
+        this.debug,
         "transaction start",
         startedAt,
         {
@@ -1220,7 +1298,7 @@ class IdbDriverReadonlyTx implements DBDriverTX {
       .then(
         () => {
           if (!active.finished) {
-            logIdbOperation("transaction commit", active.startedAt, {
+            emitIdbDebug(this.debug, "transaction commit", active.startedAt, {
               txId: active.id,
               traceContext: active.traceContext,
               mode: active.tx.mode,
@@ -1229,7 +1307,8 @@ class IdbDriverReadonlyTx implements DBDriverTX {
         },
         (error) => {
           if (!active.finished) {
-            logIdbOperation(
+            emitIdbDebug(
+              this.debug,
               "transaction rollback",
               active.startedAt,
               {
@@ -1328,10 +1407,11 @@ export class IdbDriver implements DBDriver {
     try {
       this.throwIfClosed();
       const storeNames = this.loadedStoreNames();
-      const startedAt = nowMs();
+      const debug = this.options.debug;
+      const startedAt = debug ? nowMs() : 0;
       const txId = this.createTransactionId();
       tx = this.createTransaction(storeNames, "readwrite");
-      logIdbOperation("transaction start", startedAt, {
+      emitIdbDebug(debug, "transaction start", startedAt, {
         txId,
         traceContext: options.traceContext,
         mode: tx.mode,
@@ -1344,6 +1424,7 @@ export class IdbDriver implements DBDriver {
         release,
         startedAt,
         options.traceContext,
+        debug,
       );
     } catch (error) {
       release();
@@ -1355,7 +1436,8 @@ export class IdbDriver implements DBDriver {
     options: DBDriverOperationOptions = {},
   ): Generator<DBCmd, DBDriverTX> {
     const release = yield* unwrapCb(async () => this.lock.acquireRead());
-    const startedAt = nowMs();
+    const debug = this.options.debug;
+    const startedAt = debug ? nowMs() : 0;
 
     try {
       this.throwIfClosed();
@@ -1372,7 +1454,7 @@ export class IdbDriver implements DBDriver {
         finished: false,
         released: false,
       };
-      logIdbOperation("transaction start", startedAt, {
+      emitIdbDebug(debug, "transaction start", startedAt, {
         txId: id,
         traceContext: options.traceContext,
         mode: tx.mode,
@@ -1386,12 +1468,14 @@ export class IdbDriver implements DBDriver {
         () => this.createTransaction(storeNames, "readonly"),
         () => this.throwIfClosed(),
         (finishedTx) => this.readonlyTransactions.delete(finishedTx),
+        debug,
       );
       this.readonlyTransactions.add(readonlyTx);
       return readonlyTx;
     } catch (error) {
       release();
-      logIdbOperation(
+      emitIdbDebug(
+        debug,
         "transaction start",
         startedAt,
         {
@@ -1437,7 +1521,14 @@ export class IdbDriver implements DBDriver {
       "readwrite",
       [tableStoreName(tableName)],
       async (tx, txId) => {
-        await performInsert(tx, tableDef, values, options, txId);
+        await performInsert(
+          tx,
+          tableDef,
+          values,
+          options,
+          txId,
+          this.options.debug,
+        );
       },
       options,
     );
@@ -1454,7 +1545,14 @@ export class IdbDriver implements DBDriver {
       "readwrite",
       [tableStoreName(tableName)],
       async (tx, txId) => {
-        await performUpsert(tx, tableDef, values, options, txId);
+        await performUpsert(
+          tx,
+          tableDef,
+          values,
+          options,
+          txId,
+          this.options.debug,
+        );
       },
       options,
     );
@@ -1471,7 +1569,14 @@ export class IdbDriver implements DBDriver {
       "readwrite",
       [tableStoreName(tableName)],
       async (tx, txId) => {
-        await performDelete(tx, tableDef, values, options, txId);
+        await performDelete(
+          tx,
+          tableDef,
+          values,
+          options,
+          txId,
+          this.options.debug,
+        );
       },
       options,
     );
@@ -1597,7 +1702,8 @@ export class IdbDriver implements DBDriver {
     tx: IDBTransaction,
     tableDef: TableDefinition,
   ): Promise<void> {
-    const startedAt = nowMs();
+    const debug = this.options.debug;
+    const startedAt = debug ? nowMs() : 0;
     const store = tx.objectStore(tableStoreName(tableDef.tableName));
     const records = await getAllRecords<NativeStoredRecord>(
       this.factory,
@@ -1615,7 +1721,7 @@ export class IdbDriver implements DBDriver {
       ),
     );
     await Promise.all(requests);
-    logIdbOperation("rebuild indexes", startedAt, {
+    emitIdbDebug(debug, "rebuild indexes", startedAt, {
       tableName: tableDef.tableName,
       rowCount: records.length,
     });
@@ -1669,13 +1775,14 @@ export class IdbDriver implements DBDriver {
       let tx: IDBTransaction | undefined;
       let done: Promise<void> | undefined;
       let txId: number | undefined;
-      const transactionStartedAt = nowMs();
+      const debug = this.options.debug;
+      const transactionStartedAt = debug ? nowMs() : 0;
 
       try {
         this.throwIfClosed();
         txId = this.createTransactionId();
         tx = this.createTransaction(storeNames, mode);
-        logIdbOperation("transaction start", transactionStartedAt, {
+        emitIdbDebug(debug, "transaction start", transactionStartedAt, {
           txId,
           traceContext: options.traceContext,
           mode,
@@ -1684,7 +1791,7 @@ export class IdbDriver implements DBDriver {
         const result = await run(tx, txId);
         tx.commit?.();
         await done;
-        logIdbOperation("transaction commit", transactionStartedAt, {
+        emitIdbDebug(debug, "transaction commit", transactionStartedAt, {
           txId,
           traceContext: options.traceContext,
           mode,
@@ -1698,13 +1805,14 @@ export class IdbDriver implements DBDriver {
           } catch {
             // Preserve the original operation error.
           }
-          logIdbOperation("transaction rollback", transactionStartedAt, {
+          emitIdbDebug(debug, "transaction rollback", transactionStartedAt, {
             txId,
             traceContext: options.traceContext,
             mode,
           });
         } else {
-          logIdbOperation(
+          emitIdbDebug(
+            debug,
             "transaction start",
             transactionStartedAt,
             {

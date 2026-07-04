@@ -3,6 +3,7 @@ import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 import {
   AsyncSqlDriver,
   SqlDriver,
+  type AsyncSqlDriverOptions,
   type AsyncSQLiteDB,
   type SQLStatement,
 } from "../drivers/sqlite";
@@ -110,13 +111,15 @@ class SqlJsAsyncAdapter implements AsyncSQLiteDB {
   }
 }
 
-export async function createSqlJsAsyncDriver(): Promise<AsyncSqlDriver> {
+export async function createSqlJsAsyncDriver(
+  options: AsyncSqlDriverOptions = {},
+): Promise<AsyncSqlDriver> {
   const SQL = await initSqlJs({
     locateFile: () => normalizeWasmUrl(wasmUrl),
   });
   const sqldb: InspectableSqlDatabase = new SQL.Database();
 
-  return new AsyncSqlDriver(new SqlJsAsyncAdapter(sqldb));
+  return new AsyncSqlDriver(new SqlJsAsyncAdapter(sqldb), options);
 }
 
 export async function createInspectableSqlDriver(): Promise<{

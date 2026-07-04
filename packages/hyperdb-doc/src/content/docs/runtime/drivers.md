@@ -89,6 +89,24 @@ interface AsyncSQLiteDB {
 const driver = new AsyncSqlDriver(sqliteDb);
 ```
 
+`AsyncSqlDriver` is quiet by default. For low-level SQL diagnostics, pass a
+`debug` callback:
+
+```ts
+import { logAsyncSqlDriverDebugEvent } from "@will-be-done/hyperdb/drivers/sqlite";
+
+const driver = new AsyncSqlDriver(sqliteDb, {
+  debug: logAsyncSqlDriverDebugEvent,
+});
+```
+
+The callback receives structured `AsyncSqlDriverDebugEvent` objects with the
+operation, status, SQL text, duration, optional table/index names, row counts,
+parameter summaries, and errors. When no callback is configured, the driver does
+not prepare or emit SQL diagnostic events. Use
+`formatAsyncSqlDriverDebugEvent(event)` when you want the old one-line message
+but need to send it to a custom logger.
+
 The SQLite storage codec encodes `bigint`, `ArrayBuffer`, and
 typed-array/data-view values around JSON storage so they round-trip exactly.
 `uniqhash` indexes are created as SQLite `UNIQUE` indexes. Upserts delete the
@@ -334,10 +352,24 @@ IndexedDB `uniqhash` indexes are native unique indexes. If an index changes
 between non-unique and `uniqhash`, HyperDB recreates the IndexedDB index during
 the schema upgrade.
 
-IDB operation logs include a per-driver transaction id (`tx 3`) and, when the
-operation comes from an object selector or action, the run context
-(`selector readTasks` or `action createTask`). This makes scan, reopen, commit,
-and failure logs easier to correlate in browser consoles.
+The IndexedDB driver is quiet by default. For low-level storage diagnostics,
+pass a `debug` callback:
+
+```ts
+import { logIdbDriverDebugEvent } from "@will-be-done/hyperdb/drivers/idb";
+
+const idbDriver = await openIndexedDBDriver("my-app-db", {
+  debug: logIdbDriverDebugEvent,
+});
+```
+
+The callback receives structured `IdbDriverDebugEvent` objects for operations
+such as scans, writes, transaction starts/commits/rollbacks, readonly
+transaction reopens, and index rebuilds. Events include duration, transaction
+id, table/index names, row counts, status, errors, and selector/action run
+context when available. When no callback is configured, the driver does not
+prepare or emit IDB diagnostic events. Use `formatIdbDriverDebugEvent(event)`
+when you want the old one-line message but need to send it to a custom logger.
 
 ## Sync vs. async, in practice
 

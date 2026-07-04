@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defineTable } from "../../schema/table";
 import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
 import { createSqlJsAsyncDriver } from "../../test-utils/sql-js-driver";
+import { formatAsyncSqlDriverDebugEvent } from "./async-sql-driver";
 
 type Task = {
   type: "task";
@@ -40,6 +41,99 @@ const uniqhashMigrationTableV2 = defineTable("asyncUniqhashMigration", {
 
 describe("db", async () => {
   for (const driver of [createSqlJsAsyncDriver]) {
+    it("keeps SQL diagnostics silent by default", async () => {
+      const logSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation(() => undefined);
+      const errorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+
+      try {
+        const db = new DB(await driver());
+
+        await execAsync(db.loadTables([tasksTable]));
+        await execAsync(
+          db.insert(tasksTable, [
+            {
+              id: "task-1",
+              title: "Task 1",
+              state: "done",
+              projectId: "1",
+              orderToken: "b",
+              type: "task",
+              lastToggledAt: 0,
+            },
+          ]),
+        );
+
+        expect(logSpy).not.toHaveBeenCalled();
+        expect(errorSpy).not.toHaveBeenCalled();
+      } finally {
+        logSpy.mockRestore();
+        errorSpy.mockRestore();
+      }
+    });
+
+    it("emits structured SQL diagnostics when debug is configured", async () => {
+      const debug = vi.fn();
+      const db = new DB(await driver({ debug }));
+
+      await execAsync(db.loadTables([tasksTable]));
+      await execAsync(
+        db.insert(tasksTable, [
+          {
+            id: "task-1",
+            title: "Task 1",
+            state: "done",
+            projectId: "1",
+            orderToken: "b",
+            type: "task",
+            lastToggledAt: 0,
+          },
+        ]),
+      );
+
+      expect(
+        debug.mock.calls.some(
+          ([event]) =>
+            event.operation === "insert" &&
+            event.status === "success" &&
+            event.tableName === "tasks" &&
+            event.rowCount === 1,
+        ),
+      ).toBe(true);
+      expect(
+        debug.mock.calls.some(
+          ([event]) =>
+            event.operation === "exec" &&
+            event.normalizedSql === "BEGIN TRANSACTION",
+        ),
+      ).toBe(true);
+    });
+
+    it("formats SQL diagnostics as one-line console messages", () => {
+      expect(
+        formatAsyncSqlDriverDebugEvent({
+          operation: "scan",
+          status: "success",
+          sql: "SELECT data\nFROM tasks",
+          normalizedSql: "SELECT data FROM tasks",
+          durationMs: 3,
+          rowCount: 2,
+        }),
+      ).toBe("SELECT data FROM tasks | 3ms | 2 rows");
+      expect(
+        formatAsyncSqlDriverDebugEvent({
+          operation: "exec",
+          status: "error",
+          sql: "BEGIN TRANSACTION",
+          normalizedSql: "BEGIN TRANSACTION",
+          durationMs: 4,
+        }),
+      ).toBe("FAILED BEGIN TRANSACTION | 4ms");
+    });
+
     it("works", async () => {
       const db = new DB(await driver());
 
