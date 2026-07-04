@@ -1,5 +1,13 @@
 # @will-be-done/hyperdb-demo-app
 
+## 0.0.10
+
+### Patch Changes
+
+- Updated dependencies [b39fb14]
+  - @will-be-done/hyperdb@0.4.2
+  - @will-be-done/hyperdb-devtool@0.4.2
+
 ## 0.0.9
 
 ### Patch Changes
