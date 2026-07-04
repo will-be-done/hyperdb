@@ -96,7 +96,7 @@ type AsyncSelectorBaseOptions<
   selector: TSelector;
   args: SelectorArgs<TSelector>;
   enabled?: boolean;
-  defaultValue?: SelectorReturn<TSelector>;
+  defaultValue?: SelectorReturn<TSelector> | (() => SelectorReturn<TSelector>);
   initialData?: SelectorReturn<TSelector> | (() => SelectorReturn<TSelector>);
   initialDataUpdatedAt?: number | (() => number | undefined);
   placeholderData?:
@@ -119,7 +119,11 @@ type AsyncSelectorDefinedOptions<
   TError = unknown,
 > = AsyncSelectorBaseOptions<TSelector, TError> &
   (
-    | { defaultValue: SelectorReturn<TSelector> }
+    | {
+        defaultValue:
+          | SelectorReturn<TSelector>
+          | (() => SelectorReturn<TSelector>);
+      }
     | {
         initialData:
           | SelectorReturn<TSelector>
@@ -135,9 +139,9 @@ type AsyncSelectorDefinedOptions<
       }
   );
 
-const createDisabledStore = <TReturn>(defaultValue: TReturn) => ({
+const createDisabledStore = <TReturn>(getDefaultValue: () => TReturn) => ({
   subscribe: () => () => {},
-  getSnapshot: () => defaultValue,
+  getSnapshot: getDefaultValue,
 });
 
 const defaultHookDeps = {
@@ -194,11 +198,14 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
   const argsKey = enabled
     ? hookDeps.stableSerializeSelectorArgs(input.args)
     : undefined;
+  const defaultValueRef = hookDeps.useRef(input.defaultValue);
+
+  defaultValueRef.current = input.defaultValue;
 
   const selector = hookDeps.useMemo(() => {
     if (!enabled) {
       return createDisabledStore(
-        input.defaultValue as SelectorReturn<TSelector>,
+        () => defaultValueRef.current as SelectorReturn<TSelector>,
       );
     }
 
@@ -206,7 +213,7 @@ export function useSyncSelector<TSelector extends AnyObjectSelector>(
       selector: input.selector,
       args: input.args,
     });
-  }, [db, input.selector, argsKey, enabled, input.defaultValue]);
+  }, [db, input.selector, argsKey, enabled]);
 
   return hookDeps.useSyncExternalStore(
     selector.subscribe,
@@ -236,18 +243,17 @@ export function useAsyncSelector<
   const previousDataRef = hookDeps.useRef<
     SelectorReturn<TSelector> | undefined
   >(undefined);
-  const storeInput = hookDeps.useMemo(() => {
-    const placeholderData =
-      typeof input.placeholderData === "function"
-        ? (_previousValue, previousQuery) =>
-            (
-              input.placeholderData as (
-                previousValue: SelectorReturn<TSelector> | undefined,
-                previousQuery: undefined,
-              ) => SelectorReturn<TSelector>
-            )(previousDataRef.current, previousQuery)
-        : input.placeholderData;
+  const defaultValueRef = hookDeps.useRef(input.defaultValue);
+  const initialDataRef = hookDeps.useRef(input.initialData);
+  const initialDataUpdatedAtRef = hookDeps.useRef(input.initialDataUpdatedAt);
+  const placeholderDataRef = hookDeps.useRef(input.placeholderData);
 
+  defaultValueRef.current = input.defaultValue;
+  initialDataRef.current = input.initialData;
+  initialDataUpdatedAtRef.current = input.initialDataUpdatedAt;
+  placeholderDataRef.current = input.placeholderData;
+
+  const storeInput = hookDeps.useMemo(() => {
     const nextInput = {
       selector: input.selector,
       args: input.args,
@@ -255,19 +261,48 @@ export function useAsyncSelector<
       subscribed,
     };
 
-    if (input.defaultValue !== undefined) {
-      Object.assign(nextInput, { defaultValue: input.defaultValue });
-    }
-    if (input.initialData !== undefined) {
-      Object.assign(nextInput, { initialData: input.initialData });
-    }
-    if (input.initialDataUpdatedAt !== undefined) {
+    if (defaultValueRef.current !== undefined) {
       Object.assign(nextInput, {
-        initialDataUpdatedAt: input.initialDataUpdatedAt,
+        defaultValue: () =>
+          typeof defaultValueRef.current === "function"
+            ? (defaultValueRef.current as () => SelectorReturn<TSelector>)()
+            : defaultValueRef.current,
       });
     }
-    if (placeholderData !== undefined) {
-      Object.assign(nextInput, { placeholderData });
+    if (initialDataRef.current !== undefined) {
+      Object.assign(nextInput, {
+        initialData: () =>
+          typeof initialDataRef.current === "function"
+            ? (initialDataRef.current as () => SelectorReturn<TSelector>)()
+            : initialDataRef.current,
+      });
+    }
+    if (initialDataUpdatedAtRef.current !== undefined) {
+      Object.assign(nextInput, {
+        initialDataUpdatedAt: () =>
+          typeof initialDataUpdatedAtRef.current === "function"
+            ? (initialDataUpdatedAtRef.current as () => number | undefined)()
+            : initialDataUpdatedAtRef.current,
+      });
+    }
+    if (placeholderDataRef.current !== undefined) {
+      Object.assign(nextInput, {
+        placeholderData: (
+          _previousValue: SelectorReturn<TSelector> | undefined,
+          previousQuery: undefined,
+        ) => {
+          const placeholderData = placeholderDataRef.current;
+
+          return typeof placeholderData === "function"
+            ? (
+                placeholderData as (
+                  previousValue: SelectorReturn<TSelector> | undefined,
+                  previousQuery: undefined,
+                ) => SelectorReturn<TSelector>
+              )(previousDataRef.current, previousQuery)
+            : placeholderData;
+        },
+      });
     }
 
     return nextInput;
@@ -276,10 +311,10 @@ export function useAsyncSelector<
     argsKey,
     enabled,
     subscribed,
-    input.defaultValue,
-    input.initialData,
-    input.initialDataUpdatedAt,
-    input.placeholderData,
+    input.defaultValue !== undefined,
+    input.initialData !== undefined,
+    input.initialDataUpdatedAt !== undefined,
+    input.placeholderData !== undefined,
   ]);
   const store = hookDeps.useMemo(
     () =>

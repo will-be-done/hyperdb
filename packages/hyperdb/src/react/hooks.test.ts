@@ -106,6 +106,84 @@ function createMockDB() {
   };
 }
 
+function createStatefulFakeReactHooks() {
+  type MemoState = {
+    cleanup?: () => void;
+    deps?: unknown[];
+    value?: unknown;
+  };
+  const state: MemoState[] = [];
+  let index = 0;
+  const areDepsEqual = (
+    previous: unknown[] | undefined,
+    next: unknown[] | undefined,
+  ) =>
+    previous !== undefined &&
+    next !== undefined &&
+    previous.length === next.length &&
+    previous.every((value, depIndex) => Object.is(value, next[depIndex]));
+
+  return {
+    resetRender() {
+      index = 0;
+    },
+    cleanup() {
+      for (const entry of state) {
+        entry.cleanup?.();
+        entry.cleanup = undefined;
+      }
+    },
+    useCallback: vi.fn((cb, deps) => {
+      const slot = index++;
+      const previous = state[slot];
+      if (previous && areDepsEqual(previous.deps, deps)) {
+        return previous.value;
+      }
+
+      state[slot] = { deps, value: cb };
+      return cb;
+    }),
+    useEffect: vi.fn((effect, deps) => {
+      const slot = index++;
+      const previous = state[slot];
+      if (previous && areDepsEqual(previous.deps, deps)) return;
+
+      previous?.cleanup?.();
+      state[slot] = { cleanup: effect(), deps };
+    }),
+    useMemo: vi.fn((factory, deps) => {
+      const slot = index++;
+      const previous = state[slot];
+      if (previous && areDepsEqual(previous.deps, deps)) {
+        return previous.value;
+      }
+
+      const value = factory();
+      state[slot] = { deps, value };
+      return value;
+    }),
+    useRef: vi.fn((initial) => {
+      const slot = index++;
+      const previous = state[slot];
+      if (previous) return previous.value;
+
+      const value = { current: initial };
+      state[slot] = { value };
+      return value;
+    }),
+    useSyncExternalStore: vi.fn((subscribe, getSnapshot) => {
+      const slot = index++;
+      const previous = state[slot];
+      if (!previous || previous.value !== subscribe) {
+        previous?.cleanup?.();
+        state[slot] = { cleanup: subscribe(() => undefined), value: subscribe };
+      }
+
+      return getSnapshot();
+    }),
+  };
+}
+
 describe("useAsyncSelector", () => {
   beforeEach(() => {
     mocks.cleanup = undefined;
@@ -177,6 +255,69 @@ describe("useAsyncSelector", () => {
     expect(result).toEqual([]);
     expect(mocks.stableSerializeSelectorArgs).not.toHaveBeenCalled();
     expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sync selector store stable when defaultValue references change", () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    const store = {
+      subscribe: vi.fn(() => vi.fn()),
+      getSnapshot: vi.fn(() => ["task-1"]),
+    };
+    const createCachedSelectorStoreSync = vi.fn(() => store);
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useDB: () => mocks.db,
+      createCachedSelectorStoreSync,
+      stableSerializeSelectorArgs: () => "args-key",
+    });
+    const render = () => {
+      reactHooks.resetRender();
+      return useSyncSelector({
+        selector,
+        args: { projectId: "project-1" },
+        defaultValue: [],
+      });
+    };
+
+    expect(render()).toEqual(["task-1"]);
+    expect(render()).toEqual(["task-1"]);
+
+    expect(createCachedSelectorStoreSync).toHaveBeenCalledTimes(1);
+    reactHooks.cleanup();
+  });
+
+  it("returns the latest disabled sync defaultValue through the stable store", () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useDB: () => mocks.db,
+      createCachedSelectorStoreSync: (...args) =>
+        mocks.createCachedSelectorStoreSync(...args),
+      stableSerializeSelectorArgs: () => "args-key",
+    });
+    const render = (defaultValue: string[]) => {
+      reactHooks.resetRender();
+      return useSyncSelector({
+        selector,
+        args: { projectId: "project-1" },
+        enabled: false,
+        defaultValue,
+      });
+    };
+
+    expect(render(["first"])).toEqual(["first"]);
+    expect(render(["second"])).toEqual(["second"]);
+
+    expect(mocks.createCachedSelectorStoreSync).not.toHaveBeenCalled();
+    reactHooks.cleanup();
   });
 
   it("collapses overlapping subscription reruns and applies only the latest async result", async () => {
@@ -340,6 +481,136 @@ describe("useAsyncSelector", () => {
         status: "success",
       }),
     );
+  });
+
+  it("keeps the async selector store stable when option value references change", () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    const store = {
+      subscribe: vi.fn(() => vi.fn()),
+      getSnapshot: vi.fn(() => ({
+        data: [],
+        dataUpdatedAt: 0,
+        error: null,
+        errorUpdatedAt: 0,
+        errorUpdateCount: 0,
+        failureCount: 0,
+        failureReason: null,
+        fetchStatus: "idle",
+        isEnabled: true,
+        isError: false,
+        isFetched: false,
+        isFetchedAfterMount: false,
+        isFetching: false,
+        isInitialLoading: false,
+        isLoading: false,
+        isLoadingError: false,
+        isPaused: false,
+        isPending: true,
+        isPlaceholderData: true,
+        isRefetchError: false,
+        isRefetching: false,
+        isStale: true,
+        isSuccess: false,
+        promise: Promise.resolve([]),
+        status: "pending",
+      })),
+      refetch: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const createCachedSelectorStoreAsync = vi.fn(() => store);
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useDB: () => mocks.db,
+      createCachedSelectorStoreAsync,
+      stableSerializeSelectorArgs: () => "args-key",
+    });
+    const render = () => {
+      reactHooks.resetRender();
+      useAsyncSelector({
+        selector,
+        args: { projectId: "project-1" },
+        defaultValue: [],
+        initialData: [],
+        placeholderData: [],
+      });
+    };
+
+    render();
+    render();
+
+    expect(createCachedSelectorStoreAsync).toHaveBeenCalledTimes(1);
+    reactHooks.cleanup();
+  });
+
+  it("passes the latest async selector option values when the store is recreated", () => {
+    restoreHookDeps?.();
+    const reactHooks = createStatefulFakeReactHooks();
+    const selector = vi.fn(function* selector() {
+      return ["unused"];
+    });
+    const store = {
+      subscribe: vi.fn(() => vi.fn()),
+      getSnapshot: vi.fn(() => ({
+        data: [],
+        dataUpdatedAt: 0,
+        error: null,
+        errorUpdatedAt: 0,
+        errorUpdateCount: 0,
+        failureCount: 0,
+        failureReason: null,
+        fetchStatus: "idle",
+        isEnabled: true,
+        isError: false,
+        isFetched: false,
+        isFetchedAfterMount: false,
+        isFetching: false,
+        isInitialLoading: false,
+        isLoading: false,
+        isLoadingError: false,
+        isPaused: false,
+        isPending: true,
+        isPlaceholderData: true,
+        isRefetchError: false,
+        isRefetching: false,
+        isStale: true,
+        isSuccess: false,
+        promise: Promise.resolve([]),
+        status: "pending",
+      })),
+      refetch: vi.fn(),
+      destroy: vi.fn(),
+    };
+    const createCachedSelectorStoreAsync = vi.fn(() => store);
+    restoreHookDeps = setHyperDBHookDepsForTest({
+      ...reactHooks,
+      useDB: () => mocks.db,
+      createCachedSelectorStoreAsync,
+      stableSerializeSelectorArgs: (args: { projectId: string }) =>
+        args.projectId,
+    });
+    const render = (projectId: string, initialData: string[]) => {
+      reactHooks.resetRender();
+      useAsyncSelector({
+        selector,
+        args: { projectId },
+        initialData,
+      });
+    };
+
+    render("project-1", ["stale"]);
+    render("project-2", ["fresh"]);
+
+    const secondInput = createCachedSelectorStoreAsync.mock.calls[1]?.[1];
+
+    expect(createCachedSelectorStoreAsync).toHaveBeenCalledTimes(2);
+    expect((secondInput?.initialData as () => string[] | undefined)()).toEqual([
+      "fresh",
+    ]);
+    reactHooks.cleanup();
   });
 
   it("waits for a pending HybridDB cache run before applying the result", async () => {

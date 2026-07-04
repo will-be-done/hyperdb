@@ -50,7 +50,7 @@ export type AsyncSelectorStoreInput<TSelector extends AnyObjectSelector> = {
   args: SelectorArgs<TSelector>;
   enabled?: boolean;
   subscribed?: boolean;
-  defaultValue?: SelectorReturn<TSelector>;
+  defaultValue?: SelectorReturn<TSelector> | (() => SelectorReturn<TSelector>);
   initialData?: SelectorReturn<TSelector> | (() => SelectorReturn<TSelector>);
   initialDataUpdatedAt?: number | (() => number | undefined);
   placeholderData?:
@@ -134,6 +134,10 @@ const createPromiseController = <TValue>() => {
   return { promise, reject, resolve };
 };
 
+type PromiseController<TValue> = ReturnType<
+  typeof createPromiseController<TValue>
+>;
+
 const readInitialDataUpdatedAt = (
   value: number | (() => number | undefined) | undefined,
 ) => {
@@ -144,7 +148,7 @@ const readInitialDataUpdatedAt = (
 
 const createInitialState = <TData, TError>(
   input: {
-    defaultValue?: TData;
+    defaultValue?: TData | (() => TData);
     initialData?: TData | (() => TData);
     initialDataUpdatedAt?: number | (() => number | undefined);
     placeholderData?:
@@ -197,7 +201,7 @@ const createInitialState = <TData, TError>(
     hasOwn(input, "defaultValue") &&
     input.defaultValue !== undefined
   ) {
-    data = input.defaultValue as TData;
+    data = resolveValue(input.defaultValue as TData | (() => TData));
     isPlaceholderData = true;
   }
 
@@ -275,6 +279,11 @@ const createAsyncSelectorStoreInternal = <
   let rerunRequested = false;
   let inFlightResult: Promise<AsyncSelectorStateLike<TData, TError>> | null =
     null;
+  let activeRun: {
+    token: number;
+    dataController: PromiseController<TData>;
+    resultController: PromiseController<AsyncSelectorStateLike<TData, TError>>;
+  } | null = null;
   let dbUnsubscribe: (() => void) | undefined;
   let runToken = 0;
   let runRevision = db.getRevision();
@@ -361,148 +370,195 @@ const createAsyncSelectorStoreInternal = <
     dbUnsubscribe = undefined;
   };
 
+  const cancelInFlightRun = () => {
+    runToken++;
+
+    if (activeRun) {
+      const cancelledQueryState = {
+        ...queryState,
+        fetchStatus: "idle" as const,
+      };
+      const cancelledSnapshot = buildSnapshot(cancelledQueryState, {
+        enabled,
+        staleTime,
+      });
+
+      queryState = cancelledQueryState;
+      snapshot = cancelledSnapshot;
+      activeRun.dataController.reject(
+        new Error("Async selector run was cancelled"),
+      );
+      activeRun.resultController.resolve(cancelledSnapshot);
+      activeRun = null;
+    }
+
+    isRunning = false;
+    inFlightResult = null;
+    rerunRequested = false;
+  };
+
   const run = (
     options?: AsyncSelectorRefetchOptions,
   ): Promise<AsyncSelectorStateLike<TData, TError>> => {
+    const applyRefetchOptions = (
+      resultPromise: Promise<AsyncSelectorStateLike<TData, TError>>,
+    ) => {
+      if (options?.throwOnError !== true) return resultPromise;
+
+      return resultPromise.then((result) => {
+        if (result.isError) {
+          throw result.error;
+        }
+
+        return result;
+      });
+    };
+
     started = true;
 
     if (isRunning) {
       rerunRequested = true;
+      const currentResult = inFlightResult ?? Promise.resolve(snapshot);
 
       if (options?.cancelRefetch === false && inFlightResult !== null) {
-        return inFlightResult;
+        return applyRefetchOptions(inFlightResult);
       }
 
-      return inFlightResult ?? Promise.resolve(snapshot);
+      return applyRefetchOptions(currentResult);
     }
 
     const currentToken = ++runToken;
     isRunning = true;
     runRevision = db.getRevision();
     const promiseController = createPromiseController<TData>();
+    const resultController =
+      createPromiseController<AsyncSelectorStateLike<TData, TError>>();
+    activeRun = {
+      token: currentToken,
+      dataController: promiseController,
+      resultController,
+    };
 
-    const resultPromise = new Promise<AsyncSelectorStateLike<TData, TError>>(
-      (resolve, reject) => {
-        const isCurrentRun = () => !destroyed && currentToken === runToken;
-        const resolveCurrentSnapshot = () => {
-          resolve(snapshot);
-        };
-        const finishSuccess = (value: TData, cmds: SelectRangeCmd[]) => {
-          if (!isCurrentRun()) return;
+    const resultPromise = resultController.promise;
+    const isCurrentRun = () =>
+      !destroyed &&
+      currentToken === runToken &&
+      activeRun?.token === currentToken;
+    const resolveCurrentSnapshot = () => {
+      resultController.resolve(snapshot);
+    };
+    const finishSuccess = (value: TData, cmds: SelectRangeCmd[]) => {
+      if (!isCurrentRun()) return;
 
-          selectRangeCmds = cmds;
-          setQueryState((previous) => ({
-            ...previous,
-            data: value,
-            dataUpdatedAt: Date.now(),
-            error: null,
-            failureCount: 0,
-            failureReason: null,
-            fetchStatus: "idle",
-            isFetched: true,
-            isFetchedAfterMount: true,
-            isPlaceholderData: false,
-            status: "success",
-          }));
-          promiseController.resolve(value);
-          isRunning = false;
-          inFlightResult = null;
-          resolveCurrentSnapshot();
+      selectRangeCmds = cmds;
+      setQueryState((previous) => ({
+        ...previous,
+        data: value,
+        dataUpdatedAt: Date.now(),
+        error: null,
+        failureCount: 0,
+        failureReason: null,
+        fetchStatus: "idle",
+        isFetched: true,
+        isFetchedAfterMount: true,
+        isPlaceholderData: false,
+        status: "success",
+      }));
+      promiseController.resolve(value);
+      isRunning = false;
+      inFlightResult = null;
+      activeRun = null;
+      resolveCurrentSnapshot();
 
-          if (rerunRequested && !destroyed) {
-            void run();
-          }
-        };
-        const finishError = (error: unknown) => {
-          if (!isCurrentRun()) return;
+      if (rerunRequested && !destroyed) {
+        void run();
+      }
+    };
+    const finishError = (error: unknown) => {
+      if (!isCurrentRun()) return;
 
-          const typedError = error as TError;
-          setQueryState((previous) => ({
-            ...previous,
-            error: typedError,
-            errorUpdatedAt: Date.now(),
-            errorUpdateCount: previous.errorUpdateCount + 1,
-            failureCount: previous.failureCount + 1,
-            failureReason: typedError,
-            fetchStatus: "idle",
-            isFetched: true,
-            isFetchedAfterMount: true,
-            isPlaceholderData: false,
-            status: "error",
-          }));
-          promiseController.reject(error);
-          isRunning = false;
-          inFlightResult = null;
+      const typedError = error as TError;
+      setQueryState((previous) => ({
+        ...previous,
+        error: typedError,
+        errorUpdatedAt: Date.now(),
+        errorUpdateCount: previous.errorUpdateCount + 1,
+        failureCount: previous.failureCount + 1,
+        failureReason: typedError,
+        fetchStatus: "idle",
+        isFetched: true,
+        isFetchedAfterMount: true,
+        isPlaceholderData: false,
+        status: "error",
+      }));
+      promiseController.reject(error);
+      isRunning = false;
+      inFlightResult = null;
+      activeRun = null;
 
-          if (options?.throwOnError === true) {
-            reject(error);
+      resolveCurrentSnapshot();
+    };
+    const runOnce = () => {
+      try {
+        do {
+          rerunRequested = false;
+          const cmds: SelectRangeCmd[] = [];
+          const value = runSelector(cmds);
+
+          if (isPromiseLike(value)) {
+            void Promise.resolve(value).then(
+              (resolvedValue) => {
+                if (!isCurrentRun()) {
+                  return;
+                }
+
+                if (rerunRequested) {
+                  runOnce();
+                  return;
+                }
+
+                finishSuccess(resolvedValue, cmds);
+              },
+              (error: unknown) => {
+                finishError(error);
+              },
+            );
             return;
           }
 
-          resolveCurrentSnapshot();
-        };
-        const runOnce = () => {
-          try {
-            do {
-              rerunRequested = false;
-              const cmds: SelectRangeCmd[] = [];
-              const value = runSelector(cmds);
-
-              if (isPromiseLike(value)) {
-                void Promise.resolve(value).then(
-                  (resolvedValue) => {
-                    if (!isCurrentRun()) {
-                      return;
-                    }
-
-                    if (rerunRequested) {
-                      runOnce();
-                      return;
-                    }
-
-                    finishSuccess(resolvedValue, cmds);
-                  },
-                  (error: unknown) => {
-                    finishError(error);
-                  },
-                );
-                return;
-              }
-
-              if (!isCurrentRun()) {
-                isRunning = false;
-                return;
-              }
-
-              if (rerunRequested) continue;
-
-              finishSuccess(value, cmds);
-              return;
-            } while (rerunRequested);
-          } catch (error) {
-            finishError(error);
+          if (!isCurrentRun()) {
+            isRunning = false;
+            inFlightResult = null;
+            return;
           }
-        };
 
-        setQueryState((previous) => ({
-          ...previous,
-          fetchStatus: "fetching",
-          promise: promiseController.promise,
-          status:
-            previous.status === "success" || previous.dataUpdatedAt > 0
-              ? previous.status
-              : "pending",
-        }));
+          if (rerunRequested) continue;
 
-        runOnce();
-      },
-    );
+          finishSuccess(value, cmds);
+          return;
+        } while (rerunRequested);
+      } catch (error) {
+        finishError(error);
+      }
+    };
+
+    setQueryState((previous) => ({
+      ...previous,
+      fetchStatus: "fetching",
+      promise: promiseController.promise,
+      status:
+        previous.status === "success" || previous.dataUpdatedAt > 0
+          ? previous.status
+          : "pending",
+    }));
+
+    runOnce();
 
     if (isRunning) {
       inFlightResult = resultPromise;
     }
 
-    return resultPromise;
+    return applyRefetchOptions(resultPromise);
   };
 
   const ensureStarted = () => {
@@ -551,10 +607,9 @@ const createAsyncSelectorStoreInternal = <
         if (listeners.size > 0) return;
 
         stopDBSubscription();
-        runToken++;
-        isRunning = false;
-        inFlightResult = null;
-        rerunRequested = false;
+        cancelInFlightRun();
+        started = false;
+        clearStaleTimer();
       };
     },
     getSnapshot: () => {
@@ -566,10 +621,7 @@ const createAsyncSelectorStoreInternal = <
       if (destroyed) return;
 
       destroyed = true;
-      runToken++;
-      isRunning = false;
-      inFlightResult = null;
-      rerunRequested = false;
+      cancelInFlightRun();
       stopDBSubscription();
       clearStaleTimer();
       listeners.clear();

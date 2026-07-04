@@ -359,7 +359,8 @@ Use `useAsyncSelector` and `useAsyncDispatch` with HybridDB. `useAsyncSelector`
 returns a React Query-style result with `data`, `status`, `error`, fetching
 flags, and `refetch()`. Its initial snapshot attempts the selector once: sync
 results are visible immediately, while promise results show `defaultValue`,
-`initialData`, or `placeholderData` until that promise resolves. Use
+`initialData`, or `placeholderData` until that promise resolves. `defaultValue`
+may be a value or a zero-argument function that returns the value. Use
 `useSyncSelector` / `useDispatch` only for purely synchronous drivers.
 
 ## Rules Of Thumb

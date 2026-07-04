@@ -310,6 +310,151 @@ describe("createCachedSelectorStoreAsync", () => {
     store.destroy();
   });
 
+  it("settles in-flight refetch when the last subscriber unsubscribes", async () => {
+    const gate = deferred<string>();
+    const db = createTestDB();
+    const asyncValue = selector({
+      name: "asyncStoreUnsubscribeRefetchValue",
+      args: {},
+      *handler() {
+        return yield* unwrap(gate.promise);
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: asyncValue,
+      args: {},
+      subscribed: false,
+    });
+    const unsubscribe = store.subscribe(vi.fn());
+
+    const refetchPromise = store.refetch();
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    unsubscribe();
+
+    await expect(refetchPromise).resolves.toEqual(
+      expect.objectContaining({
+        fetchStatus: "idle",
+        isFetching: false,
+        status: "pending",
+      }),
+    );
+
+    gate.resolve("late");
+    await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: undefined,
+        fetchStatus: "idle",
+        status: "pending",
+      }),
+    );
+
+    store.destroy();
+  });
+
+  it("settles in-flight refetch when the store is destroyed", async () => {
+    const gate = deferred<string>();
+    const db = createTestDB();
+    const asyncValue = selector({
+      name: "asyncStoreDestroyRefetchValue",
+      args: {},
+      *handler() {
+        return yield* unwrap(gate.promise);
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: asyncValue,
+      args: {},
+      subscribed: false,
+    });
+
+    const refetchPromise = store.refetch();
+    store.destroy();
+
+    await expect(refetchPromise).resolves.toEqual(
+      expect.objectContaining({
+        fetchStatus: "idle",
+        isFetching: false,
+        status: "pending",
+      }),
+    );
+
+    gate.resolve("late");
+    await flushPromises();
+  });
+
+  it("restarts after unsubscribe and resubscribe while a selector run is in-flight", async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    const db = createTestDB();
+    let runCount = 0;
+    const asyncValue = selector({
+      name: "asyncStoreResubscribeInFlightValue",
+      args: {},
+      *handler() {
+        runCount++;
+
+        if (runCount === 1) {
+          return yield* unwrap(first.promise);
+        }
+
+        return yield* unwrap(second.promise);
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: asyncValue,
+      args: {},
+    });
+    const firstUnsubscribe = store.subscribe(vi.fn());
+
+    expect(runCount).toBe(1);
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    firstUnsubscribe();
+    const subscriber = vi.fn();
+    const secondUnsubscribe = store.subscribe(subscriber);
+
+    expect(runCount).toBe(2);
+
+    first.resolve("stale");
+    await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: undefined,
+        fetchStatus: "fetching",
+        status: "pending",
+      }),
+    );
+
+    second.resolve("fresh");
+    await flushPromises();
+
+    expect(store.getSnapshot()).toEqual(
+      expect.objectContaining({
+        data: "fresh",
+        fetchStatus: "idle",
+        status: "success",
+      }),
+    );
+    expect(subscriber).toHaveBeenCalled();
+
+    secondUnsubscribe();
+    store.destroy();
+  });
+
   it("refetch rejects selector errors when throwOnError is true", async () => {
     const error = new Error("selector failed");
     const db = createTestDB();
@@ -333,6 +478,39 @@ describe("createCachedSelectorStoreAsync", () => {
         status: "error",
       }),
     );
+
+    store.destroy();
+  });
+
+  it("applies throwOnError for a refetch that joins an existing in-flight run", async () => {
+    const gate = deferred<string>();
+    const error = new Error("selector failed later");
+    const db = createTestDB();
+    const failingSelector = selector({
+      name: "asyncStoreOverlappingFailingSelector",
+      args: {},
+      *handler() {
+        return yield* unwrap(gate.promise);
+      },
+    });
+    const store = createCachedSelectorStoreAsync(db, {
+      selector: failingSelector,
+      args: {},
+      subscribed: false,
+    });
+
+    const nonThrowingRefetch = store.refetch();
+    const throwingRefetch = store.refetch({ throwOnError: true });
+
+    gate.reject(error);
+
+    await expect(nonThrowingRefetch).resolves.toEqual(
+      expect.objectContaining({
+        error,
+        status: "error",
+      }),
+    );
+    await expect(throwingRefetch).rejects.toBe(error);
 
     store.destroy();
   });

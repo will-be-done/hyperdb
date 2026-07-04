@@ -102,7 +102,7 @@ Options:
 | `selector`             | The selector to run                                                        |
 | `args`                 | Its arguments (also the reactive identity)                                 |
 | `enabled`              | Set `false` to skip automatic runs; call `refetch()` to run manually       |
-| `defaultValue`         | Compatibility alias for placeholder data before the first resolved run     |
+| `defaultValue`         | Value or thunk used as placeholder data before the first resolved run      |
 | `initialData`          | Initial successful data for the result                                     |
 | `initialDataUpdatedAt` | Timestamp for `initialData`                                                |
 | `placeholderData`      | Temporary data while the selector is still pending                         |

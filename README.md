@@ -249,6 +249,7 @@ run finishes synchronously, that value is visible immediately; if it returns a
 promise, the hook shows `defaultValue`, `initialData`, or `placeholderData` until
 that same promise resolves. The hook uses `createCachedSelectorStoreAsync`
 internally, so the same async subscription behavior is available without React.
+`defaultValue` may be a value or a zero-argument function that returns the value.
 
 ## Entry points
 
