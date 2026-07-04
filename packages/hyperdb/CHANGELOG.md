@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.4.1
+
+### Patch Changes
+
+- dbe309d: fix hook strict mode race condition
+
 ## 0.4.0
 
 ### Minor Changes
