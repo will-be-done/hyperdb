@@ -1,5 +1,12 @@
 # @will-be-done/hyperdb
 
+## 0.4.0
+
+### Minor Changes
+
+- ef8ff80: improve hook
+- 7a6c691: Rename the React synchronous dispatch hook from `useDispatch` to `useSyncDispatch`.
+
 ## 0.3.0
 
 ### Minor Changes

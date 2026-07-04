@@ -1,5 +1,17 @@
 # @will-be-done/hyperdb-devtool
 
+## 0.4.0
+
+### Minor Changes
+
+- ef8ff80: improve hook
+
+### Patch Changes
+
+- Updated dependencies [ef8ff80]
+- Updated dependencies [7a6c691]
+  - @will-be-done/hyperdb@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
