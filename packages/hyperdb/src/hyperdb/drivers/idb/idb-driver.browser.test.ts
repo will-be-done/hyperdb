@@ -544,71 +544,81 @@ describe("IdbDriver", () => {
     }
   });
 
-  it("retries when opening an object store sees a finished readonly transaction", async () => {
-    const debug = vi.fn();
-    const db = await createDB({ debug });
-    await execAsync(db.loadTables([tasksTable]));
-    await execAsync(
-      db.insert(tasksTable, [
-        {
-          id: "task-1",
-          title: "First",
-          projectId: "project-1",
-          rank: 1,
-        },
-      ]),
-    );
-
-    const objectStoreSpy = vi.spyOn(IDBTransaction.prototype, "objectStore");
-    const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
-    const finishedError = new DOMException(
+  it.each([
+    [
+      "Chrome finished transaction message",
       "Failed to execute 'objectStore' on 'IDBTransaction': The transaction has finished.",
-      "InvalidStateError",
-    );
+    ],
+    [
+      "Firefox committing-or-done transaction message",
+      "IDBTransaction.objectStore: Transaction is already committing or done.",
+    ],
+  ])(
+    "retries when opening an object store sees a finished readonly transaction: %s",
+    async (_browserCase, message) => {
+      const debug = vi.fn();
+      const db = await createDB({ debug });
+      await execAsync(db.loadTables([tasksTable]));
+      await execAsync(
+        db.insert(tasksTable, [
+          {
+            id: "task-1",
+            title: "First",
+            projectId: "project-1",
+            rank: 1,
+          },
+        ]),
+      );
 
-    try {
-      objectStoreSpy.mockImplementationOnce(() => {
-        throw finishedError;
-      });
+      const objectStoreSpy = vi.spyOn(IDBTransaction.prototype, "objectStore");
+      const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
+      const finishedError = new DOMException(message, "InvalidStateError");
 
-      await expect(
-        selectAsync(
-          db,
-          (function* () {
-            return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
-              q.eq("projectId", "project-1"),
-            );
-          })(),
-        ),
-      ).resolves.toEqual([
-        {
-          id: "task-1",
-          title: "First",
-          projectId: "project-1",
-          rank: 1,
-        },
-      ]);
+      try {
+        objectStoreSpy.mockImplementationOnce(() => {
+          throw finishedError;
+        });
 
-      expect(
-        txSpy.mock.calls.filter(([, mode]) => mode === "readonly").length,
-      ).toBeGreaterThanOrEqual(2);
-      expect(
-        debug.mock.calls.some(
-          ([event]) =>
-            event.operation === "transaction reopen" &&
-            event.mode === "readonly",
-        ),
-      ).toBe(true);
-      expect(
-        debug.mock.calls.some(
-          ([event]) => event.operation === "scan" && event.status === "error",
-        ),
-      ).toBe(false);
-    } finally {
-      objectStoreSpy.mockRestore();
-      txSpy.mockRestore();
-    }
-  });
+        await expect(
+          selectAsync(
+            db,
+            (function* () {
+              return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+                q.eq("projectId", "project-1"),
+              );
+            })(),
+          ),
+        ).resolves.toEqual([
+          {
+            id: "task-1",
+            title: "First",
+            projectId: "project-1",
+            rank: 1,
+          },
+        ]);
+
+        expect(
+          txSpy.mock.calls.filter(([, mode]) => mode === "readonly").length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(
+          debug.mock.calls.some(
+            ([event]) =>
+              event.operation === "transaction reopen" &&
+              event.mode === "readonly",
+          ),
+        ).toBe(true);
+        expect(
+          debug.mock.calls.some(
+            ([event]) =>
+              event.operation === "scan" && event.status === "error",
+          ),
+        ).toBe(false);
+      } finally {
+        objectStoreSpy.mockRestore();
+        txSpy.mockRestore();
+      }
+    },
+  );
 
   it("does not open an IDB readonly transaction for cached HybridDB reads", async () => {
     dbCounter += 1;

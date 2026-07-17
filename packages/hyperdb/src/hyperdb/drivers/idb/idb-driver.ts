@@ -220,7 +220,7 @@ function isInactiveTransactionError(error: unknown): boolean {
 
   return (
     name === "TransactionInactiveError" ||
-    /TransactionInactiveError|transaction.*inactive|inactive.*transaction|transaction.*not active|not active.*transaction|transaction.*finished|finished.*transaction/i.test(
+    /TransactionInactiveError|transaction.*inactive|inactive.*transaction|transaction.*not active|not active.*transaction|transaction.*finished|finished.*transaction|transaction.*committing|committing.*transaction|transaction.*done|done.*transaction/i.test(
       message,
     )
   );
