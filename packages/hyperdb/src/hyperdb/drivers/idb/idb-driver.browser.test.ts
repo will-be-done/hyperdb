@@ -609,8 +609,7 @@ describe("IdbDriver", () => {
         ).toBe(true);
         expect(
           debug.mock.calls.some(
-            ([event]) =>
-              event.operation === "scan" && event.status === "error",
+            ([event]) => event.operation === "scan" && event.status === "error",
           ),
         ).toBe(false);
       } finally {
