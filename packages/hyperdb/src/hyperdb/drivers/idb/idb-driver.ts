@@ -678,6 +678,10 @@ class AsyncReadWriteLock {
     });
   }
 
+  hasWaitingWriters(): boolean {
+    return this.waitingWriters.length > 0;
+  }
+
   private releaseRead(): void {
     this.activeReaders--;
     this.drain();
@@ -1145,10 +1149,13 @@ class IdbDriverReadonlyTx implements DBDriverTX {
   private active: ActiveReadonlyTransaction | undefined;
   private factory: IDBFactory;
   private tableDefinitions: Map<string, TableDefinition>;
-  private acquireRead: () => Promise<LockRelease>;
-  private nextTransactionId: () => number;
-  private createTransaction: () => IDBTransaction;
-  private throwIfClosed: () => void;
+  private getSharedActive: (
+    traceContext: DBDriverTraceContext | undefined,
+  ) => Promise<ActiveReadonlyTransaction>;
+  private finishSharedActive: (
+    active: ActiveReadonlyTransaction,
+    abort: boolean,
+  ) => void;
   private onDispose: (tx: IdbDriverReadonlyTx) => void;
   private debug: IdbDriverDebug | undefined;
   private closed = false;
@@ -1157,23 +1164,23 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     active: ActiveReadonlyTransaction,
     factory: IDBFactory,
     tableDefinitions: Map<string, TableDefinition>,
-    acquireRead: () => Promise<LockRelease>,
-    nextTransactionId: () => number,
-    createTransaction: () => IDBTransaction,
-    throwIfClosed: () => void,
+    getSharedActive: (
+      traceContext: DBDriverTraceContext | undefined,
+    ) => Promise<ActiveReadonlyTransaction>,
+    finishSharedActive: (
+      active: ActiveReadonlyTransaction,
+      abort: boolean,
+    ) => void,
     onDispose: (tx: IdbDriverReadonlyTx) => void,
     debug: IdbDriverDebug | undefined,
   ) {
     this.active = active;
     this.factory = factory;
     this.tableDefinitions = tableDefinitions;
-    this.acquireRead = acquireRead;
-    this.nextTransactionId = nextTransactionId;
-    this.createTransaction = createTransaction;
-    this.throwIfClosed = throwIfClosed;
+    this.getSharedActive = getSharedActive;
+    this.finishSharedActive = finishSharedActive;
     this.onDispose = onDispose;
     this.debug = debug;
-    this.watchActive(active);
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -1233,11 +1240,11 @@ class IdbDriverReadonlyTx implements DBDriverTX {
               traceContext: options.traceContext,
               mode: active.tx.mode,
             });
-            this.finishActive(active, true);
+            this.finishSharedActive(active, true);
             continue;
           }
 
-          this.finishActive(active, true);
+          this.finishSharedActive(active, true);
           throw error;
         }
       }
@@ -1254,104 +1261,16 @@ class IdbDriverReadonlyTx implements DBDriverTX {
       return this.active;
     }
 
-    const release = await this.acquireRead();
-    const startedAt = this.debug ? nowMs() : 0;
-    try {
-      this.throwIfClosed();
-      const id = this.nextTransactionId();
-      const tx = this.createTransaction();
-      const active: ActiveReadonlyTransaction = {
-        id,
-        tx,
-        traceContext,
-        release,
-        done: txDone(tx),
-        startedAt,
-        finished: false,
-        released: false,
-      };
-      this.active = active;
-      emitIdbDebug(this.debug, "transaction start", startedAt, {
-        txId: id,
-        traceContext,
-        mode: tx.mode,
-      });
-      this.watchActive(active);
-      return active;
-    } catch (error) {
-      release();
-      emitIdbDebug(
-        this.debug,
-        "transaction start",
-        startedAt,
-        {
-          mode: "readonly",
-        },
-        error,
-      );
-      throw error;
-    }
-  }
-
-  private watchActive(active: ActiveReadonlyTransaction): void {
-    void active.done
-      .then(
-        () => {
-          if (!active.finished) {
-            emitIdbDebug(this.debug, "transaction commit", active.startedAt, {
-              txId: active.id,
-              traceContext: active.traceContext,
-              mode: active.tx.mode,
-            });
-          }
-        },
-        (error) => {
-          if (!active.finished) {
-            emitIdbDebug(
-              this.debug,
-              "transaction rollback",
-              active.startedAt,
-              {
-                txId: active.id,
-                traceContext: active.traceContext,
-                mode: active.tx.mode,
-              },
-              error,
-            );
-          }
-        },
-      )
-      .finally(() => {
-        this.finishActive(active, false);
-      });
+    const active = await this.getSharedActive(traceContext);
+    this.active = active;
+    return active;
   }
 
   dispose(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.active) {
-      this.finishActive(this.active, true);
-    }
+    this.active = undefined;
     this.onDispose(this);
-  }
-
-  private finishActive(
-    active: ActiveReadonlyTransaction,
-    abort: boolean,
-  ): void {
-    if (active.finished) return;
-
-    active.finished = true;
-    if (this.active === active) {
-      this.active = undefined;
-    }
-    if (abort) {
-      abortQuietly(active.tx);
-    }
-    if (!active.released) {
-      active.released = true;
-      active.release();
-    }
   }
 }
 
@@ -1363,6 +1282,7 @@ export class IdbDriver implements DBDriver {
   private tableDefinitions = new Map<string, TableDefinition>();
   private lock = new AsyncReadWriteLock();
   private readonlyTransactions = new Set<IdbDriverReadonlyTx>();
+  private sharedReadonlyActive: ActiveReadonlyTransaction | undefined;
   private closedReason: Error | null = null;
   private nextTxId = 1;
 
@@ -1385,6 +1305,9 @@ export class IdbDriver implements DBDriver {
     }
     for (const tx of [...this.readonlyTransactions]) {
       tx.dispose();
+    }
+    if (this.sharedReadonlyActive) {
+      this.finishSharedReadonlyActive(this.sharedReadonlyActive, true);
     }
     this.db.close();
   }
@@ -1435,43 +1358,67 @@ export class IdbDriver implements DBDriver {
   private *beginReadonlyTx(
     options: DBDriverOperationOptions = {},
   ): Generator<DBCmd, DBDriverTX> {
-    const release = yield* unwrapCb(async () => this.lock.acquireRead());
+    const debug = this.options.debug;
+
+    const active = yield* unwrapCb(async () =>
+      this.getSharedReadonlyActive(options.traceContext),
+    );
+    const readonlyTx = new IdbDriverReadonlyTx(
+      active,
+      this.factory,
+      this.tableDefinitions,
+      (traceContext) => this.getSharedReadonlyActive(traceContext),
+      (finishedActive, abort) =>
+        this.finishSharedReadonlyActive(finishedActive, abort),
+      (finishedTx) => this.readonlyTransactions.delete(finishedTx),
+      debug,
+    );
+    this.readonlyTransactions.add(readonlyTx);
+    return readonlyTx;
+  }
+
+  private async getSharedReadonlyActive(
+    traceContext: DBDriverTraceContext | undefined,
+  ): Promise<ActiveReadonlyTransaction> {
+    const active = this.sharedReadonlyActive;
+    if (active && !active.finished && !this.lock.hasWaitingWriters()) {
+      return active;
+    }
+
+    const release = await this.lock.acquireRead();
     const debug = this.options.debug;
     const startedAt = debug ? nowMs() : 0;
 
     try {
       this.throwIfClosed();
+
+      const reusableActive = this.sharedReadonlyActive;
+      if (reusableActive && !reusableActive.finished) {
+        release();
+        return reusableActive;
+      }
+
       const storeNames = this.loadedStoreNames();
       const id = this.createTransactionId();
       const tx = this.createTransaction(storeNames, "readonly");
-      const active: ActiveReadonlyTransaction = {
+      const newActive: ActiveReadonlyTransaction = {
         id,
         tx,
-        traceContext: options.traceContext,
+        traceContext,
         release,
         done: txDone(tx),
         startedAt,
         finished: false,
         released: false,
       };
+      this.sharedReadonlyActive = newActive;
       emitIdbDebug(debug, "transaction start", startedAt, {
         txId: id,
-        traceContext: options.traceContext,
+        traceContext,
         mode: tx.mode,
       });
-      const readonlyTx = new IdbDriverReadonlyTx(
-        active,
-        this.factory,
-        this.tableDefinitions,
-        () => this.lock.acquireRead(),
-        () => this.createTransactionId(),
-        () => this.createTransaction(storeNames, "readonly"),
-        () => this.throwIfClosed(),
-        (finishedTx) => this.readonlyTransactions.delete(finishedTx),
-        debug,
-      );
-      this.readonlyTransactions.add(readonlyTx);
-      return readonlyTx;
+      this.watchSharedReadonlyActive(newActive);
+      return newActive;
     } catch (error) {
       release();
       emitIdbDebug(
@@ -1484,6 +1431,63 @@ export class IdbDriver implements DBDriver {
         error,
       );
       throw error;
+    }
+  }
+
+  private watchSharedReadonlyActive(active: ActiveReadonlyTransaction): void {
+    void active.done
+      .then(
+        () => {
+          if (!active.finished) {
+            emitIdbDebug(
+              this.options.debug,
+              "transaction commit",
+              active.startedAt,
+              {
+                txId: active.id,
+                traceContext: active.traceContext,
+                mode: active.tx.mode,
+              },
+            );
+          }
+        },
+        (error) => {
+          if (!active.finished) {
+            emitIdbDebug(
+              this.options.debug,
+              "transaction rollback",
+              active.startedAt,
+              {
+                txId: active.id,
+                traceContext: active.traceContext,
+                mode: active.tx.mode,
+              },
+              error,
+            );
+          }
+        },
+      )
+      .finally(() => {
+        this.finishSharedReadonlyActive(active, false);
+      });
+  }
+
+  private finishSharedReadonlyActive(
+    active: ActiveReadonlyTransaction,
+    abort: boolean,
+  ): void {
+    if (active.finished) return;
+
+    active.finished = true;
+    if (this.sharedReadonlyActive === active) {
+      this.sharedReadonlyActive = undefined;
+    }
+    if (abort) {
+      abortQuietly(active.tx);
+    }
+    if (!active.released) {
+      active.released = true;
+      active.release();
     }
   }
 

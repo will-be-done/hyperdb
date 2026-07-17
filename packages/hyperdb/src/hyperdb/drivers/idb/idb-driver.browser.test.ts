@@ -350,7 +350,7 @@ describe("IdbDriver", () => {
     }
   });
 
-  it("does not share readonly transactions across concurrent selector runs", async () => {
+  it("shares an active readonly transaction across concurrent selector runs", async () => {
     const db = await createDB();
     await execAsync(db.loadTables([tasksTable]));
     await execAsync(
@@ -397,8 +397,7 @@ describe("IdbDriver", () => {
         selectAsync(db, { selector: readProjectTasks, args: {} }),
       ]);
 
-      expect(readonlyTransactions).toHaveLength(2);
-      expect(readonlyTransactions[0]).not.toBe(readonlyTransactions[1]);
+      expect(readonlyTransactions).toHaveLength(1);
     } finally {
       txSpy.mockRestore();
     }
