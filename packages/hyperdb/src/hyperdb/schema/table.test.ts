@@ -181,6 +181,48 @@ describe("defineTable", () => {
     }
   });
 
+  it("rejects duplicate index definitions and overlapping B-tree prefixes", () => {
+    const schema = {
+      id: v.string(),
+      name: v.string(),
+      createdAt: v.string(),
+    };
+
+    expect(() =>
+      defineTable("duplicateIndexName", schema).index("byId", ["id"]),
+    ).toThrow(/Index name byId is already defined/);
+
+    expect(() =>
+      defineTable("duplicateBtree", schema)
+        .index("byName", ["name"])
+        .index("byNameAgain", ["name"]),
+    ).toThrow(/duplicate the same btree definition/);
+
+    expect(() =>
+      defineTable("duplicateUniqhash", schema)
+        .index("byName", ["name"], { type: "uniqhash" })
+        .index("byNameAgain", ["name"], { type: "uniqhash" }),
+    ).toThrow(/duplicate the same uniqhash definition/);
+
+    expect(() =>
+      defineTable("overlappingBtree", schema)
+        .index("byName", ["name"])
+        .index("byNameCreatedAt", ["name", "createdAt"]),
+    ).toThrow(/overlap by column prefix/);
+
+    expect(() =>
+      defineTable("overlappingBtreeReverse", schema)
+        .index("byNameCreatedAt", ["name", "createdAt"])
+        .index("byName", ["name"]),
+    ).toThrow(/overlap by column prefix/);
+
+    expect(() =>
+      defineTable("sharedUniqueOrdered", schema)
+        .index("byNameUnique", ["name"], { type: "uniqhash" })
+        .index("byNameOrdered", ["name"]),
+    ).not.toThrow();
+  });
+
   it("uses defineTable for schema-backed table definitions", () => {
     const tasksTable = defineTable("tasks", {
       id: v.string(),

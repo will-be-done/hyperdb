@@ -210,6 +210,50 @@ export function validateIndexes(
       }
     }
   }
+
+  const indexEntries = Object.entries(indexes);
+  for (let leftIndex = 0; leftIndex < indexEntries.length; leftIndex++) {
+    const [leftName, leftConfig] = indexEntries[leftIndex]!;
+    const leftColumns = leftConfig.cols.map(String);
+
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < indexEntries.length;
+      rightIndex++
+    ) {
+      const [rightName, rightConfig] = indexEntries[rightIndex]!;
+      const rightColumns = rightConfig.cols.map(String);
+      const sameColumns =
+        leftColumns.length === rightColumns.length &&
+        leftColumns.every((column, index) => column === rightColumns[index]);
+
+      if (leftConfig.type === rightConfig.type && sameColumns) {
+        throw new Error(
+          `Indexes ${leftName} and ${rightName} duplicate the same ${leftConfig.type} definition on table: ${tableName}`,
+        );
+      }
+
+      if (leftConfig.type !== "btree" || rightConfig.type !== "btree") {
+        continue;
+      }
+
+      const shorterColumns =
+        leftColumns.length < rightColumns.length ? leftColumns : rightColumns;
+      const longerColumns =
+        leftColumns.length < rightColumns.length ? rightColumns : leftColumns;
+      const isStrictPrefix =
+        shorterColumns.length < longerColumns.length &&
+        shorterColumns.every(
+          (column, index) => column === longerColumns[index],
+        );
+
+      if (isStrictPrefix) {
+        throw new Error(
+          `B-tree indexes ${leftName} and ${rightName} overlap by column prefix on table: ${tableName}`,
+        );
+      }
+    }
+  }
 }
 
 function addIndexMethod<T, I extends AnyIndexDefinitions, TSchema = undefined>(
@@ -231,6 +275,12 @@ function addIndexMethod<T, I extends AnyIndexDefinitions, TSchema = undefined>(
       columns: readonly IndexableColumn<T>[],
       options?: IndexOptions,
     ) {
+      if (Object.prototype.hasOwnProperty.call(tableDef.indexes, name)) {
+        throw new Error(
+          `Index name ${name} is already defined on table: ${tableDef.tableName}`,
+        );
+      }
+
       const type = options?.type ?? "btree";
       const nextIndexes = {
         ...tableDef.indexes,

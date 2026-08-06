@@ -78,6 +78,13 @@ const bigintHashErrorTable = defineTable("bigintHashError", {
   value: v.bigint(),
 }).index("byValueHash", ["value"], { type: "hash" });
 
+const sharedUniqueOrderedTable = defineTable("sharedUniqueOrdered", {
+  id: v.string(),
+  email: v.string(),
+})
+  .index("byEmailOrdered", ["email"])
+  .index("byEmailUnique", ["email"], { type: "uniqhash" });
+
 describe("db", async () => {
   for (const [driverName, createDriver] of createDriverFactories()) {
     it("preloadTables is a no-op for plain DB - " + driverName, async () => {
@@ -88,6 +95,38 @@ describe("db", async () => {
         db.preloadTables([{ table: tasksTable, scanIndex: "ids" }]),
       ).resolves.toBeUndefined();
     });
+
+    it(
+      "queries matching uniqhash and B-tree logical indexes - " + driverName,
+      async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([sharedUniqueOrderedTable]);
+        await db.insert(sharedUniqueOrderedTable, [
+          { id: "user-b", email: "b@example.com" },
+          { id: "user-a", email: "a@example.com" },
+        ]);
+
+        expect(
+          await db.intervalScan(sharedUniqueOrderedTable, "byEmailUnique", [
+            { eq: [{ col: "email", val: "a@example.com" }] },
+          ]),
+        ).toEqual([{ id: "user-a", email: "a@example.com" }]);
+        expect(
+          await db.intervalScan(sharedUniqueOrderedTable, "byEmailOrdered", [
+            {},
+          ]),
+        ).toEqual([
+          { id: "user-a", email: "a@example.com" },
+          { id: "user-b", email: "b@example.com" },
+        ]);
+
+        await expect(
+          db.insert(sharedUniqueOrderedTable, [
+            { id: "user-c", email: "a@example.com" },
+          ]),
+        ).rejects.toThrow();
+      },
+    );
 
     it("insert, delete, upsert - " + driverName, async () => {
       const db = new AsyncDB(new DB(await createDriver()));
@@ -747,7 +786,7 @@ describe("Database Operations Edge Cases", async () => {
         )
           .index("byPostTitle", ["title"])
           .index("byPostTitleHash", ["title"], { type: "hash" })
-          .index("byPostTitleSlug", ["title", "slug"]);
+          .index("byPostSlugTitle", ["slug", "title"]);
 
         const db = new AsyncDB(
           new DB(await createDriver(), { runtimeRowsValidation: true }),
@@ -826,24 +865,33 @@ describe("Database Operations Edge Cases", async () => {
           }),
         ).toEqual([nullTitlePost, firstPost, secondPost]);
         expect(
-          await db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostSlugTitle", [
             {
-              eq: [{ col: "title", val: null }],
+              eq: [
+                { col: "slug", val: "untitled" },
+                { col: "title", val: null },
+              ],
             },
           ]),
         ).toEqual([nullTitlePost]);
 
         expect(
-          await db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostSlugTitle", [
             {
-              eq: [{ col: "title", val: "Hello" }],
+              eq: [
+                { col: "slug", val: "hello" },
+                { col: "title", val: "Hello" },
+              ],
             },
           ]),
         ).toEqual([firstPost]);
         expect(
-          await db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostSlugTitle", [
             {
-              eq: [{ col: "title", val: "Preview" }],
+              eq: [
+                { col: "slug", val: "preview" },
+                { col: "title", val: "Preview" },
+              ],
             },
           ]),
         ).toEqual([]);
@@ -879,9 +927,12 @@ describe("Database Operations Edge Cases", async () => {
         await db.upsert(documentsTable, [promotedPreview]);
 
         expect(
-          await db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostSlugTitle", [
             {
-              eq: [{ col: "title", val: "Preview" }],
+              eq: [
+                { col: "slug", val: "preview" },
+                { col: "title", val: "Preview" },
+              ],
             },
           ]),
         ).toEqual([promotedPreview]);
@@ -903,9 +954,12 @@ describe("Database Operations Edge Cases", async () => {
           ]),
         ).toEqual([]);
         expect(
-          await db.intervalScan(documentsTable, "byPostTitleSlug", [
+          await db.intervalScan(documentsTable, "byPostSlugTitle", [
             {
-              eq: [{ col: "title", val: null }],
+              eq: [
+                { col: "slug", val: "untitled" },
+                { col: "title", val: null },
+              ],
             },
           ]),
         ).toEqual([]);

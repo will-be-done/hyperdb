@@ -158,7 +158,13 @@ Index columns must:
   optionals of those).
 
 Invalid index definitions throw at `defineTable` time, so mistakes surface
-immediately. For how composite indexes are queried, see
+immediately. Index names cannot be reused, duplicate definitions with the same
+type and columns are rejected, and two B-tree definitions cannot have column
+lists where one is a strict prefix of the other. A `uniqhash` and B-tree may use
+the same single column when both unique lookup and ordered/range access are
+needed; persistent drivers reuse one unique physical index for that pair.
+
+For how composite indexes are queried, see
 [Indexes](/database/indexes/).
 
 ## Choosing indexes

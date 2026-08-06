@@ -19,6 +19,19 @@ const noSideTablesTable = defineTable("driverEdgeNoSideTables", {
   title: v.string(),
 }).index("byTitle", ["title"]);
 
+const manyPrefixRangesTable = defineTable("driverEdgeManyPrefixRanges", {
+  id: v.string(),
+  entityId: v.string(),
+  tableName: v.string(),
+}).index("byEntityAndTable", ["entityId", "tableName"]);
+
+const sharedUniqueOrderedTable = defineTable("driverEdgeSharedUniqueOrdered", {
+  id: v.string(),
+  email: v.string(),
+})
+  .index("byEmailOrdered", ["email"])
+  .index("byEmailUnique", ["email"], { type: "uniqhash" });
+
 const sortKeyBackfillTableV1 = defineTable("driverEdgeSortKeyBackfill", {
   id: v.string(),
   title: v.string(),
@@ -91,6 +104,41 @@ describe("SQLite driver edge case regressions", () => {
     ).toEqual([{ id: "task-a", title: "A" }]);
   });
 
+  it("replaces legacy textual sort-key columns with binary sort keys", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+    db.insert(noSideTablesTable, [{ id: "task-a", title: "A" }]);
+
+    sqldb.run("DROP INDEX idx_driverEdgeNoSideTables_byTitle_sort_key_v2");
+    sqldb.run(
+      "ALTER TABLE driverEdgeNoSideTables RENAME COLUMN idx_byTitle_sort_key_v2 TO idx_byTitle_sort_key",
+    );
+    sqldb.run(
+      "CREATE INDEX idx_driverEdgeNoSideTables_byTitle_sort_key ON driverEdgeNoSideTables(idx_byTitle_sort_key, id)",
+    );
+
+    db.loadTables([noSideTablesTable]);
+
+    const columns = sqliteRows(
+      sqldb,
+      "PRAGMA table_info(driverEdgeNoSideTables)",
+    ).map((row) => String(row[1]));
+    expect(columns).not.toContain("idx_byTitle_sort_key");
+    expect(columns).toContain("idx_byTitle_sort_key_v2");
+    expect(
+      sqliteRows(
+        sqldb,
+        "SELECT typeof(idx_byTitle_sort_key_v2) FROM driverEdgeNoSideTables",
+      ),
+    ).toEqual([["blob"]]);
+    expect(
+      db.intervalScan(noSideTablesTable, "byTitle", [
+        { eq: [{ col: "title", val: "A" }] },
+      ]),
+    ).toEqual([{ id: "task-a", title: "A" }]);
+  });
+
   it("recomputes stored sort keys when a hash index is promoted to uniqhash", async () => {
     const { driver, sqldb } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));
@@ -109,7 +157,8 @@ describe("SQLite driver edge case regressions", () => {
       "PRAGMA index_list(driverEdgeUniqhashMigration)",
     ).find(
       (row) =>
-        String(row[1]) === "idx_driverEdgeUniqhashMigration_byEmail_sort_key",
+        String(row[1]) ===
+        "idx_driverEdgeUniqhashMigration_byEmail_sort_key_v2",
     );
     expect(byEmail && Number(byEmail[2])).toBe(1);
 
@@ -145,22 +194,17 @@ describe("SQLite driver edge case regressions", () => {
       sqldb,
       "PRAGMA table_info(driverEdgePruneSortKeys)",
     ).map((row) => String(row[1]));
-    expect(columns).toEqual([
-      "id",
-      "data",
-      "idx_byId_sort_key",
-      "idx_byState_sort_key",
-    ]);
+    expect(columns).toEqual(["id", "data", "idx_byState_sort_key_v2"]);
 
     const indexNames = sqliteRows(
       sqldb,
       "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'driverEdgePruneSortKeys'",
     ).map(([name]) => String(name));
     expect(indexNames).toContain(
-      "idx_driverEdgePruneSortKeys_byState_sort_key",
+      "idx_driverEdgePruneSortKeys_byState_sort_key_v2",
     );
     expect(indexNames).not.toContain(
-      "idx_driverEdgePruneSortKeys_byTitle_sort_key",
+      "idx_driverEdgePruneSortKeys_byTitle_sort_key_v2",
     );
 
     expect(
@@ -190,7 +234,7 @@ describe("SQLite driver edge case regressions", () => {
     ).toEqual([{ id: "task-a", projectId: "project-1", state: "open" }]);
   });
 
-  it("uses IN for multiple exact sort-key lookups", async () => {
+  it("uses the primary key for multiple exact ID lookups", async () => {
     const { driver, execLog } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));
     db.loadTables([noSideTablesTable]);
@@ -213,8 +257,79 @@ describe("SQLite driver edge case regressions", () => {
     const selectSql = execLog.find((sql) =>
       sql.includes("FROM driverEdgeNoSideTables"),
     );
-    expect(selectSql).toContain("idx_byId_sort_key IN (?, ?)");
+    expect(selectSql).toContain("WHERE id IN (?, ?)");
     expect(selectSql).not.toContain(" OR ");
+  });
+
+  it("supports many exact-prefix ranges without exceeding SQLite expression depth", async () => {
+    const db = new SyncDB(new DB(await createSqlJsDriver()));
+    db.loadTables([manyPrefixRangesTable]);
+
+    const rows = Array.from({ length: 400 }, (_, index) => ({
+      id: `change-${index}`,
+      entityId: `entity-${index}`,
+      tableName: "tasks",
+    }));
+    db.insert(manyPrefixRangesTable, rows);
+
+    const results = db.intervalScan(
+      manyPrefixRangesTable,
+      "byEntityAndTable",
+      rows.map((row) => ({
+        eq: [
+          { col: "entityId", val: row.entityId },
+          { col: "tableName", val: row.tableName },
+        ],
+      })),
+    );
+
+    expect(new Set(results.map((row) => row.id))).toEqual(
+      new Set(rows.map((row) => row.id)),
+    );
+  });
+
+  it("shares one physical index between matching uniqhash and B-tree indexes", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([sharedUniqueOrderedTable]);
+    db.insert(sharedUniqueOrderedTable, [
+      { id: "user-b", email: "b@example.com" },
+      { id: "user-a", email: "a@example.com" },
+    ]);
+
+    expect(
+      db.intervalScan(sharedUniqueOrderedTable, "byEmailUnique", [
+        { eq: [{ col: "email", val: "a@example.com" }] },
+      ]),
+    ).toEqual([{ id: "user-a", email: "a@example.com" }]);
+    expect(
+      db.intervalScan(sharedUniqueOrderedTable, "byEmailOrdered", [{}]),
+    ).toEqual([
+      { id: "user-a", email: "a@example.com" },
+      { id: "user-b", email: "b@example.com" },
+    ]);
+
+    const columns = sqliteRows(
+      sqldb,
+      "PRAGMA table_info(driverEdgeSharedUniqueOrdered)",
+    ).map((row) => String(row[1]));
+    expect(columns).toEqual(["id", "data", "idx_byEmailOrdered_sort_key_v2"]);
+
+    const generatedIndexes = sqliteRows(
+      sqldb,
+      "PRAGMA index_list(driverEdgeSharedUniqueOrdered)",
+    ).filter((row) => String(row[1]).startsWith("idx_"));
+    expect(generatedIndexes).toHaveLength(1);
+    expect(String(generatedIndexes[0]?.[1])).toBe(
+      "idx_driverEdgeSharedUniqueOrdered_byEmailOrdered_sort_key_v2",
+    );
+    expect(Number(generatedIndexes[0]?.[2])).toBe(1);
+
+    expect(() =>
+      db.insert(sharedUniqueOrderedTable, [
+        { id: "user-c", email: "a@example.com" },
+      ]),
+    ).toThrow();
   });
 
   it("chunks inserts by SQLite bind variable budget", async () => {
@@ -225,7 +340,7 @@ describe("SQLite driver edge case regressions", () => {
 
     db.insert(
       noSideTablesTable,
-      Array.from({ length: 226 }, (_, index) => ({
+      Array.from({ length: 301 }, (_, index) => ({
         id: `task-${index}`,
         title: `Task ${index}`,
       })),
@@ -236,7 +351,7 @@ describe("SQLite driver edge case regressions", () => {
     );
     expect(inserts).toHaveLength(2);
     expect(inserts[0]!.match(/\?/g)).toHaveLength(900);
-    expect(inserts[1]!.match(/\?/g)).toHaveLength(4);
+    expect(inserts[1]!.match(/\?/g)).toHaveLength(3);
   });
 
   it("stores index sort keys on the base table and scans without side-index tables", async () => {
@@ -260,12 +375,7 @@ describe("SQLite driver edge case regressions", () => {
       sqldb,
       "PRAGMA table_info(driverEdgeNoSideTables)",
     ).map((row) => String(row[1]));
-    expect(columns).toEqual([
-      "id",
-      "data",
-      "idx_byId_sort_key",
-      "idx_byTitle_sort_key",
-    ]);
+    expect(columns).toEqual(["id", "data", "idx_byTitle_sort_key_v2"]);
 
     const indexSql = sqliteRows(
       sqldb,
@@ -273,12 +383,12 @@ describe("SQLite driver edge case regressions", () => {
     ).map(([sql]) => String(sql));
     expect(
       indexSql.some((sql) =>
-        sql.includes("ON driverEdgeNoSideTables(idx_byTitle_sort_key, id)"),
+        sql.includes("ON driverEdgeNoSideTables(idx_byTitle_sort_key_v2, id)"),
       ),
     ).toBe(true);
     expect(
       indexSql.some((sql) =>
-        sql.includes("WHERE idx_byTitle_sort_key IS NOT NULL"),
+        sql.includes("WHERE idx_byTitle_sort_key_v2 IS NOT NULL"),
       ),
     ).toBe(true);
 

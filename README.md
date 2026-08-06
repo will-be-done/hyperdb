@@ -25,6 +25,10 @@ to strain:
   B-tree, so inserting into a sorted collection stays `O(log n)` instead of
   rebuilding or shifting a whole array. This fits fractional indexing in
   local-first apps.
+- **Compact persistent indexes.** SQLite and IndexedDB use binary ordered keys,
+  direct primary-key access for `byId`, and one physical index for compatible
+  `uniqhash`/B-tree declarations. Non-unique ordering remains deterministic
+  because `id` is the final tie-breaker.
 - **Explicit query execution.** SQL is powerful, but the query text does not
   usually tell you whether the database will use an index or scan a whole table.
   In HyperDB, selectors name the table index they read and build explicit bounds
@@ -277,3 +281,11 @@ internally, so the same async subscription behavior is available without React.
 > On the server the persistent store is SQLite today (MongoDB and PostgreSQL are
 > not supported yet). HyperDB gives you the storage, query, and reactivity
 > primitives, and you build synchronization on top with the built-in primitives.
+
+The SQLite drivers support large batches of OR selector clauses up to SQLite's
+bind-parameter limit without requiring application-level workarounds for
+SQLite's expression-depth limit.
+
+Table definitions reject duplicate index shapes and overlapping B-tree column
+prefixes. Persistent drivers automatically migrate older textual sort keys to
+the binary ordered-key representation when tables are loaded.

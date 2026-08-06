@@ -70,7 +70,7 @@ type GetAllRecordsHost = {
 
 type RawStoredRecord = {
   row: Record<string, unknown>;
-  indexes: Record<string, string>;
+  indexes: Record<string, ArrayBuffer>;
 };
 
 function spyOnGetAllRecords<T extends object>(prototype: T) {
@@ -159,7 +159,7 @@ describe("IdbDriver", () => {
         $hyperdbType: "bigint",
         value: "42",
       });
-      expect(stored.indexes.byCount).toEqual(expect.any(String));
+      expect(stored.indexes.byCount).toBeInstanceOf(ArrayBuffer);
     } finally {
       rawDb.close();
       await deleteDatabase(dbName);
