@@ -446,10 +446,11 @@ export class SqlDriver implements DBDriver {
     tableName: string,
     generatedIndexName: string,
   ): string {
-    return generatedIndexName
-      .slice(`idx_${tableName}_`.length)
-      .replace(new RegExp(`${SQLITE_SORT_KEY_SUFFIX}$`), "")
-      .replace(new RegExp(`${LEGACY_SQLITE_SORT_KEY_SUFFIX}$`), "");
+    const indexName = generatedIndexName.slice(`idx_${tableName}_`.length);
+    const suffix = indexName.endsWith(SQLITE_SORT_KEY_SUFFIX)
+      ? SQLITE_SORT_KEY_SUFFIX
+      : LEGACY_SQLITE_SORT_KEY_SUFFIX;
+    return indexName.slice(0, -suffix.length);
   }
 
   // Sort-key columns whose encoding changed because the index flipped between

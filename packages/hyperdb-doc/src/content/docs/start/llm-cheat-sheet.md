@@ -86,7 +86,9 @@ import {
 
 Every table needs a string `id`. HyperDB creates a built-in `uniqhash` index
 named `byId`. Add B-tree indexes for sorted/range reads and `uniqhash` indexes
-for exact values that must be unique.
+for exact values that must be unique. `uniqhash` queries need at least one exact
+equality branch; empty or range-only queries are invalid. Repeated exact `byId`
+branches return each row once.
 
 Index names cannot be reused. HyperDB rejects duplicate definitions with the
 same type/columns and rejects B-tree definitions where one column list is a

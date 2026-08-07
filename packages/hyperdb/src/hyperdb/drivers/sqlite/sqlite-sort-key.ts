@@ -131,8 +131,9 @@ function encodeNumberPayload(value: number): number[] {
   return bytes;
 }
 
-// Encodes a positive integer with the same bytewise order as its numeric
-// value. Zero is reserved as a terminator, so callers pass values >= 1.
+// Encodes positive integers from 1 through 0x3fffff inclusive with the same
+// bytewise order as their numeric value. Zero is reserved as a terminator;
+// callers must keep values within the supported range.
 function encodePositiveInteger(value: number): number[] {
   if (value <= 0x7f) return [value];
   if (value <= 0x7ff) {

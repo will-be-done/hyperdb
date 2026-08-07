@@ -12,7 +12,7 @@ import {
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
-import type { SqlValue } from "./sqlite-common";
+import { buildSortKeyWhereClause, type SqlValue } from "./sqlite-common";
 
 const noSideTablesTable = defineTable("driverEdgeNoSideTables", {
   id: v.string(),
@@ -31,6 +31,13 @@ const sharedUniqueOrderedTable = defineTable("driverEdgeSharedUniqueOrdered", {
 })
   .index("byEmailOrdered", ["email"])
   .index("byEmailUnique", ["email"], { type: "uniqhash" });
+
+const suffixNamedIndexTable = defineTable("driverEdgeSuffixNamedIndex", {
+  id: v.string(),
+  title: v.string(),
+})
+  .index("byTitle_sort_key", ["title"])
+  .index("uniqueTitle", ["title"], { type: "uniqhash" });
 
 const sortKeyBackfillTableV1 = defineTable("driverEdgeSortKeyBackfill", {
   id: v.string(),
@@ -82,6 +89,37 @@ function sqliteRows(sqldb: InspectableSqlDatabase, sql: string): SqlValue[][] {
 }
 
 describe("SQLite driver edge case regressions", () => {
+  it("preserves physical indexes whose logical names end in _sort_key", async () => {
+    const { driver, execLog } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([suffixNamedIndexTable]);
+    db.insert(suffixNamedIndexTable, [
+      { id: "task-b", title: "B" },
+      { id: "task-a", title: "A" },
+    ]);
+    execLog.length = 0;
+
+    db.loadTables([suffixNamedIndexTable]);
+
+    expect(execLog.some((sql) => sql.startsWith("DROP INDEX"))).toBe(false);
+    expect(
+      db
+        .intervalScan(suffixNamedIndexTable, "byTitle_sort_key", [{}])
+        .map((row) => row.id),
+    ).toEqual(["task-a", "task-b"]);
+  });
+
+  it("rejects empty primary-key hash bounds", () => {
+    expect(() =>
+      buildSortKeyWhereClause(
+        "byId",
+        noSideTablesTable.tableName,
+        [],
+        new Map([[noSideTablesTable.tableName, noSideTablesTable]]),
+      ),
+    ).toThrow(/Hash index should have equality conditions/);
+  });
+
   it("backfills sort keys for rows that predate a new index", async () => {
     const { driver, execLog } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));

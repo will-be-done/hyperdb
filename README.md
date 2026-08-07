@@ -32,7 +32,9 @@ to strain:
 - **Explicit query execution.** SQL is powerful, but the query text does not
   usually tell you whether the database will use an index or scan a whole table.
   In HyperDB, selectors name the table index they read and build explicit bounds
-  over it, so the code shows the access path it will take.
+  over it, so the code shows the access path it will take. Exact hash-style
+  indexes require non-empty equality bounds, and repeated exact ID branches
+  return each row once.
 - **Fine-grained reactivity.** Selectors record exactly which index ranges they
   scanned, so a mutation only re-runs the selectors that overlap it, without
   proxies or `observer()`.

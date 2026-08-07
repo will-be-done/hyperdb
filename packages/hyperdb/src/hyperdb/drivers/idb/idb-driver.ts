@@ -893,19 +893,20 @@ async function performScan(
     }
 
     if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
-      createSortKeyRanges(factory, tableDef, indexName, clauses);
-      const ids = clauses.flatMap(
-        (clause) =>
-          clause.eq
-            ?.filter(
-              (condition) =>
-                condition.col === "id" && typeof condition.val === "string",
-            )
-            .map((condition) => condition.val as string) ?? [],
-      );
+      const ids = new Set<string>();
+      for (const clause of clauses) {
+        for (const condition of clause.eq ?? []) {
+          if (condition.col !== "id" || typeof condition.val !== "string") {
+            throw new Error(
+              `Primary-key index ${indexName} requires string IDs`,
+            );
+          }
+          ids.add(condition.val);
+        }
+      }
       const records = (
         await Promise.all(
-          ids.map((id) =>
+          [...ids].map((id) =>
             requestToPromise<NativeStoredRecord | undefined>(store.get(id)),
           ),
         )

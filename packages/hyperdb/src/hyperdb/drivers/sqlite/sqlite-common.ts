@@ -279,6 +279,12 @@ function validateHashBounds(
 ): void {
   const indexColumn = indexColumns.join(", ");
 
+  if (bounds.length === 0 || bounds.some((bound) => !bound.gte)) {
+    throw new Error(
+      `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
+    );
+  }
+
   for (const bound of bounds) {
     if (
       (bound.gt !== undefined && bound.gt.length > 0) ||
@@ -291,7 +297,6 @@ function validateHashBounds(
 
     if (
       !bound.lte ||
-      !bound.gte ||
       bound.lte.length !== indexColumns.length ||
       bound.gte.length !== indexColumns.length
     ) {
