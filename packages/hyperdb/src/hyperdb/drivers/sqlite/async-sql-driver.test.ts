@@ -39,8 +39,44 @@ const uniqhashMigrationTableV2 = defineTable("asyncUniqhashMigration", {
   email: v.string(),
 }).index("byEmail", ["email"], { type: "uniqhash" });
 
+const suffixNamedIndexTable = defineTable("asyncSuffixNamedIndex", {
+  id: v.string(),
+  title: v.string(),
+})
+  .index("byTitle_sort_key", ["title"])
+  .index("uniqueTitle", ["title"], { type: "uniqhash" });
+
 describe("db", async () => {
   for (const driver of [createSqlJsAsyncDriver]) {
+    it("preserves physical indexes whose logical names end in _sort_key", async () => {
+      const debug = vi.fn();
+      const db = new DB(await driver({ debug }));
+      await execAsync(db.loadTables([suffixNamedIndexTable]));
+      await execAsync(
+        db.insert(suffixNamedIndexTable, [
+          { id: "task-b", title: "B" },
+          { id: "task-a", title: "A" },
+        ]),
+      );
+      debug.mockClear();
+
+      await execAsync(db.loadTables([suffixNamedIndexTable]));
+
+      expect(
+        debug.mock.calls.some(([event]) =>
+          event.normalizedSql.startsWith("DROP INDEX"),
+        ),
+      ).toBe(false);
+      await expect(
+        execAsync(
+          db.intervalScan(suffixNamedIndexTable, "byTitle_sort_key", [{}]),
+        ),
+      ).resolves.toEqual([
+        { id: "task-a", title: "A" },
+        { id: "task-b", title: "B" },
+      ]);
+    });
+
     it("keeps SQL diagnostics silent by default", async () => {
       const logSpy = vi
         .spyOn(console, "log")

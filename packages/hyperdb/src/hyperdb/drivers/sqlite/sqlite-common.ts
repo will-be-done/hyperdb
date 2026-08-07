@@ -13,9 +13,12 @@ import {
   encodeValueForStorage,
 } from "../../storage/codec";
 import {
+  getPersistentIndexPlan,
+  isPrimaryKeyBackedIndex,
+} from "../persistent-index-plan";
+import {
   encodeSqliteSortKeyTuple,
   getSqliteSortKeyTuple,
-  type SqliteSortKeyMode,
 } from "./sqlite-sort-key";
 
 export type SqlValue = number | string | Uint8Array | null;
@@ -25,6 +28,8 @@ export const CHUNK_SIZE = 12000;
 export const SQL_BIND_PARAM_LIMIT = 900;
 
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const SQLITE_SORT_KEY_SUFFIX = "_sort_key_v2";
+export const LEGACY_SQLITE_SORT_KEY_SUFFIX = "_sort_key";
 
 export function chunkArray<T>(array: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -35,7 +40,8 @@ export function chunkArray<T>(array: T[], size: number): T[][] {
 }
 
 export function getSqliteInsertChunkSize(tableDef: TableDefinition): number {
-  const columnCount = 2 + Object.keys(tableDef.indexes).length;
+  const columnCount =
+    2 + getPersistentIndexPlan(tableDef).physicalIndexes.length;
   return Math.max(1, Math.floor(SQL_BIND_PARAM_LIMIT / columnCount));
 }
 
@@ -63,7 +69,7 @@ export function assertSafeTableDefinition(tableDef: TableDefinition): void {
 
 export function sqliteIndexSortKeyColumn(indexName: string): string {
   assertSafeIdentifier("Index name", indexName);
-  const columnName = `idx_${indexName}_sort_key`;
+  const columnName = `idx_${indexName}${SQLITE_SORT_KEY_SUFFIX}`;
   assertSafeIdentifier("Sort-key column name", columnName);
   return columnName;
 }
@@ -74,51 +80,36 @@ export function sqliteIndexIdentifier(
 ): string {
   assertSafeIdentifier("Table name", tableName);
   assertSafeIdentifier("Index name", indexName);
-  const indexIdentifier = `idx_${tableName}_${indexName}_sort_key`;
+  const indexIdentifier = `idx_${tableName}_${indexName}${SQLITE_SORT_KEY_SUFFIX}`;
   assertSafeIdentifier("SQLite index name", indexIdentifier);
   return indexIdentifier;
 }
 
 export function isSqliteSortKeyColumn(columnName: string): boolean {
-  return columnName.startsWith("idx_") && columnName.endsWith("_sort_key");
-}
-
-export function sqliteIndexSortColumns(
-  tableDef: TableDefinition,
-  indexName: string,
-): string[] {
-  const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
-
-  const cols = indexDef.cols.map(String);
-  if (indexDef.type !== "uniqhash" && cols[cols.length - 1] !== "id") {
-    cols.push("id");
-  }
-  return cols;
-}
-
-export function sqliteIndexSortKeyMode(
-  tableDef: TableDefinition,
-  indexName: string,
-): SqliteSortKeyMode {
-  const indexDef = tableDef.indexes[indexName];
-  return indexDef?.type === "btree" && isSchemalessTable(tableDef)
-    ? "stored"
-    : "scan";
+  return (
+    columnName.startsWith("idx_") &&
+    (columnName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
+      columnName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+  );
 }
 
 export function getSqliteIndexSortKeyValue(
   tableDef: TableDefinition,
   indexName: string,
   row: Row,
-): string | null {
+): Uint8Array | null {
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
-  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
+  if (!physicalIndex) {
+    throw new Error(`Index ${indexName} uses the primary-key access path`);
+  }
+  const sortColumns = physicalIndex.sortColumns;
   const includeMissing =
     indexDef.type === "btree" && isSchemalessTable(tableDef);
-  const mode = sqliteIndexSortKeyMode(tableDef, indexName);
+  const mode = physicalIndex.mode;
   const tuple = getSqliteSortKeyTuple(row, sortColumns, includeMissing);
 
   return tuple ? encodeSqliteSortKeyTuple(tuple, mode) : null;
@@ -133,8 +124,8 @@ export function buildRowInsertParams(
   return [
     storageRow.id,
     JSON.stringify(storageRow),
-    ...Object.keys(tableDef.indexes).map((indexName) =>
-      getSqliteIndexSortKeyValue(tableDef, indexName, storageRow),
+    ...getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
+      getSqliteIndexSortKeyValue(tableDef, physicalIndex.name, storageRow),
     ),
   ];
 }
@@ -159,6 +150,12 @@ function validateHashBounds(
 ): void {
   const indexColumn = indexColumns.join(", ");
 
+  if (bounds.length === 0 || bounds.some((bound) => !bound.gte)) {
+    throw new Error(
+      `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
+    );
+  }
+
   for (const bound of bounds) {
     if (
       (bound.gt !== undefined && bound.gt.length > 0) ||
@@ -171,7 +168,6 @@ function validateHashBounds(
 
     if (
       !bound.lte ||
-      !bound.gte ||
       bound.lte.length !== indexColumns.length ||
       bound.gte.length !== indexColumns.length
     ) {
@@ -213,6 +209,18 @@ function isExactSortKeyBound(bound: {
   );
 }
 
+function joinBalancedOr(expressions: readonly string[]): string {
+  if (expressions.length === 0) {
+    throw new Error("Cannot join an empty list of SQL expressions");
+  }
+  if (expressions.length === 1) return expressions[0]!;
+
+  const middle = Math.ceil(expressions.length / 2);
+  return `(${joinBalancedOr(expressions.slice(0, middle))} OR ${joinBalancedOr(
+    expressions.slice(middle),
+  )})`;
+}
+
 export function buildSortKeyWhereClause(
   indexName: string,
   tableName: string,
@@ -227,18 +235,34 @@ export function buildSortKeyWhereClause(
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
   const filterColumns = indexDef.cols.map(String);
-  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
-  const mode = sqliteIndexSortKeyMode(tableDef, indexName);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 
   if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
     validateHashBounds(indexName, filterColumns, rawBounds);
   }
 
-  const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
+  if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
+    const ids = rawBounds.map((bound) => bound.gte?.[0]);
+    if (ids.some((id) => typeof id !== "string")) {
+      throw new Error(`Primary-key index ${indexName} requires string IDs`);
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    return {
+      where: `WHERE id IN (${placeholders})`,
+      params: ids,
+    };
+  }
+
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
+  if (!physicalIndex) throw new Error(`Physical index ${indexName} not found`);
+  const sortColumns = physicalIndex.sortColumns;
+  const mode = physicalIndex.mode;
+
+  const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
   const params: any[] = [];
   const rangeConditions: string[] = [];
-  const exactSortKeys: string[] = [];
+  const exactSortKeys: Uint8Array[] = [];
   let hasUnboundedRange = false;
 
   for (const rawBound of rawBounds) {
@@ -255,7 +279,7 @@ export function buildSortKeyWhereClause(
     }
 
     const current: string[] = [];
-    const currentParams: string[] = [];
+    const currentParams: Uint8Array[] = [];
 
     if (bound.gte) {
       current.push(`${sortKeyColumn} >= ?`);
@@ -291,12 +315,12 @@ export function buildSortKeyWhereClause(
     if (exactSortKeys.length > 0) {
       const placeholders = exactSortKeys.map(() => "?").join(", ");
       conditions.push(
-        `(${sortKeyColumn} IN (${placeholders}) OR ${rangeConditions.join(
-          " OR ",
+        `(${sortKeyColumn} IN (${placeholders}) OR ${joinBalancedOr(
+          rangeConditions,
         )})`,
       );
     } else {
-      conditions.push(`(${rangeConditions.join(" OR ")})`);
+      conditions.push(joinBalancedOr(rangeConditions));
     }
   } else if (exactSortKeys.length > 0) {
     const placeholders = exactSortKeys.map(() => "?").join(", ");
@@ -326,7 +350,14 @@ export function buildOrderClause(
     return "";
   }
 
-  return `ORDER BY ${sqliteIndexSortKeyColumn(indexName)} ${
+  if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
+    return "";
+  }
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
+  if (!physicalIndex) return "";
+
+  return `ORDER BY ${sqliteIndexSortKeyColumn(physicalIndex.name)} ${
     reverse ? "DESC" : "ASC"
   }`;
 }
@@ -335,8 +366,8 @@ export function buildInsertSQL(
   tableDef: TableDefinition,
   valueCount: number,
 ): string {
-  const indexColumns = Object.keys(tableDef.indexes).map((indexName) =>
-    sqliteIndexSortKeyColumn(indexName),
+  const indexColumns = getPersistentIndexPlan(tableDef).physicalIndexes.map(
+    (physicalIndex) => sqliteIndexSortKeyColumn(physicalIndex.name),
   );
   const columns = ["id", "data", ...indexColumns];
   const rowPlaceholders = `(${columns.map(() => "?").join(", ")})`;
@@ -382,8 +413,8 @@ export function buildSelectSQL(
 }
 
 export function createTableSQL(tableDef: TableDefinition): string {
-  const sortKeyColumns = Object.keys(tableDef.indexes).map(
-    (indexName) => `${sqliteIndexSortKeyColumn(indexName)} TEXT`,
+  const sortKeyColumns = getPersistentIndexPlan(tableDef).physicalIndexes.map(
+    (physicalIndex) => `${sqliteIndexSortKeyColumn(physicalIndex.name)} BLOB`,
   );
   const sql = `
     CREATE TABLE IF NOT EXISTS ${tableDef.tableName} (
@@ -403,14 +434,16 @@ export function createIndexSQL(
   indexName: string,
 ): string {
   const tableName = tableDef.tableName;
-  const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
+  if (!physicalIndex) throw new Error(`Physical index ${indexName} not found`);
 
-  const sortKeyColumn = sqliteIndexSortKeyColumn(indexName);
-  const indexIdentifier = sqliteIndexIdentifier(tableName, indexName);
-  const unique = indexDef.type === "uniqhash" ? "UNIQUE " : "";
-  const indexColumns =
-    indexDef.type === "uniqhash" ? sortKeyColumn : `${sortKeyColumn}, id`;
+  const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
+  const indexIdentifier = sqliteIndexIdentifier(tableName, physicalIndex.name);
+  const unique = physicalIndex.unique ? "UNIQUE " : "";
+  const indexColumns = physicalIndex.unique
+    ? sortKeyColumn
+    : `${sortKeyColumn}, id`;
   const sql = `
     CREATE ${unique}INDEX IF NOT EXISTS ${indexIdentifier}
     ON ${tableName}(${indexColumns})
@@ -432,7 +465,7 @@ export function addSortKeyColumnSQL(
   sortKeyColumn: string,
 ): string {
   assertSafeIdentifier("Sort-key column name", sortKeyColumn);
-  const sql = `ALTER TABLE ${tableName} ADD COLUMN ${sortKeyColumn} TEXT`
+  const sql = `ALTER TABLE ${tableName} ADD COLUMN ${sortKeyColumn} BLOB`
     .trim()
     .replace(/\n+/g, " ");
 

@@ -11,6 +11,7 @@ import type { HyperDB } from "../../core/contracts";
 import { DB } from "../../runtime/db";
 import { HybridDB } from "../../runtime/hybrid-db";
 import { BptreeInmemDriver } from "../inmemory/bptree-inmem-driver";
+import { getSqliteIndexSortKeyValue } from "../sqlite/sqlite-common";
 import { defineTable } from "../../schema/table";
 import { v } from "../../schema/values";
 import {
@@ -70,7 +71,7 @@ type GetAllRecordsHost = {
 
 type RawStoredRecord = {
   row: Record<string, unknown>;
-  indexes: Record<string, string>;
+  indexes: Record<string, ArrayBuffer>;
 };
 
 function spyOnGetAllRecords<T extends object>(prototype: T) {
@@ -159,7 +160,14 @@ describe("IdbDriver", () => {
         $hyperdbType: "bigint",
         value: "42",
       });
-      expect(stored.indexes.byCount).toEqual(expect.any(String));
+      expect(stored.indexes.byCount).toBeInstanceOf(ArrayBuffer);
+      expect(new Uint8Array(stored.indexes.byCount)).toEqual(
+        getSqliteIndexSortKeyValue(rawRowsTable, "byCount", {
+          id: "row-1",
+          count: 42n,
+          bytes,
+        }),
+      );
     } finally {
       rawDb.close();
       await deleteDatabase(dbName);
@@ -813,6 +821,42 @@ describe("IdbDriver", () => {
       getSpy.mockRestore();
       indexGetAllSpy.mockRestore();
     }
+  });
+
+  it("validates and deduplicates primary-key equality scans", async () => {
+    const db = await createDB();
+    await execAsync(db.loadTables([tasksTable]));
+    const task = {
+      id: "task-1",
+      title: "First",
+      projectId: "project-1",
+      rank: 1,
+    };
+    await execAsync(db.insert(tasksTable, [task]));
+
+    await expect(
+      execAsync(
+        db.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).resolves.toEqual([task]);
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [{ eq: [{ col: "title", val: "First" }] }],
+          {},
+        ),
+      ),
+    ).rejects.toThrow("Primary-key index byId requires string IDs");
+    await expect(
+      execAsync(
+        db.intervalScan(tasksTable, "byId", [{ eq: [{ col: "id", val: 1 }] }]),
+      ),
+    ).rejects.toThrow("Primary-key index byId requires string IDs");
   });
 
   it("rolls back duplicate insert batches without stale index entries", async () => {

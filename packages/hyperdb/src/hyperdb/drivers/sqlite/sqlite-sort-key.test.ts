@@ -22,8 +22,13 @@ function compareEncodedTuples(
   const encodedLeft = encodeSqliteSortKeyTuple(left, mode);
   const encodedRight = encodeSqliteSortKeyTuple(right, mode);
 
-  if (encodedLeft < encodedRight) return -1;
-  if (encodedLeft > encodedRight) return 1;
+  const length = Math.min(encodedLeft.length, encodedRight.length);
+  for (let index = 0; index < length; index++) {
+    if (encodedLeft[index]! < encodedRight[index]!) return -1;
+    if (encodedLeft[index]! > encodedRight[index]!) return 1;
+  }
+  if (encodedLeft.length < encodedRight.length) return -1;
+  if (encodedLeft.length > encodedRight.length) return 1;
   return 0;
 }
 
@@ -52,6 +57,16 @@ describe("SqliteSortKey", () => {
         "a",
         "aa",
         "b",
+        "\u0000",
+        "\u007e",
+        "\u007f",
+        "\u07ff",
+        "\u0800",
+        "\ud7ff",
+        "\ud800",
+        "\ufffe",
+        "\uffff",
+        "𐀀",
         new Uint8Array([]),
         new Uint8Array([0]),
         new Uint8Array([0, 1]),
@@ -69,7 +84,7 @@ describe("SqliteSortKey", () => {
     });
 
     it("folds undefined into the null scan key", () => {
-      expect(encodeSqliteSortKeyTuple([undefined], "scan")).toBe(
+      expect(encodeSqliteSortKeyTuple([undefined], "scan")).toEqual(
         encodeSqliteSortKeyTuple([null], "scan"),
       );
     });
@@ -87,7 +102,7 @@ describe("SqliteSortKey", () => {
 
       expect(
         encodeSqliteSortKeyTuple([new Uint8Array(buffer, 1, 2)], "scan"),
-      ).toBe(
+      ).toEqual(
         encodeSqliteSortKeyTuple(
           [{ $hyperdbType: "bytes", value: [1, 2] }],
           "scan",
@@ -127,6 +142,16 @@ describe("SqliteSortKey", () => {
         "a",
         "aa",
         "b",
+        "\u0000",
+        "\u007e",
+        "\u007f",
+        "\u07ff",
+        "\u0800",
+        "\ud7ff",
+        "\ud800",
+        "\ufffe",
+        "\uffff",
+        "𐀀",
         new Uint8Array([]),
         new Uint8Array([0]),
         new Uint8Array([0, 1]),
@@ -162,7 +187,7 @@ describe("SqliteSortKey", () => {
 
     it("keeps missing and null distinct in stored keys", () => {
       expect(compareEncodedTuples([undefined], [null], "stored")).toBe(-1);
-      expect(encodeSqliteSortKeyTuple([undefined], "stored")).not.toBe(
+      expect(encodeSqliteSortKeyTuple([undefined], "stored")).not.toEqual(
         encodeSqliteSortKeyTuple([null], "stored"),
       );
     });
@@ -170,7 +195,7 @@ describe("SqliteSortKey", () => {
     it("encodes equivalent storage wrappers to equivalent sort keys", () => {
       const buffer = new Uint8Array([9, 1, 2, 8]).buffer;
 
-      expect(encodeSqliteSortKeyTuple([1n], "stored")).toBe(
+      expect(encodeSqliteSortKeyTuple([1n], "stored")).toEqual(
         encodeSqliteSortKeyTuple(
           [{ $hyperdbType: "bigint", value: "1" }],
           "stored",
@@ -178,7 +203,7 @@ describe("SqliteSortKey", () => {
       );
       expect(
         encodeSqliteSortKeyTuple([new Uint8Array(buffer, 1, 2)], "stored"),
-      ).toBe(
+      ).toEqual(
         encodeSqliteSortKeyTuple(
           [{ $hyperdbType: "bytes", value: [1, 2] }],
           "stored",
@@ -198,7 +223,7 @@ describe("SqliteSortKey", () => {
         { $hyperdbType: "bytes", value: "AQI=" },
         { $hyperdbType: "arrayBuffer", value: [Number.NaN] },
       ]) {
-        expect(encodeSqliteSortKeyTuple([value], "stored")).not.toBe(
+        expect(encodeSqliteSortKeyTuple([value], "stored")).not.toEqual(
           validBytesKey,
         );
       }
@@ -249,6 +274,14 @@ describe("SqliteSortKey", () => {
         );
       }
     }
+  });
+
+  it("uses a compact binary representation for ordinary strings", () => {
+    const value = "checklist_items:00000000-0000-0000-0000-000000000000";
+    const encoded = encodeSqliteSortKeyTuple([value], "scan");
+
+    expect(encoded).toBeInstanceOf(Uint8Array);
+    expect(encoded.length).toBeLessThan(value.length * 2);
   });
 
   describe("getSqliteSortKeyTuple", () => {

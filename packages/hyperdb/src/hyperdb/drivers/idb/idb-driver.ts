@@ -20,17 +20,20 @@ import { convertWhereToBound } from "../../core/query/bounds";
 import type { TableDefinition } from "../../schema/table";
 import { decodeValueFromStorage } from "../../storage/codec";
 import {
+  getPersistentIndexPlan,
+  getPersistentIndexSortKeyMode,
+  isPrimaryKeyBackedIndex,
+} from "../persistent-index-plan";
+import {
   assertSafeTableDefinition,
   getSqliteIndexSortKeyValue,
-  sqliteIndexSortColumns,
-  sqliteIndexSortKeyMode,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
 
 type NativeStoredRecord = {
   id: string;
   row: unknown;
-  indexes: Record<string, string>;
+  indexes: Record<string, ArrayBuffer>;
 };
 
 type StoredTableMetadata = {
@@ -130,7 +133,7 @@ const OLD_ROWS_STORE = "rows";
 const OLD_INDEX_ENTRIES_STORE = "indexEntries";
 const TABLE_METADATA_STORE = "tableMetadata";
 const TABLE_STORE_PREFIX = "hyperdb:";
-const TABLE_INDEX_SIGNATURE_VERSION = 4;
+const TABLE_INDEX_SIGNATURE_VERSION = 5;
 const IDB_READ_BATCH_SIZE = 1000;
 const STALE_CONNECTION_MESSAGE =
   "IndexedDB connection is stale; reopen the driver";
@@ -314,6 +317,10 @@ function validateHashBounds(
   }
 }
 
+function toIdbSortKey(sortKey: Uint8Array): ArrayBuffer {
+  return Uint8Array.from(sortKey).buffer;
+}
+
 function createSortKeyRanges(
   factory: IDBFactory,
   tableDef: TableDefinition,
@@ -324,8 +331,10 @@ function createSortKeyRanges(
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
   const filterColumns = indexDef.cols.map(String);
-  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
-  const mode = sqliteIndexSortKeyMode(tableDef, indexName);
+  const sortColumns =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName)
+      ?.sortColumns ?? filterColumns;
+  const mode = getPersistentIndexSortKeyMode(tableDef, indexName);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 
   if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
@@ -343,14 +352,14 @@ function createSortKeyRanges(
     };
 
     const lowerSortKey = bound.gte
-      ? encodeSqliteSortKeyTuple(bound.gte, mode)
+      ? toIdbSortKey(encodeSqliteSortKeyTuple(bound.gte, mode))
       : bound.gt
-        ? encodeSqliteSortKeyTuple(bound.gt, mode)
+        ? toIdbSortKey(encodeSqliteSortKeyTuple(bound.gt, mode))
         : undefined;
     const upperSortKey = bound.lte
-      ? encodeSqliteSortKeyTuple(bound.lte, mode)
+      ? toIdbSortKey(encodeSqliteSortKeyTuple(bound.lte, mode))
       : bound.lt
-        ? encodeSqliteSortKeyTuple(bound.lt, mode)
+        ? toIdbSortKey(encodeSqliteSortKeyTuple(bound.lt, mode))
         : undefined;
 
     if (lowerSortKey !== undefined && upperSortKey !== undefined) {
@@ -400,17 +409,6 @@ function isIdOnlyIndex(tableDef: TableDefinition, indexName: string): boolean {
   return indexDef?.cols.length === 1 && String(indexDef.cols[0]) === "id";
 }
 
-function isUnfilteredClauses(clauses: WhereClause[]): boolean {
-  return clauses.every(
-    (clause) =>
-      (!clause.eq || clause.eq.length === 0) &&
-      (!clause.gte || clause.gte.length === 0) &&
-      (!clause.gt || clause.gt.length === 0) &&
-      (!clause.lte || clause.lte.length === 0) &&
-      (!clause.lt || clause.lt.length === 0),
-  );
-}
-
 function exactIdFromClauses(clauses: WhereClause[]): string | undefined {
   if (clauses.length !== 1) return undefined;
   const [clause] = clauses;
@@ -428,6 +426,7 @@ function exactIdFromClauses(clauses: WhereClause[]): string | undefined {
 }
 
 function sortAndLimitRecords(
+  factory: IDBFactory,
   records: NativeStoredRecord[],
   indexName: string,
   selectOptions: SelectOptions,
@@ -435,8 +434,12 @@ function sortAndLimitRecords(
   records.sort((left, right) => {
     const leftSortKey = left.indexes[indexName];
     const rightSortKey = right.indexes[indexName];
-    if (leftSortKey < rightSortKey) return -1;
-    if (leftSortKey > rightSortKey) return 1;
+    const sortKeyComparison = compareIdbKeys(
+      factory,
+      leftSortKey,
+      rightSortKey,
+    );
+    if (sortKeyComparison !== 0) return sortKeyComparison;
     if (left.id < right.id) return -1;
     if (left.id > right.id) return 1;
     return 0;
@@ -468,19 +471,27 @@ function indexKeyPath(indexName: string): string {
 }
 
 function indexIsUnique(tableDef: TableDefinition, indexName: string): boolean {
-  return tableDef.indexes[indexName]?.type === "uniqhash";
+  return (
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName)?.unique ??
+    false
+  );
 }
 
 function createNativeRecordFromRow(
   tableDef: TableDefinition,
   row: Row,
 ): NativeStoredRecord {
-  const indexes: Record<string, string> = {};
+  const indexes: Record<string, ArrayBuffer> = {};
 
-  for (const indexName of Object.keys(tableDef.indexes)) {
-    const sortKey = getSqliteIndexSortKeyValue(tableDef, indexName, row);
+  for (const physicalIndex of getPersistentIndexPlan(tableDef)
+    .physicalIndexes) {
+    const sortKey = getSqliteIndexSortKeyValue(
+      tableDef,
+      physicalIndex.name,
+      row,
+    );
     if (sortKey !== null) {
-      indexes[indexName] = sortKey;
+      indexes[physicalIndex.name] = toIdbSortKey(sortKey);
     }
   }
 
@@ -881,29 +892,45 @@ async function performScan(
         });
         return result;
       }
-
-      if (isUnfilteredClauses(clauses) && selectOptions.limit === undefined) {
-        const records = await getAllRecords<NativeStoredRecord>(
-          factory,
-          store,
-          undefined,
-          {
-            direction,
-          },
-        );
-        const result = records.map(decodeStoredRecord);
-        emitIdbDebug(debug, "scan", startedAt, {
-          txId,
-          traceContext: options.traceContext,
-          tableName,
-          indexName,
-          rowCount: result.length,
-        });
-        return result;
-      }
     }
 
-    const index = store.index(indexName);
+    if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
+      const ids = new Set<string>();
+      for (const clause of clauses) {
+        for (const condition of clause.eq ?? []) {
+          if (condition.col !== "id" || typeof condition.val !== "string") {
+            throw new Error(
+              `Primary-key index ${indexName} requires string IDs`,
+            );
+          }
+          ids.add(condition.val);
+        }
+      }
+      const records = (
+        await Promise.all(
+          [...ids].map((id) =>
+            requestToPromise<NativeStoredRecord | undefined>(store.get(id)),
+          ),
+        )
+      ).filter((record): record is NativeStoredRecord => record !== undefined);
+      const result = records
+        .slice(0, selectOptions.limit)
+        .map(decodeStoredRecord);
+      emitIdbDebug(debug, "scan", startedAt, {
+        txId,
+        traceContext: options.traceContext,
+        tableName,
+        indexName,
+        rowCount: result.length,
+      });
+      return result;
+    }
+
+    const physicalIndex =
+      getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
+    if (!physicalIndex)
+      throw new Error(`Physical index ${indexName} not found`);
+    const index = store.index(physicalIndex.name);
     const ranges = createSortKeyRanges(factory, tableDef, indexName, clauses);
     const canPushLimit = ranges.length === 1;
     const records: NativeStoredRecord[] = [];
@@ -925,7 +952,12 @@ async function performScan(
       );
     }
 
-    const sorted = sortAndLimitRecords(records, indexName, selectOptions);
+    const sorted = sortAndLimitRecords(
+      factory,
+      records,
+      physicalIndex.name,
+      selectOptions,
+    );
     const result = sorted.map(decodeStoredRecord);
 
     emitIdbDebug(debug, "scan", startedAt, {
@@ -1635,7 +1667,11 @@ export class IdbDriver implements DBDriver {
 
       const tx = this.db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
-      const expectedIndexes = new Set(Object.keys(tableDef.indexes));
+      const expectedIndexes = new Set(
+        getPersistentIndexPlan(tableDef).physicalIndexes.map(
+          (physicalIndex) => physicalIndex.name,
+        ),
+      );
       const actualIndexes = Array.from(store.indexNames);
       let storeNeedsUpgrade = actualIndexes.length !== expectedIndexes.size;
 
@@ -1875,7 +1911,11 @@ function applySchemaUpgrade(
     const store = db.objectStoreNames.contains(storeName)
       ? tx.objectStore(storeName)
       : db.createObjectStore(storeName, { keyPath: "id" });
-    const expectedIndexes = new Set(Object.keys(tableDef.indexes));
+    const expectedIndexes = new Set(
+      getPersistentIndexPlan(tableDef).physicalIndexes.map(
+        (physicalIndex) => physicalIndex.name,
+      ),
+    );
 
     for (const indexName of Array.from(store.indexNames)) {
       if (
