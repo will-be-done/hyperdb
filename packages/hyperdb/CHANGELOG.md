@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.4.4
+
+### Patch Changes
+
+- a003875: Improve work with indexes
+
 ## 0.4.3
 
 ### Patch Changes
