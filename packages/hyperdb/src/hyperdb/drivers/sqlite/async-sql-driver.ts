@@ -6,6 +6,7 @@ import type { DBCmd } from "../../commands/async";
 import { unwrapCb } from "../../commands/async";
 import { execAsync } from "../../core/executor";
 import { cloneDeep } from "../../utils/toolkit";
+import { getPersistentIndexPlan } from "../persistent-index-plan";
 import {
   buildSortKeyWhereClause,
   buildOrderClause,
@@ -24,7 +25,6 @@ import {
   sqliteIndexSortKeyColumn,
   sqliteIndexIdentifier,
   isSqliteSortKeyColumn,
-  persistentPhysicalIndexes,
   SQLITE_SORT_KEY_SUFFIX,
   LEGACY_SQLITE_SORT_KEY_SUFFIX,
   assertSafeTableDefinition,
@@ -794,7 +794,7 @@ export class AsyncSqlDriver implements DBDriver {
     tableDef: TableDefinition<any>,
   ): Set<string> {
     return new Set(
-      persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+      getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
         sqliteIndexSortKeyColumn(physicalIndex.name),
       ),
     );
@@ -802,7 +802,7 @@ export class AsyncSqlDriver implements DBDriver {
 
   private getExpectedIndexNames(tableDef: TableDefinition<any>): Set<string> {
     return new Set(
-      persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+      getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
         sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
       ),
     );
@@ -829,9 +829,8 @@ export class AsyncSqlDriver implements DBDriver {
           indexName,
         );
         const expectedUnique =
-          persistentPhysicalIndexes(tableDef).find(
-            (physicalIndex) => physicalIndex.name === tableIndexName,
-          )?.unique ?? false;
+          getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName)
+            ?.unique ?? false;
         if (unique === expectedUnique) continue;
       }
 
@@ -870,9 +869,8 @@ export class AsyncSqlDriver implements DBDriver {
         tableDef.tableName,
         indexName,
       );
-      const physicalIndex = persistentPhysicalIndexes(tableDef).find(
-        (candidate) => candidate.name === tableIndexName,
-      );
+      const physicalIndex =
+        getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName);
       if (!physicalIndex) continue;
       const expectedUnique = physicalIndex.unique;
       if (unique !== expectedUnique) {
@@ -919,7 +917,8 @@ export class AsyncSqlDriver implements DBDriver {
     tableDef: TableDefinition<any>,
   ): Promise<void> {
     const existingColumns = await this.getTableColumns(tableDef.tableName);
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
       if (existingColumns.has(sortKeyColumn)) continue;
 
@@ -933,7 +932,8 @@ export class AsyncSqlDriver implements DBDriver {
   private async backfillSortKeyColumns(
     tableDef: TableDefinition<any>,
   ): Promise<void> {
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
       const sql = `SELECT data FROM ${tableDef.tableName} WHERE ${sortKeyColumn} IS NULL`;
       const startedAt = this.debug ? nowMs() : 0;
@@ -976,7 +976,8 @@ export class AsyncSqlDriver implements DBDriver {
   }
 
   private async createIndexes(tableDef: TableDefinition<any>): Promise<void> {
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const indexSQL = createIndexSQL(tableDef, physicalIndex.name);
       await runAsyncSQL(this.db, indexSQL, undefined, this.debug);
     }

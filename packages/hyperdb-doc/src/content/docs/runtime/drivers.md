@@ -116,10 +116,9 @@ conflict throws instead of replacing a different row.
 SQLite stores ordered index keys as compact binary BLOBs. The encoding preserves
 HyperDB's JavaScript/UTF-16 comparator, including the final `id` tie-breaker on
 non-unique indexes. The built-in exact `byId` access path uses the SQLite primary
-key directly, rejects empty or malformed equality bounds, and returns each ID
-once when an OR query repeats it. Matching single-column `uniqhash` and B-tree
-declarations share one unique physical index. Older textual sort-key columns are
-replaced and backfilled automatically when tables are loaded.
+key directly. Matching single-column `uniqhash` and B-tree declarations share
+one unique physical index. Older textual sort-key columns are replaced and
+backfilled automatically when tables are loaded.
 
 The SQLite drivers support large batches of OR selector clauses, within
 SQLite's bind-parameter limit, without requiring application code to use tiny
@@ -355,10 +354,9 @@ await asyncDispatch(
 The IndexedDB driver uses the same storage encoding and sort-key ordering as
 the SQLite driver, so data and index semantics are consistent across the two
 persistent backends. Sort keys are stored as compact binary keys. Exact `byId`
-reads use the object-store primary key, validate string-ID equality conditions,
-and deduplicate repeated IDs. Matching single-column `uniqhash`/B-tree
-declarations share one native IndexedDB index. Sort-key format changes rewrite
-index entries atomically during schema refresh.
+reads use the object-store primary key, and matching single-column
+`uniqhash`/B-tree declarations share one native IndexedDB index. Sort-key format
+changes rewrite index entries atomically during schema refresh.
 
 IndexedDB reports selector readonly transaction support,
 so selector reads use `beginTx("readonly")`; when multiple scans happen inside

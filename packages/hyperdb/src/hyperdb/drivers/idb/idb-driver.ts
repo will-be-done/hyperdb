@@ -20,13 +20,13 @@ import { convertWhereToBound } from "../../core/query/bounds";
 import type { TableDefinition } from "../../schema/table";
 import { decodeValueFromStorage } from "../../storage/codec";
 import {
+  getPersistentIndexPlan,
+  getPersistentIndexSortKeyMode,
+  isPrimaryKeyBackedIndex,
+} from "../persistent-index-plan";
+import {
   assertSafeTableDefinition,
   getSqliteIndexSortKeyValue,
-  isPrimaryKeyBackedIndex,
-  persistentPhysicalIndexForLogicalName,
-  persistentPhysicalIndexes,
-  sqliteIndexSortColumns,
-  sqliteIndexSortKeyMode,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
 
@@ -331,8 +331,10 @@ function createSortKeyRanges(
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
   const filterColumns = indexDef.cols.map(String);
-  const sortColumns = sqliteIndexSortColumns(tableDef, indexName);
-  const mode = sqliteIndexSortKeyMode(tableDef, indexName);
+  const sortColumns =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName)
+      ?.sortColumns ?? filterColumns;
+  const mode = getPersistentIndexSortKeyMode(tableDef, indexName);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 
   if (indexDef.type === "hash" || indexDef.type === "uniqhash") {
@@ -470,9 +472,8 @@ function indexKeyPath(indexName: string): string {
 
 function indexIsUnique(tableDef: TableDefinition, indexName: string): boolean {
   return (
-    persistentPhysicalIndexes(tableDef).find(
-      (physicalIndex) => physicalIndex.name === indexName,
-    )?.unique ?? false
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName)?.unique ??
+    false
   );
 }
 
@@ -482,7 +483,8 @@ function createNativeRecordFromRow(
 ): NativeStoredRecord {
   const indexes: Record<string, ArrayBuffer> = {};
 
-  for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+  for (const physicalIndex of getPersistentIndexPlan(tableDef)
+    .physicalIndexes) {
     const sortKey = getSqliteIndexSortKeyValue(
       tableDef,
       physicalIndex.name,
@@ -924,10 +926,8 @@ async function performScan(
       return result;
     }
 
-    const physicalIndex = persistentPhysicalIndexForLogicalName(
-      tableDef,
-      indexName,
-    );
+    const physicalIndex =
+      getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
     if (!physicalIndex)
       throw new Error(`Physical index ${indexName} not found`);
     const index = store.index(physicalIndex.name);
@@ -1668,7 +1668,7 @@ export class IdbDriver implements DBDriver {
       const tx = this.db.transaction(storeName, "readonly");
       const store = tx.objectStore(storeName);
       const expectedIndexes = new Set(
-        persistentPhysicalIndexes(tableDef).map(
+        getPersistentIndexPlan(tableDef).physicalIndexes.map(
           (physicalIndex) => physicalIndex.name,
         ),
       );
@@ -1912,7 +1912,7 @@ function applySchemaUpgrade(
       ? tx.objectStore(storeName)
       : db.createObjectStore(storeName, { keyPath: "id" });
     const expectedIndexes = new Set(
-      persistentPhysicalIndexes(tableDef).map(
+      getPersistentIndexPlan(tableDef).physicalIndexes.map(
         (physicalIndex) => physicalIndex.name,
       ),
     );

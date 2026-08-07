@@ -46,10 +46,6 @@ Use `uniqhash` when an exact value must identify at most one row. Use a B-tree
 index when you need ranges, ordering, ordered full-table scans, preloading, or
 multi-column keys.
 
-Every `uniqhash` read requires at least one exact equality branch. Empty,
-unbounded, and range-only branches are rejected. When OR branches repeat the
-same exact `byId` value, the row is returned once.
-
 ### What can be indexed
 
 Index columns must be [indexable value types](/database/data-types/#indexable-values)
@@ -126,7 +122,6 @@ columns`).
 - Two equality conditions on one column (`Multiple equality conditions`).
 - A column that isn't in the index (`Column 'X' not found in index`).
 - No usable conditions at all.
-- An empty or non-equality `uniqhash` query.
 
 ## Ordering with indexes
 

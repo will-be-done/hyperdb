@@ -4,6 +4,7 @@ import type { DBDriver, DBDriverTX } from "../../core/driver";
 import type { TableDefinition } from "../../schema/table";
 import type { DBCmd } from "../../commands/async";
 import { cloneDeep } from "../../utils/toolkit";
+import { getPersistentIndexPlan } from "../persistent-index-plan";
 import {
   buildSortKeyWhereClause,
   buildOrderClause,
@@ -22,7 +23,6 @@ import {
   sqliteIndexSortKeyColumn,
   sqliteIndexIdentifier,
   isSqliteSortKeyColumn,
-  persistentPhysicalIndexes,
   SQLITE_SORT_KEY_SUFFIX,
   LEGACY_SQLITE_SORT_KEY_SUFFIX,
   assertSafeTableDefinition,
@@ -397,7 +397,7 @@ export class SqlDriver implements DBDriver {
     tableDef: TableDefinition<any>,
   ): Set<string> {
     return new Set(
-      persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+      getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
         sqliteIndexSortKeyColumn(physicalIndex.name),
       ),
     );
@@ -405,7 +405,7 @@ export class SqlDriver implements DBDriver {
 
   private getExpectedIndexNames(tableDef: TableDefinition<any>): Set<string> {
     return new Set(
-      persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+      getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
         sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
       ),
     );
@@ -432,9 +432,8 @@ export class SqlDriver implements DBDriver {
           indexName,
         );
         const expectedUnique =
-          persistentPhysicalIndexes(tableDef).find(
-            (physicalIndex) => physicalIndex.name === tableIndexName,
-          )?.unique ?? false;
+          getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName)
+            ?.unique ?? false;
         if (unique === expectedUnique) continue;
       }
 
@@ -468,9 +467,8 @@ export class SqlDriver implements DBDriver {
         tableDef.tableName,
         indexName,
       );
-      const physicalIndex = persistentPhysicalIndexes(tableDef).find(
-        (candidate) => candidate.name === tableIndexName,
-      );
+      const physicalIndex =
+        getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName);
       if (!physicalIndex) continue;
       const expectedUnique = physicalIndex.unique;
       if (unique !== expectedUnique) {
@@ -503,7 +501,8 @@ export class SqlDriver implements DBDriver {
 
   private addMissingSortKeyColumns(tableDef: TableDefinition<any>): void {
     const existingColumns = this.getTableColumns(tableDef.tableName);
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
       if (existingColumns.has(sortKeyColumn)) continue;
 
@@ -515,7 +514,8 @@ export class SqlDriver implements DBDriver {
 
   // NOTE: backwards compatibility. Remove after v1.
   private backfillSortKeyColumns(tableDef: TableDefinition<any>): void {
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
       const q = this.db.prepare(
         `SELECT data FROM ${tableDef.tableName} WHERE ${sortKeyColumn} IS NULL`,
@@ -536,7 +536,8 @@ export class SqlDriver implements DBDriver {
   }
 
   private createIndexes(tableDef: TableDefinition<any>): void {
-    for (const physicalIndex of persistentPhysicalIndexes(tableDef)) {
+    for (const physicalIndex of getPersistentIndexPlan(tableDef)
+      .physicalIndexes) {
       const indexSQL = createIndexSQL(tableDef, physicalIndex.name);
       this.db.exec(indexSQL);
     }

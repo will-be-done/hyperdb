@@ -13,9 +13,12 @@ import {
   encodeValueForStorage,
 } from "../../storage/codec";
 import {
+  getPersistentIndexPlan,
+  isPrimaryKeyBackedIndex,
+} from "../persistent-index-plan";
+import {
   encodeSqliteSortKeyTuple,
   getSqliteSortKeyTuple,
-  type SqliteSortKeyMode,
 } from "./sqlite-sort-key";
 
 export type SqlValue = number | string | Uint8Array | null;
@@ -37,7 +40,8 @@ export function chunkArray<T>(array: T[], size: number): T[][] {
 }
 
 export function getSqliteInsertChunkSize(tableDef: TableDefinition): number {
-  const columnCount = 2 + persistentPhysicalIndexes(tableDef).length;
+  const columnCount =
+    2 + getPersistentIndexPlan(tableDef).physicalIndexes.length;
   return Math.max(1, Math.floor(SQL_BIND_PARAM_LIMIT / columnCount));
 }
 
@@ -47,113 +51,6 @@ export function getSqliteDeleteChunkSize(): number {
 
 function isSchemalessTable(tableDef: TableDefinition): boolean {
   return !tableDef.schemaValidator;
-}
-
-export type PersistentPhysicalIndex = {
-  name: string;
-  logicalNames: string[];
-  cols: string[];
-  sortColumns: string[];
-  type: "hash" | "uniqhash" | "btree";
-  unique: boolean;
-  mode: SqliteSortKeyMode;
-};
-
-const persistentPhysicalIndexCache = new WeakMap<
-  TableDefinition,
-  PersistentPhysicalIndex[]
->();
-
-export function isPrimaryKeyBackedIndex(
-  tableDef: TableDefinition,
-  indexName: string,
-): boolean {
-  const indexDef = tableDef.indexes[indexName];
-  return (
-    indexDef !== undefined &&
-    (indexDef.type === "hash" || indexDef.type === "uniqhash") &&
-    indexDef.cols.length === 1 &&
-    String(indexDef.cols[0]) === "id"
-  );
-}
-
-export function persistentPhysicalIndexes(
-  tableDef: TableDefinition,
-): PersistentPhysicalIndex[] {
-  const cached = persistentPhysicalIndexCache.get(tableDef);
-  if (cached) return cached;
-
-  const logicalNames = Object.keys(tableDef.indexes)
-    .filter((indexName) => !isPrimaryKeyBackedIndex(tableDef, indexName))
-    .sort();
-  const consumed = new Set<string>();
-  const physicalIndexes: PersistentPhysicalIndex[] = [];
-
-  for (const logicalName of logicalNames) {
-    if (consumed.has(logicalName)) continue;
-    const indexDef = tableDef.indexes[logicalName]!;
-    const cols = indexDef.cols.map(String);
-    const mode = sqliteIndexSortKeyMode(tableDef, logicalName);
-    const aliases = [logicalName];
-
-    if (indexDef.type === "btree" || indexDef.type === "uniqhash") {
-      for (const candidateName of logicalNames) {
-        if (candidateName === logicalName || consumed.has(candidateName)) {
-          continue;
-        }
-        const candidate = tableDef.indexes[candidateName]!;
-        const candidateColumns = candidate.cols.map(String);
-        const isUniqueOrderedPair =
-          new Set([indexDef.type, candidate.type]).size === 2 &&
-          (indexDef.type === "uniqhash" || candidate.type === "uniqhash") &&
-          (indexDef.type === "btree" || candidate.type === "btree");
-        const sameColumns =
-          cols.length === candidateColumns.length &&
-          cols.every((column, index) => column === candidateColumns[index]);
-
-        if (
-          isUniqueOrderedPair &&
-          sameColumns &&
-          mode === sqliteIndexSortKeyMode(tableDef, candidateName)
-        ) {
-          aliases.push(candidateName);
-        }
-      }
-    }
-
-    aliases.sort();
-    for (const alias of aliases) consumed.add(alias);
-    const unique = aliases.some(
-      (alias) => tableDef.indexes[alias]?.type === "uniqhash",
-    );
-    const physicalType = unique ? "uniqhash" : indexDef.type;
-    const sortColumns = [...cols];
-    if (!unique && sortColumns[sortColumns.length - 1] !== "id") {
-      sortColumns.push("id");
-    }
-
-    physicalIndexes.push({
-      name: aliases[0]!,
-      logicalNames: aliases,
-      cols,
-      sortColumns,
-      type: physicalType,
-      unique,
-      mode,
-    });
-  }
-
-  persistentPhysicalIndexCache.set(tableDef, physicalIndexes);
-  return physicalIndexes;
-}
-
-export function persistentPhysicalIndexForLogicalName(
-  tableDef: TableDefinition,
-  indexName: string,
-): PersistentPhysicalIndex | undefined {
-  return persistentPhysicalIndexes(tableDef).find((physicalIndex) =>
-    physicalIndex.logicalNames.includes(indexName),
-  );
 }
 
 export function assertSafeIdentifier(kind: string, value: string): void {
@@ -196,30 +93,6 @@ export function isSqliteSortKeyColumn(columnName: string): boolean {
   );
 }
 
-export function sqliteIndexSortColumns(
-  tableDef: TableDefinition,
-  indexName: string,
-): string[] {
-  const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
-
-  const physicalIndex = persistentPhysicalIndexForLogicalName(
-    tableDef,
-    indexName,
-  );
-  return physicalIndex?.sortColumns ?? indexDef.cols.map(String);
-}
-
-export function sqliteIndexSortKeyMode(
-  tableDef: TableDefinition,
-  indexName: string,
-): SqliteSortKeyMode {
-  const indexDef = tableDef.indexes[indexName];
-  return indexDef?.type === "btree" && isSchemalessTable(tableDef)
-    ? "stored"
-    : "scan";
-}
-
 export function getSqliteIndexSortKeyValue(
   tableDef: TableDefinition,
   indexName: string,
@@ -228,10 +101,8 @@ export function getSqliteIndexSortKeyValue(
   const indexDef = tableDef.indexes[indexName];
   if (!indexDef) throw new Error(`Index ${indexName} not found`);
 
-  const physicalIndex = persistentPhysicalIndexForLogicalName(
-    tableDef,
-    indexName,
-  );
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
   if (!physicalIndex) {
     throw new Error(`Index ${indexName} uses the primary-key access path`);
   }
@@ -253,7 +124,7 @@ export function buildRowInsertParams(
   return [
     storageRow.id,
     JSON.stringify(storageRow),
-    ...persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+    ...getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
       getSqliteIndexSortKeyValue(tableDef, physicalIndex.name, storageRow),
     ),
   ];
@@ -382,10 +253,8 @@ export function buildSortKeyWhereClause(
     };
   }
 
-  const physicalIndex = persistentPhysicalIndexForLogicalName(
-    tableDef,
-    indexName,
-  );
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
   if (!physicalIndex) throw new Error(`Physical index ${indexName} not found`);
   const sortColumns = physicalIndex.sortColumns;
   const mode = physicalIndex.mode;
@@ -484,10 +353,8 @@ export function buildOrderClause(
   if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
     return "";
   }
-  const physicalIndex = persistentPhysicalIndexForLogicalName(
-    tableDef,
-    indexName,
-  );
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
   if (!physicalIndex) return "";
 
   return `ORDER BY ${sqliteIndexSortKeyColumn(physicalIndex.name)} ${
@@ -499,7 +366,7 @@ export function buildInsertSQL(
   tableDef: TableDefinition,
   valueCount: number,
 ): string {
-  const indexColumns = persistentPhysicalIndexes(tableDef).map(
+  const indexColumns = getPersistentIndexPlan(tableDef).physicalIndexes.map(
     (physicalIndex) => sqliteIndexSortKeyColumn(physicalIndex.name),
   );
   const columns = ["id", "data", ...indexColumns];
@@ -546,7 +413,7 @@ export function buildSelectSQL(
 }
 
 export function createTableSQL(tableDef: TableDefinition): string {
-  const sortKeyColumns = persistentPhysicalIndexes(tableDef).map(
+  const sortKeyColumns = getPersistentIndexPlan(tableDef).physicalIndexes.map(
     (physicalIndex) => `${sqliteIndexSortKeyColumn(physicalIndex.name)} BLOB`,
   );
   const sql = `
@@ -567,10 +434,8 @@ export function createIndexSQL(
   indexName: string,
 ): string {
   const tableName = tableDef.tableName;
-  const physicalIndex = persistentPhysicalIndexForLogicalName(
-    tableDef,
-    indexName,
-  );
+  const physicalIndex =
+    getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
   if (!physicalIndex) throw new Error(`Physical index ${indexName} not found`);
 
   const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
