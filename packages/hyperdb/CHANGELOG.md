@@ -1,5 +1,12 @@
 # @will-be-done/hyperdb
 
+## 0.4.3
+
+### Patch Changes
+
+- 53a6916: catch firefox idb tx finish
+- 0678e07: add long redonly tx
+
 ## 0.4.2
 
 ### Patch Changes

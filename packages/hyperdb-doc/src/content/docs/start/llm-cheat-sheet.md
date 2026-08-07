@@ -88,12 +88,6 @@ Every table needs a string `id`. HyperDB creates a built-in `uniqhash` index
 named `byId`. Add B-tree indexes for sorted/range reads and `uniqhash` indexes
 for exact values that must be unique.
 
-Index names cannot be reused. HyperDB rejects duplicate definitions with the
-same type/columns and rejects B-tree definitions where one column list is a
-strict prefix of another. A `uniqhash` and B-tree may intentionally use the same
-single column; SQLite and IndexedDB share one unique physical index for them.
-Non-unique ordered indexes always use `id` as their final tie-breaker.
-
 ```ts
 import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
 
@@ -296,10 +290,6 @@ Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure
 in-memory apps can skip `HybridDB` and use `new SubscribableDB(new DB(new
 BptreeInmemDriver()))`.
-
-SQLite drivers support large batches of OR selector clauses up to SQLite's
-bind-parameter limit; application batching does not need to account for the
-SQLite expression-depth limit.
 
 HybridDB readwrite transactions commit to the in-memory cache first and flush
 their final row changes to the persistent primary afterward. This keeps

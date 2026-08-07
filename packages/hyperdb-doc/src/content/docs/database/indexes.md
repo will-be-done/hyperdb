@@ -52,17 +52,6 @@ Index columns must be [indexable value types](/database/data-types/#indexable-va
 and must exist in the schema. Index definitions are validated at `defineTable`
 time, so an illegal index throws immediately rather than failing at query time.
 
-Index names and shapes must be unambiguous. HyperDB rejects two indexes with
-the same type and columns, and rejects B-tree definitions where one column list
-is a strict prefix of another, such as `['name']` together with
-`['name', 'createdAt']`. Keep the index that represents the query ordering your
-application intends to expose.
-
-You may declare a `uniqhash` and a B-tree over the same single column when the
-application needs both unique equality lookup and ordered/range access. The
-persistent SQLite and IndexedDB drivers share one unique physical access path
-for that pair while both logical names remain available to selectors.
-
 ## Querying a composite index
 
 A composite B-tree index stores rows ordered by its columns left to right, like a
@@ -130,10 +119,6 @@ index's key order and `order("desc")` returns them reversed, with no separate so
 step. Choose your index column order to match how you want to read the data. For
 the `byProjectOrder` index, tasks come back ordered by `orderToken` within a
 project for free.
-
-HyperDB appends `id` as the final key component of every non-unique B-tree that
-does not already end in `id`. Equal user-defined values therefore still have a
-strict, deterministic order across drivers.
 
 ## OR branches
 
