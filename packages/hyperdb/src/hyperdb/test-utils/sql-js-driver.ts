@@ -6,6 +6,7 @@ import {
   type AsyncSqlDriverOptions,
   type AsyncSQLiteDB,
   type SQLStatement,
+  type SqlDriverOptions,
 } from "../drivers/sqlite";
 import type { SqlValue } from "../drivers/sqlite";
 
@@ -32,50 +33,56 @@ export type InspectableSqlDatabase = {
   };
 };
 
-export async function createSqlJsDriver(): Promise<SqlDriver> {
+export async function createSqlJsDriver(
+  options: SqlDriverOptions = {},
+): Promise<SqlDriver> {
   const SQL = await initSqlJs({
     locateFile: () => normalizeWasmUrl(wasmUrl),
   });
   const sqldb: InspectableSqlDatabase = new SQL.Database();
 
-  return createSqlJsDriverFromDatabase(sqldb).driver;
+  return createSqlJsDriverFromDatabase(sqldb, undefined, options).driver;
 }
 
 export function createSqlJsDriverFromDatabase(
   sqldb: InspectableSqlDatabase,
   execLog?: string[],
+  options: SqlDriverOptions = {},
 ): { driver: SqlDriver; sqldb: InspectableSqlDatabase; execLog: string[] } {
   const log = execLog ?? [];
 
   return {
     sqldb,
     execLog: log,
-    driver: new SqlDriver({
-      exec(sql: string, params?: SqlValue[]): void {
-        log.push(sql);
-        sqldb.exec(sql, params);
+    driver: new SqlDriver(
+      {
+        exec(sql: string, params?: SqlValue[]): void {
+          log.push(sql);
+          sqldb.exec(sql, params);
+        },
+        prepare(sql: string): SQLStatement {
+          log.push(sql);
+          const prepared = sqldb.prepare(sql);
+
+          return {
+            values(values: SqlValue[]): SqlValue[][] {
+              prepared.bind(values);
+
+              const result: SqlValue[][] = [];
+              while (prepared.step()) {
+                result.push(prepared.get());
+              }
+
+              return result;
+            },
+            finalize(): void {
+              prepared.free();
+            },
+          };
+        },
       },
-      prepare(sql: string): SQLStatement {
-        log.push(sql);
-        const prepared = sqldb.prepare(sql);
-
-        return {
-          values(values: SqlValue[]): SqlValue[][] {
-            prepared.bind(values);
-
-            const result: SqlValue[][] = [];
-            while (prepared.step()) {
-              result.push(prepared.get());
-            }
-
-            return result;
-          },
-          finalize(): void {
-            prepared.free();
-          },
-        };
-      },
-    }),
+      options,
+    ),
   };
 }
 
@@ -122,7 +129,9 @@ export async function createSqlJsAsyncDriver(
   return new AsyncSqlDriver(new SqlJsAsyncAdapter(sqldb), options);
 }
 
-export async function createInspectableSqlDriver(): Promise<{
+export async function createInspectableSqlDriver(
+  options: SqlDriverOptions = {},
+): Promise<{
   driver: SqlDriver;
   sqldb: InspectableSqlDatabase;
   execLog: string[];
@@ -132,5 +141,5 @@ export async function createInspectableSqlDriver(): Promise<{
   });
   const sqldb: InspectableSqlDatabase = new SQL.Database();
 
-  return createSqlJsDriverFromDatabase(sqldb);
+  return createSqlJsDriverFromDatabase(sqldb, undefined, options);
 }

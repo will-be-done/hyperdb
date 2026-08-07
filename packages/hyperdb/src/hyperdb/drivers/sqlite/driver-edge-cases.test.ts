@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DB } from "../../runtime/db";
 import { SyncDB } from "../../runtime/sync-db";
 import {
@@ -9,10 +9,11 @@ import {
 import {
   createInspectableSqlDriver,
   createSqlJsDriver,
+  createSqlJsDriverFromDatabase,
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
-import type { SqlValue } from "./sqlite-common";
+import type { SqliteRowCompression, SqlValue } from "./sqlite-common";
 
 const noSideTablesTable = defineTable("driverEdgeNoSideTables", {
   id: v.string(),
@@ -81,7 +82,88 @@ function sqliteRows(sqldb: InspectableSqlDatabase, sql: string): SqlValue[][] {
   return sqldb.exec(sql)[0]?.values ?? [];
 }
 
+function testRowCompression(): SqliteRowCompression {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  return {
+    compress: vi.fn((data: string) => encoder.encode(data).reverse()),
+    decompress: vi.fn((data: Uint8Array) =>
+      decoder.decode(Uint8Array.from(data).reverse()),
+    ),
+  };
+}
+
 describe("SQLite driver edge case regressions", () => {
+  it("stores compressed rows as BLOBs while retaining legacy TEXT reads", async () => {
+    const initial = await createInspectableSqlDriver();
+    const initialDb = new SyncDB(new DB(initial.driver));
+    initialDb.loadTables([noSideTablesTable]);
+    initialDb.insert(noSideTablesTable, [{ id: "legacy", title: "Legacy" }]);
+
+    const rowCompression = testRowCompression();
+    const compressedDriver = createSqlJsDriverFromDatabase(
+      initial.sqldb,
+      undefined,
+      { rowCompression },
+    ).driver;
+    const compressedDb = new SyncDB(new DB(compressedDriver));
+    compressedDb.loadTables([noSideTablesTable]);
+    compressedDb.insert(noSideTablesTable, [
+      { id: "compressed", title: "Compressed" },
+    ]);
+
+    expect(
+      sqliteRows(
+        initial.sqldb,
+        "SELECT id, typeof(data) FROM driverEdgeNoSideTables ORDER BY id",
+      ),
+    ).toEqual([
+      ["compressed", "blob"],
+      ["legacy", "text"],
+    ]);
+    expect(
+      compressedDb.intervalScan(noSideTablesTable, "byTitle", [{}]),
+    ).toEqual([
+      { id: "compressed", title: "Compressed" },
+      { id: "legacy", title: "Legacy" },
+    ]);
+    expect(rowCompression.compress).toHaveBeenCalledTimes(1);
+    expect(rowCompression.decompress).toHaveBeenCalledTimes(1);
+  });
+
+  it("declares BLOB row storage for compression-enabled new tables", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver({
+      rowCompression: testRowCompression(),
+    });
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+
+    const dataColumn = sqliteRows(
+      sqldb,
+      "PRAGMA table_info(driverEdgeNoSideTables)",
+    ).find((row) => row[1] === "data");
+    expect(dataColumn?.[2]).toBe("BLOB");
+  });
+
+  it("fails clearly when compressed rows are opened without their codec", async () => {
+    const initial = await createInspectableSqlDriver({
+      rowCompression: testRowCompression(),
+    });
+    const initialDb = new SyncDB(new DB(initial.driver));
+    initialDb.loadTables([noSideTablesTable]);
+    initialDb.insert(noSideTablesTable, [
+      { id: "compressed", title: "Compressed" },
+    ]);
+
+    const plainDriver = createSqlJsDriverFromDatabase(initial.sqldb).driver;
+    const plainDb = new SyncDB(new DB(plainDriver));
+    plainDb.loadTables([noSideTablesTable]);
+
+    expect(() =>
+      plainDb.intervalScan(noSideTablesTable, "byTitle", [{}]),
+    ).toThrow("no rowCompression codec is configured");
+  });
+
   it("backfills sort keys for rows that predate a new index", async () => {
     const { driver, execLog } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));

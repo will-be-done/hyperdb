@@ -28,6 +28,8 @@ import {
   assertSafeTableDefinition,
   buildRowInsertParams,
   parseSqliteStoredRow,
+  assertValidRowCompression,
+  type SqliteRowCompression,
   type SqlValue,
   type BindParams,
 } from "./sqlite-common";
@@ -49,6 +51,7 @@ function performInsertOperation(
   db: SQLiteDB,
   tableDef: TableDefinition,
   values: Row[],
+  rowCompression?: SqliteRowCompression,
 ): void {
   if (values.length === 0) return;
 
@@ -58,7 +61,7 @@ function performInsertOperation(
 
     db.exec(
       insertSQL,
-      chunk.flatMap((v) => buildRowInsertParams(tableDef, v)),
+      chunk.flatMap((v) => buildRowInsertParams(tableDef, v, rowCompression)),
     );
   }
 }
@@ -67,6 +70,7 @@ function performUpsertOperation(
   db: SQLiteDB,
   tableDef: TableDefinition,
   values: Row[],
+  rowCompression?: SqliteRowCompression,
 ): void {
   if (values.length === 0) return;
 
@@ -75,7 +79,7 @@ function performUpsertOperation(
     tableDef,
     values.map((value) => value.id),
   );
-  performInsertOperation(db, tableDef, values);
+  performInsertOperation(db, tableDef, values, rowCompression);
 }
 
 function performDeleteOperation(
@@ -99,6 +103,7 @@ function performScanOperation(
   indexName: string,
   clauses: WhereClause[],
   selectOptions: SelectOptions,
+  rowCompression?: SqliteRowCompression,
 ): unknown[] {
   const tableDef = tableDefinitions.get(table);
   if (!tableDef) {
@@ -122,7 +127,7 @@ function performScanOperation(
 
   try {
     const values = q.values(params);
-    return values.map((row) => parseSqliteStoredRow(row[0] as string));
+    return values.map((row) => parseSqliteStoredRow(row[0]!, rowCompression));
 
     // while (q.step()) {
     //   const res = q.get();
@@ -150,16 +155,19 @@ class SqlDriverTx implements DBDriverTX {
   private committed = false;
   private rolledback = false;
   private onFinish: () => void;
+  private rowCompression: SqliteRowCompression | undefined;
 
   constructor(
     db: SQLiteDB,
     tableDefinitions: Map<string, TableDefinition>,
     onFinish: () => void,
+    rowCompression: SqliteRowCompression | undefined,
   ) {
     this.db = db;
     this.tableDefinitions = tableDefinitions;
     this.db.exec("BEGIN TRANSACTION");
     this.onFinish = onFinish;
+    this.rowCompression = rowCompression;
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -189,7 +197,12 @@ class SqlDriverTx implements DBDriverTX {
     }
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef) throw new Error(`Table ${tableName} not found`);
-    performInsertOperation(this.db, tableDef, values as Row[]);
+    performInsertOperation(
+      this.db,
+      tableDef,
+      values as Row[],
+      this.rowCompression,
+    );
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
@@ -198,7 +211,7 @@ class SqlDriverTx implements DBDriverTX {
     }
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef) throw new Error(`Table ${tableName} not found`);
-    performUpsertOperation(this.db, tableDef, values);
+    performUpsertOperation(this.db, tableDef, values, this.rowCompression);
   }
 
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
@@ -227,17 +240,25 @@ class SqlDriverTx implements DBDriverTX {
       indexName,
       clauses,
       selectOptions,
+      this.rowCompression,
     );
   }
 }
+
+export type SqlDriverOptions = {
+  rowCompression?: SqliteRowCompression;
+};
 
 export class SqlDriver implements DBDriver {
   private db: SQLiteDB;
   private tableDefinitions = new Map<string, TableDefinition>();
   private isInTransaction = false;
+  private rowCompression: SqliteRowCompression | undefined;
 
-  constructor(db: SQLiteDB) {
+  constructor(db: SQLiteDB, options: SqlDriverOptions = {}) {
     this.db = db;
+    assertValidRowCompression(options.rowCompression);
+    this.rowCompression = options.rowCompression;
   }
 
   canUseReadonlyTransactionsForSelectors(): boolean {
@@ -254,6 +275,7 @@ export class SqlDriver implements DBDriver {
       this.db,
       this.tableDefinitions,
       () => (this.isInTransaction = false),
+      this.rowCompression,
     );
   }
 
@@ -270,7 +292,12 @@ export class SqlDriver implements DBDriver {
     try {
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      performInsertOperation(this.db, tableDef, values as Row[]);
+      performInsertOperation(
+        this.db,
+        tableDef,
+        values as Row[],
+        this.rowCompression,
+      );
       this.db.exec("COMMIT");
     } catch (error) {
       rollbackQuietly(this.db);
@@ -288,7 +315,7 @@ export class SqlDriver implements DBDriver {
     try {
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      performUpsertOperation(this.db, tableDef, values);
+      performUpsertOperation(this.db, tableDef, values, this.rowCompression);
       this.db.exec("COMMIT");
     } catch (error) {
       rollbackQuietly(this.db);
@@ -331,6 +358,7 @@ export class SqlDriver implements DBDriver {
       indexName,
       clauses,
       selectOptions,
+      this.rowCompression,
     );
   }
 
@@ -369,7 +397,7 @@ export class SqlDriver implements DBDriver {
   }
 
   private createTable(tableDef: TableDefinition<any>): void {
-    const sql = createTableSQL(tableDef);
+    const sql = createTableSQL(tableDef, this.rowCompression !== undefined);
     this.db.exec(sql);
   }
 
@@ -525,7 +553,10 @@ export class SqlDriver implements DBDriver {
           performUpsertOperation(
             this.db,
             tableDef,
-            chunk.map(([data]) => parseSqliteStoredRow(String(data))),
+            chunk.map(([data]) =>
+              parseSqliteStoredRow(data!, this.rowCompression),
+            ),
+            this.rowCompression,
           );
         }
       } finally {

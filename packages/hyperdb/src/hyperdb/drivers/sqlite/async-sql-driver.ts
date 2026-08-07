@@ -29,9 +29,14 @@ import {
   LEGACY_SQLITE_SORT_KEY_SUFFIX,
   assertSafeTableDefinition,
   buildRowInsertParams,
+  buildRowInsertParamsAsync,
   parseSqliteStoredRow,
+  parseSqliteStoredRowAsync,
+  hasAsyncRowCompression,
+  assertValidRowCompression,
   type BindParams,
   type SqlValue,
+  type SqliteRowCompression,
 } from "./sqlite-common";
 import AwaitLock from "../../utils/await-lock";
 
@@ -66,6 +71,7 @@ export type AsyncSqlDriverDebugEvent = {
 export type AsyncSqlDriverDebug = (event: AsyncSqlDriverDebugEvent) => void;
 export type AsyncSqlDriverOptions = {
   debug?: AsyncSqlDriverDebug;
+  rowCompression?: SqliteRowCompression;
 };
 
 export function formatAsyncSqlDriverDebugEvent(
@@ -184,6 +190,7 @@ function* performAsyncInsertOperation(
   tableDef: TableDefinition,
   values: Row[],
   debug?: AsyncSqlDriverDebug,
+  rowCompression?: SqliteRowCompression,
 ): Generator<DBCmd, void> {
   if (values.length === 0) return;
 
@@ -191,7 +198,17 @@ function* performAsyncInsertOperation(
     const allValues = chunkArray(values, getSqliteInsertChunkSize(tableDef));
     for (const chunk of allValues) {
       const insertSQL = buildInsertSQL(tableDef, chunk.length);
-      const params = chunk.flatMap((v) => buildRowInsertParams(tableDef, v));
+      const params = hasAsyncRowCompression(rowCompression)
+        ? (
+            await Promise.all(
+              chunk.map((value) =>
+                buildRowInsertParamsAsync(tableDef, value, rowCompression),
+              ),
+            )
+          ).flat()
+        : chunk.flatMap((value) =>
+            buildRowInsertParams(tableDef, value, rowCompression),
+          );
       const startedAt = debug ? nowMs() : 0;
 
       try {
@@ -225,6 +242,7 @@ function* performAsyncUpsertOperation(
   tableDef: TableDefinition,
   values: Row[],
   debug?: AsyncSqlDriverDebug,
+  rowCompression?: SqliteRowCompression,
 ): Generator<DBCmd, void> {
   if (values.length === 0) return;
 
@@ -234,7 +252,13 @@ function* performAsyncUpsertOperation(
     values.map((value) => value.id),
     debug,
   );
-  yield* performAsyncInsertOperation(db, tableDef, values, debug);
+  yield* performAsyncInsertOperation(
+    db,
+    tableDef,
+    values,
+    debug,
+    rowCompression,
+  );
 }
 
 function* performAsyncDeleteOperation(
@@ -285,6 +309,7 @@ function* performAsyncScanOperation(
   clauses: WhereClause[],
   selectOptions: SelectOptions,
   debug?: AsyncSqlDriverDebug,
+  rowCompression?: SqliteRowCompression,
 ): Generator<DBCmd, unknown[]> {
   return yield* unwrapCb(async () => {
     const { where, params } = buildSortKeyWhereClause(
@@ -306,9 +331,19 @@ function* performAsyncScanOperation(
     const stmt = await db.prepare(sql);
 
     try {
-      for (const row of await stmt.values(params)) {
-        const record = parseSqliteStoredRow(row[0] as string);
-        result.push(record);
+      const rows = await stmt.values(params);
+      if (hasAsyncRowCompression(rowCompression)) {
+        result.push(
+          ...(await Promise.all(
+            rows.map((row) =>
+              parseSqliteStoredRowAsync(row[0]!, rowCompression),
+            ),
+          )),
+        );
+      } else {
+        result.push(
+          ...rows.map((row) => parseSqliteStoredRow(row[0]!, rowCompression)),
+        );
       }
       emitAsyncSqlDebug(debug, "scan", sql, startedAt, () => ({
         tableName: table,
@@ -347,17 +382,20 @@ class AsyncSqlDriverTx implements DBDriverTX {
   private onFinish: () => void;
   private queryLock = new AwaitLock();
   private debug: AsyncSqlDriverDebug | undefined;
+  private rowCompression: SqliteRowCompression | undefined;
 
   constructor(
     db: AsyncSQLiteDB,
     tableDefinitions: Map<string, TableDefinition>,
     onFinish: () => void,
     debug: AsyncSqlDriverDebug | undefined,
+    rowCompression: SqliteRowCompression | undefined,
   ) {
     this.db = db;
     this.tableDefinitions = tableDefinitions;
     this.onFinish = onFinish;
     this.debug = debug;
+    this.rowCompression = rowCompression;
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -405,6 +443,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
         tableDef,
         values as Row[],
         this.debug,
+        this.rowCompression,
       );
     } finally {
       this.queryLock.release();
@@ -422,7 +461,13 @@ class AsyncSqlDriverTx implements DBDriverTX {
       }
       const tableDef = this.tableDefinitions.get(tableName);
       if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncUpsertOperation(this.db, tableDef, values, this.debug);
+      yield* performAsyncUpsertOperation(
+        this.db,
+        tableDef,
+        values,
+        this.debug,
+        this.rowCompression,
+      );
     } finally {
       this.queryLock.release();
     }
@@ -468,6 +513,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
         clauses,
         selectOptions,
         this.debug,
+        this.rowCompression,
       );
     } finally {
       this.queryLock.release();
@@ -480,10 +526,13 @@ export class AsyncSqlDriver implements DBDriver {
   private tableDefinitions = new Map<string, TableDefinition>();
   private txAndQueryLock = new AwaitLock();
   private debug: AsyncSqlDriverDebug | undefined;
+  private rowCompression: SqliteRowCompression | undefined;
 
   constructor(db: AsyncSQLiteDB, options: AsyncSqlDriverOptions = {}) {
     this.db = db;
     this.debug = options.debug;
+    assertValidRowCompression(options.rowCompression);
+    this.rowCompression = options.rowCompression;
   }
 
   canUseReadonlyTransactionsForSelectors(): boolean {
@@ -506,6 +555,7 @@ export class AsyncSqlDriver implements DBDriver {
         this.txAndQueryLock.release();
       },
       this.debug,
+      this.rowCompression,
     );
   }
 
@@ -537,6 +587,7 @@ export class AsyncSqlDriver implements DBDriver {
           this.getTableDefinition(tableName),
           values as Row[],
           this.debug,
+          this.rowCompression,
         );
 
         yield* unwrapCb(async () => {
@@ -581,6 +632,7 @@ export class AsyncSqlDriver implements DBDriver {
           this.getTableDefinition(tableName),
           values,
           this.debug,
+          this.rowCompression,
         );
 
         yield* unwrapCb(async () => {
@@ -663,6 +715,7 @@ export class AsyncSqlDriver implements DBDriver {
         clauses,
         selectOptions,
         this.debug,
+        this.rowCompression,
       );
     } finally {
       this.txAndQueryLock.release();
@@ -716,7 +769,7 @@ export class AsyncSqlDriver implements DBDriver {
   }
 
   private async createTable(tableDef: TableDefinition<any>): Promise<void> {
-    const sql = createTableSQL(tableDef);
+    const sql = createTableSQL(tableDef, this.rowCompression !== undefined);
     await runAsyncSQL(this.db, sql, undefined, this.debug);
   }
 
@@ -946,12 +999,22 @@ export class AsyncSqlDriver implements DBDriver {
           rowCount: rows.length,
         }));
         for (const chunk of chunkArray(rows, CHUNK_SIZE)) {
+          const decodedRows = hasAsyncRowCompression(this.rowCompression)
+            ? await Promise.all(
+                chunk.map(([data]) =>
+                  parseSqliteStoredRowAsync(data!, this.rowCompression!),
+                ),
+              )
+            : chunk.map(([data]) =>
+                parseSqliteStoredRow(data!, this.rowCompression),
+              );
           await execAsync(
             performAsyncUpsertOperation(
               this.db,
               tableDef,
-              chunk.map(([data]) => parseSqliteStoredRow(String(data))),
+              decodedRows,
               this.debug,
+              this.rowCompression,
             ),
           );
         }

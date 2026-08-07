@@ -5,6 +5,7 @@ import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
 import { createSqlJsAsyncDriver } from "../../test-utils/sql-js-driver";
 import { formatAsyncSqlDriverDebugEvent } from "./async-sql-driver";
+import type { SqliteRowCompression } from "./sqlite-common";
 
 type Task = {
   type: "task";
@@ -39,8 +40,119 @@ const uniqhashMigrationTableV2 = defineTable("asyncUniqhashMigration", {
   email: v.string(),
 }).index("byEmail", ["email"], { type: "uniqhash" });
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const reverseEncode = (data: string) => encoder.encode(data).reverse();
+const reverseDecode = (data: Uint8Array) =>
+  decoder.decode(Uint8Array.from(data).reverse());
+
 describe("db", async () => {
   for (const driver of [createSqlJsAsyncDriver]) {
+    it("uses synchronous row compression callbacks without async wrappers", async () => {
+      const rowCompression: SqliteRowCompression = {
+        compress: vi.fn(reverseEncode),
+        decompress: vi.fn(reverseDecode),
+      };
+      const db = new DB(await driver({ rowCompression }));
+
+      await execAsync(db.loadTables([tasksTable]));
+      await execAsync(
+        db.insert(tasksTable, [
+          {
+            id: "task-1",
+            title: "Task 1",
+            state: "todo",
+            projectId: "project-1",
+            orderToken: "a",
+            type: "task",
+            lastToggledAt: 0,
+          },
+        ]),
+      );
+
+      expect(
+        await execAsync(
+          db.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "task-1" }] },
+          ]),
+        ),
+      ).toEqual([
+        {
+          id: "task-1",
+          title: "Task 1",
+          state: "todo",
+          projectId: "project-1",
+          orderToken: "a",
+          type: "task",
+          lastToggledAt: 0,
+        },
+      ]);
+      expect(rowCompression.compress).toHaveBeenCalledTimes(1);
+      expect(rowCompression.decompress).toHaveBeenCalledTimes(1);
+    });
+
+    it("prefers async row compression callbacks when both are provided", async () => {
+      const compress = vi.fn(() => {
+        throw new Error("sync compress should not run");
+      });
+      const decompress = vi.fn(() => {
+        throw new Error("sync decompress should not run");
+      });
+      const compressAsync = vi.fn(async (data: string) => reverseEncode(data));
+      const decompressAsync = vi.fn(async (data: Uint8Array) =>
+        reverseDecode(data),
+      );
+      const db = new DB(
+        await driver({
+          rowCompression: {
+            compress,
+            decompress,
+            compressAsync,
+            decompressAsync,
+          },
+        }),
+      );
+
+      await execAsync(db.loadTables([tasksTable]));
+      await execAsync(
+        db.insert(tasksTable, [
+          {
+            id: "task-1",
+            title: "Task 1",
+            state: "todo",
+            projectId: "project-1",
+            orderToken: "a",
+            type: "task",
+            lastToggledAt: 0,
+          },
+        ]),
+      );
+      await execAsync(
+        db.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      );
+
+      expect(compress).not.toHaveBeenCalled();
+      expect(decompress).not.toHaveBeenCalled();
+      expect(compressAsync).toHaveBeenCalledTimes(1);
+      expect(decompressAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects incomplete async row compression callback pairs", async () => {
+      await expect(
+        driver({
+          rowCompression: {
+            compress: reverseEncode,
+            decompress: reverseDecode,
+            compressAsync: async (data: string) => reverseEncode(data),
+          } as SqliteRowCompression,
+        }),
+      ).rejects.toThrow(
+        "rowCompression.compressAsync and decompressAsync must be provided together",
+      );
+    });
+
     it("keeps SQL diagnostics silent by default", async () => {
       const logSpy = vi
         .spyOn(console, "log")

@@ -21,6 +21,23 @@ import {
 export type SqlValue = number | string | Uint8Array | null;
 export type BindParams = SqlValue[] | null;
 
+type SqliteRowCompressionBase = {
+  compress(data: string): Uint8Array;
+  decompress(data: Uint8Array): string;
+};
+
+export type SqliteRowCompression = SqliteRowCompressionBase &
+  (
+    | {
+        compressAsync?: never;
+        decompressAsync?: never;
+      }
+    | {
+        compressAsync(data: string): Promise<Uint8Array>;
+        decompressAsync(data: Uint8Array): Promise<string>;
+      }
+  );
+
 export const CHUNK_SIZE = 12000;
 export const SQL_BIND_PARAM_LIMIT = 900;
 
@@ -247,20 +264,102 @@ export function getSqliteIndexSortKeyValue(
 export function buildRowInsertParams(
   tableDef: TableDefinition,
   row: Row,
+  rowCompression?: SqliteRowCompression,
 ): SqlValue[] {
   const storageRow = encodeValueForStorage(row) as Row;
+  const json = JSON.stringify(storageRow);
 
   return [
     storageRow.id,
-    JSON.stringify(storageRow),
+    rowCompression ? rowCompression.compress(json) : json,
     ...persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
       getSqliteIndexSortKeyValue(tableDef, physicalIndex.name, storageRow),
     ),
   ];
 }
 
-export function parseSqliteStoredRow(data: string): Row {
-  return decodeValueFromStorage(JSON.parse(data)) as Row;
+export async function buildRowInsertParamsAsync(
+  tableDef: TableDefinition,
+  row: Row,
+  rowCompression: SqliteRowCompression,
+): Promise<SqlValue[]> {
+  const storageRow = encodeValueForStorage(row) as Row;
+  const json = JSON.stringify(storageRow);
+  const data = rowCompression.compressAsync
+    ? await rowCompression.compressAsync(json)
+    : rowCompression.compress(json);
+
+  return [
+    storageRow.id,
+    data,
+    ...persistentPhysicalIndexes(tableDef).map((physicalIndex) =>
+      getSqliteIndexSortKeyValue(tableDef, physicalIndex.name, storageRow),
+    ),
+  ];
+}
+
+function compressedStoredRowJson(
+  data: SqlValue,
+  rowCompression?: SqliteRowCompression,
+): string {
+  if (typeof data === "string") return data;
+  if (!(data instanceof Uint8Array)) {
+    throw new Error(`SQLite row data must be TEXT or BLOB, got ${typeof data}`);
+  }
+  if (!rowCompression) {
+    throw new Error(
+      "SQLite row data is compressed, but no rowCompression codec is configured",
+    );
+  }
+  return rowCompression.decompress(data);
+}
+
+export function parseSqliteStoredRow(
+  data: SqlValue,
+  rowCompression?: SqliteRowCompression,
+): Row {
+  return decodeValueFromStorage(
+    JSON.parse(compressedStoredRowJson(data, rowCompression)),
+  ) as Row;
+}
+
+export async function parseSqliteStoredRowAsync(
+  data: SqlValue,
+  rowCompression: SqliteRowCompression,
+): Promise<Row> {
+  if (typeof data === "string") {
+    return decodeValueFromStorage(JSON.parse(data)) as Row;
+  }
+  if (!(data instanceof Uint8Array)) {
+    throw new Error(`SQLite row data must be TEXT or BLOB, got ${typeof data}`);
+  }
+  const json = rowCompression.decompressAsync
+    ? await rowCompression.decompressAsync(data)
+    : rowCompression.decompress(data);
+  return decodeValueFromStorage(JSON.parse(json)) as Row;
+}
+
+export function hasAsyncRowCompression(
+  rowCompression: SqliteRowCompression | undefined,
+): rowCompression is SqliteRowCompression &
+  Required<Pick<SqliteRowCompression, "compressAsync" | "decompressAsync">> {
+  return (
+    rowCompression?.compressAsync !== undefined &&
+    rowCompression.decompressAsync !== undefined
+  );
+}
+
+export function assertValidRowCompression(
+  rowCompression: SqliteRowCompression | undefined,
+): void {
+  if (!rowCompression) return;
+  const hasCompressAsync = rowCompression.compressAsync !== undefined;
+  const hasDecompressAsync = rowCompression.decompressAsync !== undefined;
+  if (hasCompressAsync !== hasDecompressAsync) {
+    throw new Error(
+      "rowCompression.compressAsync and decompressAsync must be provided together",
+    );
+  }
 }
 
 function expandBoundTuple(
@@ -540,14 +639,17 @@ export function buildSelectSQL(
   return sql;
 }
 
-export function createTableSQL(tableDef: TableDefinition): string {
+export function createTableSQL(
+  tableDef: TableDefinition,
+  compressedRows = false,
+): string {
   const sortKeyColumns = persistentPhysicalIndexes(tableDef).map(
     (physicalIndex) => `${sqliteIndexSortKeyColumn(physicalIndex.name)} BLOB`,
   );
   const sql = `
     CREATE TABLE IF NOT EXISTS ${tableDef.tableName} (
       id TEXT PRIMARY KEY,
-      data TEXT NOT NULL
+      data ${compressedRows ? "BLOB" : "TEXT"} NOT NULL
       ${sortKeyColumns.length > 0 ? `, ${sortKeyColumns.join(", ")}` : ""}
     )
   `

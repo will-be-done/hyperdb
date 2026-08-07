@@ -289,3 +289,9 @@ SQLite's expression-depth limit.
 Table definitions reject duplicate index shapes and overlapping B-tree column
 prefixes. Persistent drivers automatically migrate older textual sort keys to
 the binary ordered-key representation when tables are loaded.
+
+SQLite row JSON remains `TEXT` by default. `SqlDriver` and `AsyncSqlDriver` can
+instead receive application-owned `rowCompression` callbacks that encode new
+writes as BLOBs; legacy `TEXT` rows still read normally. HyperDB does not choose
+a compression format or migrate row data, and encoded BLOBs require the same
+codec on later opens.

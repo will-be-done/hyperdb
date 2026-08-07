@@ -301,6 +301,15 @@ SQLite drivers support large batches of OR selector clauses up to SQLite's
 bind-parameter limit; application batching does not need to account for the
 SQLite expression-depth limit.
 
+`SqlDriver` and `AsyncSqlDriver` accept optional `rowCompression` callbacks that
+map row JSON strings to BLOBs and back. Without the option they store JSON as
+`TEXT`. Existing `TEXT` rows remain readable with the option enabled, but BLOB
+rows require the same codec on every later open; HyperDB performs no row-data
+migration. `AsyncSqlDriver` can additionally use a paired `compressAsync` and
+`decompressAsync`, while synchronous callbacks are invoked directly when that
+pair is absent. This option does not affect IndexedDB or SQLite drivers where it
+is not configured.
+
 HybridDB readwrite transactions commit to the in-memory cache first and flush
 their final row changes to the persistent primary afterward. This keeps
 `asyncDispatch` responsive for UI writes. Cached scan intervals keep reading

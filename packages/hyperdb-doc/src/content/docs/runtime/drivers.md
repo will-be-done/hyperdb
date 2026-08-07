@@ -107,6 +107,39 @@ not prepare or emit SQL diagnostic events. Use
 `formatAsyncSqlDriverDebugEvent(event)` when you want the old one-line message
 but need to send it to a custom logger.
 
+SQLite row JSON can optionally be stored as BLOBs through an application-owned
+codec. HyperDB deliberately does not choose a compression format:
+
+```ts
+import {
+  AsyncSqlDriver,
+  type SqliteRowCompression,
+} from "@will-be-done/hyperdb/drivers/sqlite";
+
+const rowCompression: SqliteRowCompression = {
+  compress(json) {
+    return compressToBytes(json);
+  },
+  decompress(bytes) {
+    return decompressToJson(bytes);
+  },
+};
+
+const driver = new AsyncSqlDriver(sqliteDb, { rowCompression });
+```
+
+Without `rowCompression`, row data remains JSON `TEXT`. With it, new writes use
+the codec and are bound as BLOBs; existing `TEXT` rows remain readable. A driver
+without the codec cannot read encoded BLOB rows, so keep the codec stable for the
+lifetime of that database. HyperDB does not migrate existing rows when the
+option is enabled or disabled.
+
+Both callbacks above are synchronous. `AsyncSqlDriver` also accepts a paired
+`compressAsync` and `decompressAsync`; provide both or neither. When the async
+pair is absent, it calls the synchronous callbacks directly without creating
+extra promises. The compression option affects only SQLite drivers on which it
+is explicitly configured; IndexedDB and other SQLite instances are unchanged.
+
 The SQLite storage codec encodes `bigint`, `ArrayBuffer`, and
 typed-array/data-view values around JSON storage so they round-trip exactly.
 `uniqhash` indexes are created as SQLite `UNIQUE` indexes. Upserts delete the
