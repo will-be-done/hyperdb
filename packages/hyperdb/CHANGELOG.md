@@ -1,5 +1,12 @@
 # @will-be-done/hyperdb
 
+## 0.5.0
+
+### Minor Changes
+
+- cdb4b1f: Allow `AsyncSqlDriver` operations to continue after the database rejects the
+  start of a transaction.
+
 ## 0.4.4
 
 ### Patch Changes
