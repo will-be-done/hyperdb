@@ -4,7 +4,10 @@ import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
 import { createSqlJsAsyncDriver } from "../../test-utils/sql-js-driver";
-import { formatAsyncSqlDriverDebugEvent } from "./async-sql-driver";
+import {
+  AsyncSqlDriver,
+  formatAsyncSqlDriverDebugEvent,
+} from "./async-sql-driver";
 
 type Task = {
   type: "task";
@@ -47,6 +50,45 @@ const suffixNamedIndexTable = defineTable("asyncSuffixNamedIndex", {
   .index("uniqueTitle", ["title"], { type: "uniqhash" });
 
 describe("db", async () => {
+  it("releases the transaction lock when BEGIN fails", async () => {
+    const statements: string[] = [];
+    let failNextBegin = true;
+    const driver = new AsyncSqlDriver({
+      async exec(sql) {
+        statements.push(sql);
+        if (sql === "BEGIN TRANSACTION" && failNextBegin) {
+          failNextBegin = false;
+          throw new Error("temporary connection failure");
+        }
+      },
+      prepare() {
+        throw new Error("not used by this test");
+      },
+    });
+
+    await expect(execAsync(driver.beginTx())).rejects.toThrow(
+      "temporary connection failure",
+    );
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const transaction = await Promise.race([
+      execAsync(driver.beginTx()),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("transaction lock was not released")),
+          100,
+        );
+      }),
+    ]).finally(() => clearTimeout(timeout));
+    await execAsync(transaction.rollback());
+
+    expect(statements).toEqual([
+      "BEGIN TRANSACTION",
+      "BEGIN TRANSACTION",
+      "ROLLBACK",
+    ]);
+  });
+
   for (const driver of [createSqlJsAsyncDriver]) {
     it("preserves physical indexes whose logical names end in _sort_key", async () => {
       const debug = vi.fn();

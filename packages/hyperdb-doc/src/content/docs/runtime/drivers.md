@@ -89,6 +89,10 @@ interface AsyncSQLiteDB {
 const driver = new AsyncSqlDriver(sqliteDb);
 ```
 
+If the database rejects `BEGIN TRANSACTION`, `AsyncSqlDriver` releases its
+serialization lock before returning the error, allowing later operations to
+continue.
+
 `AsyncSqlDriver` is quiet by default. For low-level SQL diagnostics, pass a
 `debug` callback:
 

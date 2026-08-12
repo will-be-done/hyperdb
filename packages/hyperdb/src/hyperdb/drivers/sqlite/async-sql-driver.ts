@@ -493,10 +493,12 @@ export class AsyncSqlDriver implements DBDriver {
   *beginTx(): Generator<DBCmd, DBDriverTX> {
     yield* unwrapCb(async () => {
       await this.txAndQueryLock.acquireAsync();
-    });
-
-    yield* unwrapCb(async () => {
-      await runAsyncSQL(this.db, "BEGIN TRANSACTION", undefined, this.debug);
+      try {
+        await runAsyncSQL(this.db, "BEGIN TRANSACTION", undefined, this.debug);
+      } catch (error) {
+        this.txAndQueryLock.release();
+        throw error;
+      }
     });
 
     return new AsyncSqlDriverTx(
