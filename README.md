@@ -173,9 +173,6 @@ export async function createAppDB() {
 }
 ```
 
-`AsyncSqlDriver` remains usable after a database rejects transaction startup;
-later operations are not blocked by the failed `BEGIN TRANSACTION`.
-
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
 reads and writes synchronous, so you can use `useSyncSelector`, `useSyncDispatch`,
