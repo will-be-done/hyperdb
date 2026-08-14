@@ -104,6 +104,7 @@ class SqlJsAsyncAdapter implements AsyncSQLiteDB {
 
   async exec(sql: string, params?: SqlValue[] | null): Promise<void> {
     this.execLog?.push(sql);
+    this.hooks.beforeExec?.(sql);
     this.sqldb.exec(sql, params ?? undefined);
   }
 

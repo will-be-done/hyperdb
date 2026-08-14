@@ -173,11 +173,6 @@ export async function createAppDB() {
 }
 ```
 
-SQLite drivers persist physical-layout signatures in the reserved
-`_hyperdb_schema_metadata` table. Once `loadTables()` has reconciled a schema,
-unchanged definitions use a one-query fast path; definition changes or external
-SQLite schema changes trigger transactional reconciliation.
-
 `AsyncSqlDriver` is also exercised against Turso Database's browser WASM
 engine in the shared driver conformance suite.
 
