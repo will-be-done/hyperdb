@@ -25,6 +25,13 @@ import {
   isSqliteSortKeyColumn,
   SQLITE_SORT_KEY_SUFFIX,
   LEGACY_SQLITE_SORT_KEY_SUFFIX,
+  createSqliteTableSchemaSignature,
+  createSqliteSchemaMetadataTableSQL,
+  selectSqliteSchemaMetadataSQL,
+  selectSqliteSchemaMetadataTableExistsSQL,
+  upsertSqliteSchemaMetadataSQL,
+  isMissingSqliteSchemaMetadataError,
+  sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
   parseSqliteStoredRow,
@@ -341,9 +348,17 @@ export class SqlDriver implements DBDriver {
       assertSafeTableDefinition(tableDef);
     }
 
+    tableDefinitions = cloneDeep(tableDefinitions);
+    if (tableDefinitions.length === 0) return;
+
+    if (this.schemaMetadataMatches(tableDefinitions)) {
+      this.installTableDefinitions(tableDefinitions);
+      return;
+    }
+
     this.db.exec("BEGIN TRANSACTION");
     try {
-      tableDefinitions = cloneDeep(tableDefinitions);
+      this.db.exec(createSqliteSchemaMetadataTableSQL());
       for (const tableDef of tableDefinitions) {
         this.createTable(tableDef);
         const indexUniqueness = this.getGeneratedIndexUniqueness(
@@ -353,18 +368,115 @@ export class SqlDriver implements DBDriver {
           tableDef,
           indexUniqueness,
         );
+        const existingColumns = this.getTableColumns(tableDef.tableName);
         this.dropStaleSortKeyIndexes(tableDef, indexUniqueness);
-        this.dropStaleSortKeyColumns(tableDef);
-        this.addMissingSortKeyColumns(tableDef);
-        this.resetSortKeyColumns(tableDef, reencodedColumns);
+        this.dropStaleSortKeyColumns(tableDef, existingColumns);
+        this.addMissingSortKeyColumns(tableDef, existingColumns);
+        this.resetSortKeyColumns(tableDef, reencodedColumns, existingColumns);
         this.backfillSortKeyColumns(tableDef);
         this.createIndexes(tableDef);
-        this.tableDefinitions.set(tableDef.tableName, tableDef);
       }
+      this.writeSchemaMetadata(tableDefinitions);
       this.db.exec("COMMIT");
+      this.installTableDefinitions(tableDefinitions);
     } catch (error) {
       rollbackQuietly(this.db);
       throw error;
+    }
+  }
+
+  private schemaMetadataMatches(
+    tableDefinitions: TableDefinition<any>[],
+  ): boolean {
+    const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
+    let statement: SQLStatement | undefined;
+
+    try {
+      statement = this.db.prepare(sql);
+      const rows = statement.values(
+        tableDefinitions.map((tableDef) => tableDef.tableName),
+      );
+      const schemaVersion = Number(rows[0]?.[3]);
+      if (!Number.isInteger(schemaVersion)) return false;
+
+      const metadataByTable = new Map(
+        rows
+          .filter((row) => typeof row[0] === "string")
+          .map((row) => [
+            String(row[0]),
+            {
+              signature: String(row[1]),
+              verifiedSchemaVersion: Number(row[2]),
+            },
+          ]),
+      );
+
+      return tableDefinitions.every((tableDef) => {
+        const metadata = metadataByTable.get(tableDef.tableName);
+        return (
+          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
+          metadata.verifiedSchemaVersion === schemaVersion
+        );
+      });
+    } catch (error) {
+      if (isMissingSqliteSchemaMetadataError(error)) return false;
+      statement?.finalize();
+      statement = undefined;
+      try {
+        if (!this.schemaMetadataTableExists()) return false;
+      } catch {
+        // Preserve the original metadata-read error when even the fallback
+        // schema inspection cannot run.
+      }
+      throw error;
+    } finally {
+      statement?.finalize();
+    }
+  }
+
+  private schemaMetadataTableExists(): boolean {
+    const statement = this.db.prepare(
+      selectSqliteSchemaMetadataTableExistsSQL(),
+    );
+    try {
+      return statement.values([]).length > 0;
+    } finally {
+      statement.finalize();
+    }
+  }
+
+  private getSchemaVersion(): number {
+    const statement = this.db.prepare(
+      "SELECT schema_version FROM pragma_schema_version",
+    );
+    try {
+      const schemaVersion = Number(statement.values([])[0]?.[0]);
+      if (!Number.isInteger(schemaVersion)) {
+        throw new Error("SQLite did not return a valid schema version");
+      }
+      return schemaVersion;
+    } finally {
+      statement.finalize();
+    }
+  }
+
+  private writeSchemaMetadata(tableDefinitions: TableDefinition<any>[]): void {
+    const schemaVersion = this.getSchemaVersion();
+    this.db.exec(
+      upsertSqliteSchemaMetadataSQL(tableDefinitions.length),
+      tableDefinitions.flatMap((tableDef) => [
+        tableDef.tableName,
+        createSqliteTableSchemaSignature(tableDef),
+        schemaVersion,
+      ]),
+    );
+  }
+
+  private installTableDefinitions(
+    tableDefinitions: TableDefinition<any>[],
+  ): void {
+    for (const tableDef of tableDefinitions) {
+      this.tableDefinitions.set(tableDef.tableName, tableDef);
     }
   }
 
@@ -373,10 +485,15 @@ export class SqlDriver implements DBDriver {
     this.db.exec(sql);
   }
 
-  private getTableColumns(tableName: string): Set<string> {
+  private getTableColumns(tableName: string): Map<string, string> {
     const q = this.db.prepare(`PRAGMA table_info(${tableName})`);
     try {
-      return new Set(q.values([]).map((row) => String(row[1])));
+      return new Map(
+        q.values([]).map((row) => {
+          const columnName = String(row[1]);
+          return [sqliteIdentifierKey(columnName), columnName];
+        }),
+      );
     } finally {
       q.finalize();
     }
@@ -398,7 +515,7 @@ export class SqlDriver implements DBDriver {
   ): Set<string> {
     return new Set(
       getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
-        sqliteIndexSortKeyColumn(physicalIndex.name),
+        sqliteIdentifierKey(sqliteIndexSortKeyColumn(physicalIndex.name)),
       ),
     );
   }
@@ -406,16 +523,35 @@ export class SqlDriver implements DBDriver {
   private getExpectedIndexNames(tableDef: TableDefinition<any>): Set<string> {
     return new Set(
       getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
-        sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        sqliteIdentifierKey(
+          sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        ),
       ),
     );
   }
 
   private isGeneratedIndexName(tableName: string, indexName: string): boolean {
+    const normalizedIndexName = sqliteIdentifierKey(indexName);
     return (
-      indexName.startsWith(`idx_${tableName}_`) &&
-      (indexName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
-        indexName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+      normalizedIndexName.startsWith(
+        sqliteIdentifierKey(`idx_${tableName}_`),
+      ) &&
+      (normalizedIndexName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
+        normalizedIndexName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+    );
+  }
+
+  private physicalIndexForGeneratedIdentifier(
+    tableDef: TableDefinition<any>,
+    generatedIndexName: string,
+  ) {
+    const normalizedGeneratedIndexName =
+      sqliteIdentifierKey(generatedIndexName);
+    return getPersistentIndexPlan(tableDef).physicalIndexes.find(
+      (physicalIndex) =>
+        sqliteIdentifierKey(
+          sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        ) === normalizedGeneratedIndexName,
     );
   }
 
@@ -426,30 +562,15 @@ export class SqlDriver implements DBDriver {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
     for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      if (expectedIndexes.has(indexName)) {
-        const tableIndexName = this.tableIndexNameFromGenerated(
-          tableDef.tableName,
-          indexName,
-        );
+      if (expectedIndexes.has(sqliteIdentifierKey(indexName))) {
         const expectedUnique =
-          getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName)
+          this.physicalIndexForGeneratedIdentifier(tableDef, indexName)
             ?.unique ?? false;
         if (unique === expectedUnique) continue;
       }
 
       this.db.exec(dropIndexSQL(indexName));
     }
-  }
-
-  private tableIndexNameFromGenerated(
-    tableName: string,
-    generatedIndexName: string,
-  ): string {
-    const indexName = generatedIndexName.slice(`idx_${tableName}_`.length);
-    const suffix = indexName.endsWith(SQLITE_SORT_KEY_SUFFIX)
-      ? SQLITE_SORT_KEY_SUFFIX
-      : LEGACY_SQLITE_SORT_KEY_SUFFIX;
-    return indexName.slice(0, -suffix.length);
   }
 
   // Sort-key columns whose encoding changed because the index flipped between
@@ -463,16 +584,14 @@ export class SqlDriver implements DBDriver {
     const columns: string[] = [];
     for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      const tableIndexName = this.tableIndexNameFromGenerated(
-        tableDef.tableName,
+      const physicalIndex = this.physicalIndexForGeneratedIdentifier(
+        tableDef,
         indexName,
       );
-      const physicalIndex =
-        getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName);
       if (!physicalIndex) continue;
       const expectedUnique = physicalIndex.unique;
       if (unique !== expectedUnique) {
-        columns.push(sqliteIndexSortKeyColumn(tableIndexName));
+        columns.push(sqliteIndexSortKeyColumn(physicalIndex.name));
       }
     }
     return columns;
@@ -481,34 +600,41 @@ export class SqlDriver implements DBDriver {
   private resetSortKeyColumns(
     tableDef: TableDefinition<any>,
     sortKeyColumns: string[],
+    existingColumns: Map<string, string>,
   ): void {
-    const existingColumns = this.getTableColumns(tableDef.tableName);
     for (const sortKeyColumn of sortKeyColumns) {
-      if (!existingColumns.has(sortKeyColumn)) continue;
+      if (!existingColumns.has(sqliteIdentifierKey(sortKeyColumn))) continue;
       this.db.exec(`UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`);
     }
   }
 
-  private dropStaleSortKeyColumns(tableDef: TableDefinition<any>): void {
+  private dropStaleSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    existingColumns: Map<string, string>,
+  ): void {
     const expectedColumns = this.getExpectedSortKeyColumns(tableDef);
-    for (const columnName of this.getTableColumns(tableDef.tableName)) {
+    for (const [normalizedColumnName, columnName] of existingColumns) {
       if (!isSqliteSortKeyColumn(columnName)) continue;
-      if (expectedColumns.has(columnName)) continue;
+      if (expectedColumns.has(normalizedColumnName)) continue;
 
       this.db.exec(dropSortKeyColumnSQL(tableDef.tableName, columnName));
+      existingColumns.delete(normalizedColumnName);
     }
   }
 
-  private addMissingSortKeyColumns(tableDef: TableDefinition<any>): void {
-    const existingColumns = this.getTableColumns(tableDef.tableName);
+  private addMissingSortKeyColumns(
+    tableDef: TableDefinition<any>,
+    existingColumns: Map<string, string>,
+  ): void {
     for (const physicalIndex of getPersistentIndexPlan(tableDef)
       .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
-      if (existingColumns.has(sortKeyColumn)) continue;
+      const normalizedSortKeyColumn = sqliteIdentifierKey(sortKeyColumn);
+      if (existingColumns.has(normalizedSortKeyColumn)) continue;
 
       const sql = addSortKeyColumnSQL(tableDef.tableName, sortKeyColumn);
       this.db.exec(sql);
-      existingColumns.add(sortKeyColumn);
+      existingColumns.set(normalizedSortKeyColumn, sortKeyColumn);
     }
   }
 

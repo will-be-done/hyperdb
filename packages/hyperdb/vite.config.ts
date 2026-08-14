@@ -6,6 +6,15 @@ import { visualizer } from "rollup-plugin-visualizer";
 const shouldAnalyze = process.env.ANALYZE === "true";
 
 export default defineConfig({
+  define: {
+    "process.env.NODE_DEBUG_NATIVE": "false",
+  },
+  server: {
+    headers: {
+      "Cross-Origin-Embedder-Policy": "require-corp",
+      "Cross-Origin-Opener-Policy": "same-origin",
+    },
+  },
   build: {
     lib: {
       entry: {
@@ -46,6 +55,7 @@ export default defineConfig({
     : [],
   test: {
     name: "browser",
+    testTimeout: 120_000,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: [...configDefaults.exclude, "**/*.browser.test.ts", "e2e/**"],
     browser: {

@@ -32,6 +32,11 @@ export type InspectableSqlDatabase = {
   };
 };
 
+export type SqlJsDriverHooks = {
+  beforeExec?: (sql: string) => void;
+  beforePrepare?: (sql: string) => void;
+};
+
 export async function createSqlJsDriver(): Promise<SqlDriver> {
   const SQL = await initSqlJs({
     locateFile: () => normalizeWasmUrl(wasmUrl),
@@ -44,6 +49,7 @@ export async function createSqlJsDriver(): Promise<SqlDriver> {
 export function createSqlJsDriverFromDatabase(
   sqldb: InspectableSqlDatabase,
   execLog?: string[],
+  hooks: SqlJsDriverHooks = {},
 ): { driver: SqlDriver; sqldb: InspectableSqlDatabase; execLog: string[] } {
   const log = execLog ?? [];
 
@@ -53,10 +59,12 @@ export function createSqlJsDriverFromDatabase(
     driver: new SqlDriver({
       exec(sql: string, params?: SqlValue[]): void {
         log.push(sql);
+        hooks.beforeExec?.(sql);
         sqldb.exec(sql, params);
       },
       prepare(sql: string): SQLStatement {
         log.push(sql);
+        hooks.beforePrepare?.(sql);
         const prepared = sqldb.prepare(sql);
 
         return {
@@ -81,16 +89,27 @@ export function createSqlJsDriverFromDatabase(
 
 class SqlJsAsyncAdapter implements AsyncSQLiteDB {
   private sqldb: InspectableSqlDatabase;
+  private execLog?: string[];
+  private hooks: SqlJsDriverHooks;
 
-  constructor(sqldb: InspectableSqlDatabase) {
+  constructor(
+    sqldb: InspectableSqlDatabase,
+    execLog?: string[],
+    hooks: SqlJsDriverHooks = {},
+  ) {
     this.sqldb = sqldb;
+    this.execLog = execLog;
+    this.hooks = hooks;
   }
 
   async exec(sql: string, params?: SqlValue[] | null): Promise<void> {
+    this.execLog?.push(sql);
     this.sqldb.exec(sql, params ?? undefined);
   }
 
   async prepare(sql: string) {
+    this.execLog?.push(sql);
+    this.hooks.beforePrepare?.(sql);
     const prepared = this.sqldb.prepare(sql);
 
     return {
@@ -133,4 +152,28 @@ export async function createInspectableSqlDriver(): Promise<{
   const sqldb: InspectableSqlDatabase = new SQL.Database();
 
   return createSqlJsDriverFromDatabase(sqldb);
+}
+
+export async function createInspectableSqlAsyncDriver(
+  options: AsyncSqlDriverOptions = {},
+  hooks: SqlJsDriverHooks = {},
+): Promise<{
+  driver: AsyncSqlDriver;
+  sqldb: InspectableSqlDatabase;
+  execLog: string[];
+}> {
+  const SQL = await initSqlJs({
+    locateFile: () => normalizeWasmUrl(wasmUrl),
+  });
+  const sqldb: InspectableSqlDatabase = new SQL.Database();
+  const execLog: string[] = [];
+
+  return {
+    driver: new AsyncSqlDriver(
+      new SqlJsAsyncAdapter(sqldb, execLog, hooks),
+      options,
+    ),
+    sqldb,
+    execLog,
+  };
 }
