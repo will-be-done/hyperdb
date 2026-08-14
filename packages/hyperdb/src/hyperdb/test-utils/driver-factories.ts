@@ -3,6 +3,7 @@ import type { DBDriver } from "../core/driver";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { IdbDriver, openIndexedDBDriver } from "../drivers/idb/idb-driver";
 import { createSqlJsDriver } from "./sql-js-driver";
+import { createTursoWasmDriver } from "./turso-wasm-driver";
 
 export type DriverFactory = [string, () => Promise<DBDriver>];
 
@@ -48,6 +49,7 @@ export function createDriverFactories(options?: {
 
   if (options?.includeSql !== false) {
     factories.push(["SqlDriver", () => createSqlJsDriver()]);
+    factories.push(["AsyncSqlDriver (Turso WASM)", createTursoWasmDriver]);
   }
 
   factories.push(["BptreeInmemDriver", async () => new BptreeInmemDriver()]);

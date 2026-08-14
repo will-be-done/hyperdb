@@ -366,11 +366,13 @@ describe("runtime edge case regressions", () => {
 
       expect(await scanOrderIds(mixedOrderTable, rows, "asc")).toEqual({
         SqlDriver: asc,
+        "AsyncSqlDriver (Turso WASM)": asc,
         BptreeInmemDriver: asc,
         IdbDriver: asc,
       });
       expect(await scanOrderIds(mixedOrderTable, rows, "desc")).toEqual({
         SqlDriver: desc,
+        "AsyncSqlDriver (Turso WASM)": desc,
         BptreeInmemDriver: desc,
         IdbDriver: desc,
       });
@@ -414,11 +416,13 @@ describe("runtime edge case regressions", () => {
 
       expect(await scanOrderIds(fullValueOrderTable, rows, "asc")).toEqual({
         SqlDriver: asc,
+        "AsyncSqlDriver (Turso WASM)": asc,
         BptreeInmemDriver: asc,
         IdbDriver: asc,
       });
       expect(await scanOrderIds(fullValueOrderTable, rows, "desc")).toEqual({
         SqlDriver: [...asc].reverse(),
+        "AsyncSqlDriver (Turso WASM)": [...asc].reverse(),
         BptreeInmemDriver: [...asc].reverse(),
         IdbDriver: [...asc].reverse(),
       });
@@ -518,6 +522,7 @@ describe("runtime edge case regressions", () => {
           await scanOrderIds(testCase.table, testCase.rows, "asc"),
         ).toEqual({
           SqlDriver: testCase.asc,
+          "AsyncSqlDriver (Turso WASM)": testCase.asc,
           BptreeInmemDriver: testCase.asc,
           IdbDriver: testCase.asc,
         });
@@ -525,6 +530,7 @@ describe("runtime edge case regressions", () => {
           await scanOrderIds(testCase.table, testCase.rows, "desc"),
         ).toEqual({
           SqlDriver: testCase.desc,
+          "AsyncSqlDriver (Turso WASM)": testCase.desc,
           BptreeInmemDriver: testCase.desc,
           IdbDriver: testCase.desc,
         });

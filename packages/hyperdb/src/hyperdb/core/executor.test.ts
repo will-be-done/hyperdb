@@ -38,6 +38,36 @@ describe("executor", () => {
     await expect(execAsync(command())).rejects.toThrow("boom");
   });
 
+  it("throws rejected async commands back into generators", async () => {
+    let cleanedUp = false;
+
+    function* command(): Generator<DBCmd, void, unknown> {
+      try {
+        yield* unwrap(Promise.reject(new Error("boom")));
+      } finally {
+        cleanedUp = true;
+      }
+    }
+
+    await expect(execAsync(command())).rejects.toThrow("boom");
+    expect(cleanedUp).toBe(true);
+  });
+
+  it("throws rejected execMaybeAsync commands back into generators", async () => {
+    let cleanedUp = false;
+
+    function* command(): Generator<DBCmd, void, unknown> {
+      try {
+        yield* unwrap(Promise.reject(new Error("boom")));
+      } finally {
+        cleanedUp = true;
+      }
+    }
+
+    await expect(execMaybeAsync(command())).rejects.toThrow("boom");
+    expect(cleanedUp).toBe(true);
+  });
+
   it("continues through noop commands in execSync", () => {
     function* command(): Generator<DBCmd, string> {
       yield* noop();

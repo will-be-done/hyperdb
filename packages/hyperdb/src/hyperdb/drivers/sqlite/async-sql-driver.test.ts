@@ -3,11 +3,16 @@ import { defineTable } from "../../schema/table";
 import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
-import { createSqlJsAsyncDriver } from "../../test-utils/sql-js-driver";
+import {
+  createInspectableSqlAsyncDriver,
+  createSqlJsAsyncDriver,
+} from "../../test-utils/sql-js-driver";
+import { createTursoWasmDriver } from "../../test-utils/turso-wasm-driver";
 import {
   AsyncSqlDriver,
   formatAsyncSqlDriverDebugEvent,
 } from "./async-sql-driver";
+import { SQLITE_SCHEMA_METADATA_TABLE } from "./sqlite-common";
 
 type Task = {
   type: "task";
@@ -89,7 +94,94 @@ describe("db", async () => {
     ]);
   });
 
-  for (const driver of [createSqlJsAsyncDriver]) {
+  it("uses one metadata read when async table schemas are unchanged", async () => {
+    const { driver, execLog } = await createInspectableSqlAsyncDriver();
+    const db = new DB(driver);
+
+    await execAsync(db.loadTables([tasksTable]));
+    execLog.length = 0;
+    await execAsync(db.loadTables([tasksTable]));
+
+    expect(execLog).toHaveLength(1);
+    expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
+    expect(execLog[0]).not.toContain("BEGIN TRANSACTION");
+  });
+
+  it("initializes async schema metadata when the adapter hides missing-table details", async () => {
+    let obscureMetadataReadError = true;
+    const { driver, sqldb, execLog } = await createInspectableSqlAsyncDriver(
+      {},
+      {
+        beforePrepare(sql) {
+          if (
+            obscureMetadataReadError &&
+            sql.includes(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`)
+          ) {
+            throw new Error("statement preparation failed");
+          }
+        },
+      },
+    );
+    const db = new DB(driver);
+
+    await execAsync(db.loadTables([tasksTable]));
+    expect(
+      sqldb.exec(
+        `SELECT name FROM sqlite_schema WHERE name = '${SQLITE_SCHEMA_METADATA_TABLE}'`,
+      )[0]?.values,
+    ).toEqual([[SQLITE_SCHEMA_METADATA_TABLE]]);
+
+    await expect(execAsync(db.loadTables([tasksTable]))).rejects.toThrow(
+      "statement preparation failed",
+    );
+
+    obscureMetadataReadError = false;
+    execLog.length = 0;
+    await execAsync(db.loadTables([tasksTable]));
+    expect(execLog).toHaveLength(1);
+    expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
+  });
+
+  it("treats async SQLite index identifiers as case-insensitive", async () => {
+    const { driver, sqldb, execLog } = await createInspectableSqlAsyncDriver();
+    const db = new DB(driver);
+
+    await execAsync(db.loadTables([tasksTable]));
+    sqldb.exec("DROP INDEX idx_tasks_byTitle_sort_key_v2");
+    sqldb.exec(
+      "CREATE INDEX idx_tasks_bytitle_sort_key_v2 ON tasks(idx_byTitle_sort_key_v2, id) WHERE idx_byTitle_sort_key_v2 IS NOT NULL",
+    );
+    execLog.length = 0;
+
+    await execAsync(db.loadTables([tasksTable]));
+
+    expect(execLog.some((sql) => sql.startsWith("DROP INDEX"))).toBe(false);
+    expect(
+      (sqldb.exec("PRAGMA index_list(tasks)")[0]?.values ?? []).some(
+        (row) => String(row[1]) === "idx_tasks_bytitle_sort_key_v2",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the schema metadata fast path with Turso WASM", async () => {
+    const debug = vi.fn();
+    const db = new DB(await createTursoWasmDriver({ debug }));
+
+    await execAsync(db.loadTables([tasksTable]));
+    debug.mockClear();
+    await execAsync(db.loadTables([tasksTable]));
+
+    expect(debug).toHaveBeenCalledTimes(1);
+    expect(debug.mock.calls[0]?.[0]).toMatchObject({
+      operation: "scan",
+      status: "success",
+    });
+    expect(debug.mock.calls[0]?.[0].sql).toContain(
+      `LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`,
+    );
+  });
+
+  for (const driver of [createSqlJsAsyncDriver, createTursoWasmDriver]) {
     it("preserves physical indexes whose logical names end in _sort_key", async () => {
       const debug = vi.fn();
       const db = new DB(await driver({ debug }));

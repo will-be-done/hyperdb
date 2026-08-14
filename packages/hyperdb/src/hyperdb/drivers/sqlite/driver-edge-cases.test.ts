@@ -9,10 +9,15 @@ import {
 import {
   createInspectableSqlDriver,
   createSqlJsDriver,
+  createSqlJsDriverFromDatabase,
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
-import { buildSortKeyWhereClause, type SqlValue } from "./sqlite-common";
+import {
+  buildSortKeyWhereClause,
+  SQLITE_SCHEMA_METADATA_TABLE,
+  type SqlValue,
+} from "./sqlite-common";
 
 const noSideTablesTable = defineTable("driverEdgeNoSideTables", {
   id: v.string(),
@@ -89,6 +94,158 @@ function sqliteRows(sqldb: InspectableSqlDatabase, sql: string): SqlValue[][] {
 }
 
 describe("SQLite driver edge case regressions", () => {
+  it("uses one metadata read when loaded table schemas are unchanged", async () => {
+    const { driver, execLog } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+
+    db.loadTables([noSideTablesTable]);
+    execLog.length = 0;
+    db.loadTables([noSideTablesTable]);
+
+    expect(execLog).toHaveLength(1);
+    expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
+    expect(execLog[0]).not.toContain("BEGIN TRANSACTION");
+  });
+
+  it("initializes schema metadata when the adapter hides missing-table details", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let obscureMetadataReadError = true;
+    const { driver, execLog } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforePrepare(sql) {
+        if (
+          obscureMetadataReadError &&
+          sql.includes(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`)
+        ) {
+          throw new Error("statement preparation failed");
+        }
+      },
+    });
+    const db = new SyncDB(new DB(driver));
+
+    db.loadTables([noSideTablesTable]);
+    expect(
+      sqliteRows(
+        sqldb,
+        `SELECT name FROM sqlite_schema WHERE name = '${SQLITE_SCHEMA_METADATA_TABLE}'`,
+      ),
+    ).toEqual([[SQLITE_SCHEMA_METADATA_TABLE]]);
+
+    expect(() => db.loadTables([noSideTablesTable])).toThrow(
+      "statement preparation failed",
+    );
+
+    obscureMetadataReadError = false;
+    execLog.length = 0;
+    db.loadTables([noSideTablesTable]);
+    expect(execLog).toHaveLength(1);
+    expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
+  });
+
+  it("refreshes per-table metadata after another table changes the schema", async () => {
+    const { driver, execLog } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+
+    db.loadTables([noSideTablesTable]);
+    db.loadTables([manyPrefixRangesTable]);
+
+    execLog.length = 0;
+    db.loadTables([noSideTablesTable]);
+    expect(execLog).toContain("BEGIN TRANSACTION");
+
+    execLog.length = 0;
+    db.loadTables([noSideTablesTable]);
+    expect(execLog).toHaveLength(1);
+    expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
+  });
+
+  it("repairs an externally dropped index despite matching table signatures", async () => {
+    const { driver, sqldb, execLog } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+
+    sqldb.run("DROP INDEX idx_driverEdgeNoSideTables_byTitle_sort_key_v2");
+    execLog.length = 0;
+    db.loadTables([noSideTablesTable]);
+
+    expect(execLog).toContain("BEGIN TRANSACTION");
+    expect(
+      execLog.some((sql) =>
+        sql.startsWith(
+          "CREATE INDEX IF NOT EXISTS idx_driverEdgeNoSideTables_byTitle_sort_key_v2",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      sqliteRows(sqldb, "PRAGMA index_list(driverEdgeNoSideTables)").some(
+        (row) =>
+          String(row[1]) === "idx_driverEdgeNoSideTables_byTitle_sort_key_v2",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats SQLite index identifiers as case-insensitive", async () => {
+    const { driver, sqldb, execLog } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+
+    sqldb.run("DROP INDEX idx_driverEdgeNoSideTables_byTitle_sort_key_v2");
+    sqldb.run(
+      "CREATE INDEX idx_driveredgenosidetables_bytitle_sort_key_v2 ON driverEdgeNoSideTables(idx_byTitle_sort_key_v2, id) WHERE idx_byTitle_sort_key_v2 IS NOT NULL",
+    );
+    execLog.length = 0;
+
+    db.loadTables([noSideTablesTable]);
+
+    expect(execLog.some((sql) => sql.startsWith("DROP INDEX"))).toBe(false);
+    expect(
+      sqliteRows(sqldb, "PRAGMA index_list(driverEdgeNoSideTables)").some(
+        (row) =>
+          String(row[1]) === "idx_driveredgenosidetables_bytitle_sort_key_v2",
+      ),
+    ).toBe(true);
+  });
+
+  it("commits schema metadata only after reconciliation succeeds", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    const initialDb = new SyncDB(
+      new DB(createSqlJsDriverFromDatabase(sqldb).driver),
+    );
+    initialDb.loadTables([sortKeyBackfillTableV1]);
+    const metadataBefore = sqliteRows(
+      sqldb,
+      `SELECT table_name, signature, verified_schema_version FROM ${SQLITE_SCHEMA_METADATA_TABLE}`,
+    );
+
+    const failingDriver = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforeExec(sql) {
+        if (sql.includes("ADD COLUMN idx_byTitle_sort_key_v2")) {
+          throw new Error("injected schema failure");
+        }
+      },
+    }).driver;
+    const failingDb = new SyncDB(new DB(failingDriver));
+
+    expect(() => failingDb.loadTables([sortKeyBackfillTableV2])).toThrow(
+      "injected schema failure",
+    );
+    expect(
+      sqliteRows(
+        sqldb,
+        `SELECT table_name, signature, verified_schema_version FROM ${SQLITE_SCHEMA_METADATA_TABLE}`,
+      ),
+    ).toEqual(metadataBefore);
+
+    const recoveredDb = new SyncDB(
+      new DB(createSqlJsDriverFromDatabase(sqldb).driver),
+    );
+    recoveredDb.loadTables([sortKeyBackfillTableV2]);
+    expect(
+      sqliteRows(sqldb, "PRAGMA table_info(driverEdgeSortKeyBackfill)").some(
+        (row) => String(row[1]) === "idx_byTitle_sort_key_v2",
+      ),
+    ).toBe(true);
+  });
+
   it("preserves physical indexes whose logical names end in _sort_key", async () => {
     const { driver, execLog } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));
@@ -406,7 +563,10 @@ describe("SQLite driver edge case regressions", () => {
       sqldb,
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
     ).map(([name]) => String(name));
-    expect(tableNames).toEqual(["driverEdgeNoSideTables"]);
+    expect(tableNames).toEqual([
+      SQLITE_SCHEMA_METADATA_TABLE,
+      "driverEdgeNoSideTables",
+    ]);
     expect(tableNames.some((name) => name.endsWith("__idx"))).toBe(false);
 
     const columns = sqliteRows(

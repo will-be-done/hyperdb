@@ -27,6 +27,13 @@ import {
   isSqliteSortKeyColumn,
   SQLITE_SORT_KEY_SUFFIX,
   LEGACY_SQLITE_SORT_KEY_SUFFIX,
+  createSqliteTableSchemaSignature,
+  createSqliteSchemaMetadataTableSQL,
+  selectSqliteSchemaMetadataSQL,
+  selectSqliteSchemaMetadataTableExistsSQL,
+  upsertSqliteSchemaMetadataSQL,
+  isMissingSqliteSchemaMetadataError,
+  sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
   parseSqliteStoredRow,
@@ -674,46 +681,192 @@ export class AsyncSqlDriver implements DBDriver {
   *loadTables(
     tableDefinitions: TableDefinition<any>[],
   ): Generator<DBCmd, void> {
+    for (const tableDef of tableDefinitions) {
+      assertSafeTableDefinition(tableDef);
+    }
+
+    tableDefinitions = cloneDeep(tableDefinitions);
+    if (tableDefinitions.length === 0) return;
+
     yield* unwrapCb(async () => {
       await this.txAndQueryLock.acquireAsync();
-    });
-
-    try {
-      for (const tableDef of tableDefinitions) {
-        assertSafeTableDefinition(tableDef);
-      }
-
-      yield* unwrapCb(async () => {
-        await runAsyncSQL(this.db, "BEGIN TRANSACTION", undefined, this.debug);
-
-        tableDefinitions = cloneDeep(tableDefinitions);
-        for (const tableDef of tableDefinitions) {
-          await this.createTable(tableDef);
-          const indexUniqueness = await this.getGeneratedIndexUniqueness(
-            tableDef.tableName,
-          );
-          const reencodedColumns = this.reencodedSortKeyColumns(
-            tableDef,
-            indexUniqueness,
-          );
-          await this.dropStaleSortKeyIndexes(tableDef, indexUniqueness);
-          await this.dropStaleSortKeyColumns(tableDef);
-          await this.addMissingSortKeyColumns(tableDef);
-          await this.resetSortKeyColumns(tableDef, reencodedColumns);
-          await this.backfillSortKeyColumns(tableDef);
-          await this.createIndexes(tableDef);
-          this.tableDefinitions.set(tableDef.tableName, tableDef);
+      try {
+        if (await this.schemaMetadataMatches(tableDefinitions)) {
+          this.installTableDefinitions(tableDefinitions);
+          return;
         }
 
-        await runAsyncSQL(this.db, "COMMIT", undefined, this.debug);
+        let transactionStarted = false;
+        try {
+          await runAsyncSQL(
+            this.db,
+            "BEGIN TRANSACTION",
+            undefined,
+            this.debug,
+          );
+          transactionStarted = true;
+          await runAsyncSQL(
+            this.db,
+            createSqliteSchemaMetadataTableSQL(),
+            undefined,
+            this.debug,
+          );
+
+          for (const tableDef of tableDefinitions) {
+            await this.createTable(tableDef);
+            const indexUniqueness = await this.getGeneratedIndexUniqueness(
+              tableDef.tableName,
+            );
+            const reencodedColumns = this.reencodedSortKeyColumns(
+              tableDef,
+              indexUniqueness,
+            );
+            const existingColumns = await this.getTableColumns(
+              tableDef.tableName,
+            );
+            await this.dropStaleSortKeyIndexes(tableDef, indexUniqueness);
+            await this.dropStaleSortKeyColumns(tableDef, existingColumns);
+            await this.addMissingSortKeyColumns(tableDef, existingColumns);
+            await this.resetSortKeyColumns(
+              tableDef,
+              reencodedColumns,
+              existingColumns,
+            );
+            await this.backfillSortKeyColumns(tableDef);
+            await this.createIndexes(tableDef);
+          }
+
+          await this.writeSchemaMetadata(tableDefinitions);
+          await runAsyncSQL(this.db, "COMMIT", undefined, this.debug);
+          transactionStarted = false;
+          this.installTableDefinitions(tableDefinitions);
+        } catch (error) {
+          if (transactionStarted) {
+            await rollbackAsyncQuietly(this.db, error, this.debug);
+          }
+          throw error;
+        }
+      } finally {
+        this.txAndQueryLock.release();
+      }
+    });
+  }
+
+  private async schemaMetadataMatches(
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<boolean> {
+    const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
+    const startedAt = this.debug ? nowMs() : 0;
+    let statement: AsyncSQLStatement | undefined;
+
+    try {
+      statement = await this.db.prepare(sql);
+      const rows = await statement.values(
+        tableDefinitions.map((tableDef) => tableDef.tableName),
+      );
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
+        rowCount: rows.length,
+      }));
+
+      const schemaVersion = Number(rows[0]?.[3]);
+      if (!Number.isInteger(schemaVersion)) return false;
+      const metadataByTable = new Map(
+        rows
+          .filter((row) => typeof row[0] === "string")
+          .map((row) => [
+            String(row[0]),
+            {
+              signature: String(row[1]),
+              verifiedSchemaVersion: Number(row[2]),
+            },
+          ]),
+      );
+
+      return tableDefinitions.every((tableDef) => {
+        const metadata = metadataByTable.get(tableDef.tableName);
+        return (
+          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
+          metadata.verifiedSchemaVersion === schemaVersion
+        );
       });
     } catch (error) {
-      yield* unwrapCb(async () => {
-        await rollbackAsyncQuietly(this.db, error, this.debug);
-      });
+      if (isMissingSqliteSchemaMetadataError(error)) return false;
+      await statement?.finalize();
+      statement = undefined;
+      try {
+        if (!(await this.schemaMetadataTableExists())) return false;
+      } catch {
+        // Preserve the original metadata-read error when even the fallback
+        // schema inspection cannot run.
+      }
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({}), error);
       throw error;
     } finally {
-      this.txAndQueryLock.release();
+      await statement?.finalize();
+    }
+  }
+
+  private async schemaMetadataTableExists(): Promise<boolean> {
+    const sql = selectSqliteSchemaMetadataTableExistsSQL();
+    const startedAt = this.debug ? nowMs() : 0;
+    const statement = await this.db.prepare(sql);
+    try {
+      const rows = await statement.values([]);
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
+        rowCount: rows.length,
+      }));
+      return rows.length > 0;
+    } catch (error) {
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({}), error);
+      throw error;
+    } finally {
+      await statement.finalize();
+    }
+  }
+
+  private async getSchemaVersion(): Promise<number> {
+    const sql = "SELECT schema_version FROM pragma_schema_version";
+    const startedAt = this.debug ? nowMs() : 0;
+    const statement = await this.db.prepare(sql);
+    try {
+      const rows = await statement.values([]);
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
+        rowCount: rows.length,
+      }));
+      const schemaVersion = Number(rows[0]?.[0]);
+      if (!Number.isInteger(schemaVersion)) {
+        throw new Error("SQLite did not return a valid schema version");
+      }
+      return schemaVersion;
+    } catch (error) {
+      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({}), error);
+      throw error;
+    } finally {
+      await statement.finalize();
+    }
+  }
+
+  private async writeSchemaMetadata(
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<void> {
+    const schemaVersion = await this.getSchemaVersion();
+    await runAsyncSQL(
+      this.db,
+      upsertSqliteSchemaMetadataSQL(tableDefinitions.length),
+      tableDefinitions.flatMap((tableDef) => [
+        tableDef.tableName,
+        createSqliteTableSchemaSignature(tableDef),
+        schemaVersion,
+      ]),
+      this.debug,
+    );
+  }
+
+  private installTableDefinitions(
+    tableDefinitions: TableDefinition<any>[],
+  ): void {
+    for (const tableDef of tableDefinitions) {
+      this.tableDefinitions.set(tableDef.tableName, tableDef);
     }
   }
 
@@ -722,15 +875,18 @@ export class AsyncSqlDriver implements DBDriver {
     await runAsyncSQL(this.db, sql, undefined, this.debug);
   }
 
-  private async getTableColumns(tableName: string): Promise<Set<string>> {
-    const columns = new Set<string>();
+  private async getTableColumns(
+    tableName: string,
+  ): Promise<Map<string, string>> {
+    const columns = new Map<string, string>();
     const sql = `PRAGMA table_info(${tableName})`;
     const startedAt = this.debug ? nowMs() : 0;
     const stmt = await this.db.prepare(sql);
 
     try {
       for (const row of await stmt.values([])) {
-        columns.add(String(row[1]));
+        const columnName = String(row[1]);
+        columns.set(sqliteIdentifierKey(columnName), columnName);
       }
       emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
         tableName,
@@ -797,7 +953,7 @@ export class AsyncSqlDriver implements DBDriver {
   ): Set<string> {
     return new Set(
       getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
-        sqliteIndexSortKeyColumn(physicalIndex.name),
+        sqliteIdentifierKey(sqliteIndexSortKeyColumn(physicalIndex.name)),
       ),
     );
   }
@@ -805,16 +961,35 @@ export class AsyncSqlDriver implements DBDriver {
   private getExpectedIndexNames(tableDef: TableDefinition<any>): Set<string> {
     return new Set(
       getPersistentIndexPlan(tableDef).physicalIndexes.map((physicalIndex) =>
-        sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        sqliteIdentifierKey(
+          sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        ),
       ),
     );
   }
 
   private isGeneratedIndexName(tableName: string, indexName: string): boolean {
+    const normalizedIndexName = sqliteIdentifierKey(indexName);
     return (
-      indexName.startsWith(`idx_${tableName}_`) &&
-      (indexName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
-        indexName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+      normalizedIndexName.startsWith(
+        sqliteIdentifierKey(`idx_${tableName}_`),
+      ) &&
+      (normalizedIndexName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
+        normalizedIndexName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+    );
+  }
+
+  private physicalIndexForGeneratedIdentifier(
+    tableDef: TableDefinition<any>,
+    generatedIndexName: string,
+  ) {
+    const normalizedGeneratedIndexName =
+      sqliteIdentifierKey(generatedIndexName);
+    return getPersistentIndexPlan(tableDef).physicalIndexes.find(
+      (physicalIndex) =>
+        sqliteIdentifierKey(
+          sqliteIndexIdentifier(tableDef.tableName, physicalIndex.name),
+        ) === normalizedGeneratedIndexName,
     );
   }
 
@@ -825,13 +1000,9 @@ export class AsyncSqlDriver implements DBDriver {
     const expectedIndexes = this.getExpectedIndexNames(tableDef);
     for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      if (expectedIndexes.has(indexName)) {
-        const tableIndexName = this.tableIndexNameFromGenerated(
-          tableDef.tableName,
-          indexName,
-        );
+      if (expectedIndexes.has(sqliteIdentifierKey(indexName))) {
         const expectedUnique =
-          getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName)
+          this.physicalIndexForGeneratedIdentifier(tableDef, indexName)
             ?.unique ?? false;
         if (unique === expectedUnique) continue;
       }
@@ -845,17 +1016,6 @@ export class AsyncSqlDriver implements DBDriver {
     }
   }
 
-  private tableIndexNameFromGenerated(
-    tableName: string,
-    generatedIndexName: string,
-  ): string {
-    const indexName = generatedIndexName.slice(`idx_${tableName}_`.length);
-    const suffix = indexName.endsWith(SQLITE_SORT_KEY_SUFFIX)
-      ? SQLITE_SORT_KEY_SUFFIX
-      : LEGACY_SQLITE_SORT_KEY_SUFFIX;
-    return indexName.slice(0, -suffix.length);
-  }
-
   // Sort-key columns whose encoding changed because the index flipped between
   // uniqhash (value only) and hash/btree (value + id). Their existing values
   // are encoded with the old shape, so they must be recomputed for every row
@@ -867,16 +1027,14 @@ export class AsyncSqlDriver implements DBDriver {
     const columns: string[] = [];
     for (const [indexName, unique] of indexUniqueness) {
       if (!this.isGeneratedIndexName(tableDef.tableName, indexName)) continue;
-      const tableIndexName = this.tableIndexNameFromGenerated(
-        tableDef.tableName,
+      const physicalIndex = this.physicalIndexForGeneratedIdentifier(
+        tableDef,
         indexName,
       );
-      const physicalIndex =
-        getPersistentIndexPlan(tableDef).byLogicalName.get(tableIndexName);
       if (!physicalIndex) continue;
       const expectedUnique = physicalIndex.unique;
       if (unique !== expectedUnique) {
-        columns.push(sqliteIndexSortKeyColumn(tableIndexName));
+        columns.push(sqliteIndexSortKeyColumn(physicalIndex.name));
       }
     }
     return columns;
@@ -885,10 +1043,10 @@ export class AsyncSqlDriver implements DBDriver {
   private async resetSortKeyColumns(
     tableDef: TableDefinition<any>,
     sortKeyColumns: string[],
+    existingColumns: Map<string, string>,
   ): Promise<void> {
-    const existingColumns = await this.getTableColumns(tableDef.tableName);
     for (const sortKeyColumn of sortKeyColumns) {
-      if (!existingColumns.has(sortKeyColumn)) continue;
+      if (!existingColumns.has(sqliteIdentifierKey(sortKeyColumn))) continue;
       await runAsyncSQL(
         this.db,
         `UPDATE ${tableDef.tableName} SET ${sortKeyColumn} = NULL`,
@@ -900,11 +1058,12 @@ export class AsyncSqlDriver implements DBDriver {
 
   private async dropStaleSortKeyColumns(
     tableDef: TableDefinition<any>,
+    existingColumns: Map<string, string>,
   ): Promise<void> {
     const expectedColumns = this.getExpectedSortKeyColumns(tableDef);
-    for (const columnName of await this.getTableColumns(tableDef.tableName)) {
+    for (const [normalizedColumnName, columnName] of existingColumns) {
       if (!isSqliteSortKeyColumn(columnName)) continue;
-      if (expectedColumns.has(columnName)) continue;
+      if (expectedColumns.has(normalizedColumnName)) continue;
 
       await runAsyncSQL(
         this.db,
@@ -912,21 +1071,23 @@ export class AsyncSqlDriver implements DBDriver {
         undefined,
         this.debug,
       );
+      existingColumns.delete(normalizedColumnName);
     }
   }
 
   private async addMissingSortKeyColumns(
     tableDef: TableDefinition<any>,
+    existingColumns: Map<string, string>,
   ): Promise<void> {
-    const existingColumns = await this.getTableColumns(tableDef.tableName);
     for (const physicalIndex of getPersistentIndexPlan(tableDef)
       .physicalIndexes) {
       const sortKeyColumn = sqliteIndexSortKeyColumn(physicalIndex.name);
-      if (existingColumns.has(sortKeyColumn)) continue;
+      const normalizedSortKeyColumn = sqliteIdentifierKey(sortKeyColumn);
+      if (existingColumns.has(normalizedSortKeyColumn)) continue;
 
       const sql = addSortKeyColumnSQL(tableDef.tableName, sortKeyColumn);
       await runAsyncSQL(this.db, sql, undefined, this.debug);
-      existingColumns.add(sortKeyColumn);
+      existingColumns.set(normalizedSortKeyColumn, sortKeyColumn);
     }
   }
 

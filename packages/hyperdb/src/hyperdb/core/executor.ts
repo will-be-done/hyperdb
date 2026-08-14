@@ -35,11 +35,11 @@ async function execAsyncFrom<T>(
   cmd: Generator<DBCmd, T>,
   value: unknown,
 ): Promise<T> {
-  let result = cmd.next(await value);
+  let result = await resumeAfterAsyncCommand(cmd, value);
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
-      result = cmd.next(await result.value.data);
+      result = await resumeAfterAsyncCommand(cmd, result.value.data);
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {
@@ -50,12 +50,26 @@ async function execAsyncFrom<T>(
   return result.value as T;
 }
 
+async function resumeAfterAsyncCommand<T>(
+  cmd: Generator<DBCmd, T>,
+  data: unknown,
+): Promise<IteratorResult<DBCmd, T>> {
+  let value: unknown;
+  try {
+    value = await data;
+  } catch (error) {
+    return cmd.throw(error);
+  }
+
+  return cmd.next(value);
+}
+
 export async function execAsync<T>(cmd: Generator<DBCmd, T>): Promise<T> {
   let result = cmd.next();
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
-      result = cmd.next(await result.value.data);
+      result = await resumeAfterAsyncCommand(cmd, result.value.data);
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {

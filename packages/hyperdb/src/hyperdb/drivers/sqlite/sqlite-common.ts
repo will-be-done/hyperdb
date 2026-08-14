@@ -30,6 +30,8 @@ export const SQL_BIND_PARAM_LIMIT = 900;
 const SAFE_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const SQLITE_SORT_KEY_SUFFIX = "_sort_key_v2";
 export const LEGACY_SQLITE_SORT_KEY_SUFFIX = "_sort_key";
+export const SQLITE_SCHEMA_METADATA_TABLE = "_hyperdb_schema_metadata";
+const SQLITE_SCHEMA_SIGNATURE_VERSION = 1;
 
 export function chunkArray<T>(array: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -61,10 +63,68 @@ export function assertSafeIdentifier(kind: string, value: string): void {
 
 export function assertSafeTableDefinition(tableDef: TableDefinition): void {
   assertSafeIdentifier("Table name", tableDef.tableName);
+  if (
+    sqliteIdentifierKey(tableDef.tableName) ===
+    sqliteIdentifierKey(SQLITE_SCHEMA_METADATA_TABLE)
+  ) {
+    throw new Error(
+      `Table name is reserved for HyperDB SQLite metadata: ${tableDef.tableName}`,
+    );
+  }
 
   for (const indexName of Object.keys(tableDef.indexes)) {
     assertSafeIdentifier("Index name", indexName);
   }
+}
+
+export function sqliteIdentifierKey(identifier: string): string {
+  return identifier.toLowerCase();
+}
+
+export function createSqliteTableSchemaSignature(
+  tableDef: TableDefinition,
+): string {
+  return JSON.stringify({
+    version: SQLITE_SCHEMA_SIGNATURE_VERSION,
+    layout: "inline-sort-keys",
+    tableName: tableDef.tableName,
+    physicalIndexes: getPersistentIndexPlan(tableDef).physicalIndexes.map(
+      ({ name, sortColumns, unique, mode }) => ({
+        name,
+        sortColumns,
+        unique,
+        mode,
+      }),
+    ),
+  });
+}
+
+export function createSqliteSchemaMetadataTableSQL(): string {
+  return `CREATE TABLE IF NOT EXISTS ${SQLITE_SCHEMA_METADATA_TABLE} ( table_name TEXT PRIMARY KEY, signature TEXT NOT NULL, verified_schema_version INTEGER NOT NULL )`;
+}
+
+export function selectSqliteSchemaMetadataSQL(tableCount: number): string {
+  const placeholders = Array(tableCount).fill("?").join(", ");
+  return `SELECT metadata.table_name, metadata.signature, metadata.verified_schema_version, schema_state.schema_version FROM pragma_schema_version AS schema_state LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE} AS metadata ON metadata.table_name IN (${placeholders})`;
+}
+
+export function selectSqliteSchemaMetadataTableExistsSQL(): string {
+  return `SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = '${SQLITE_SCHEMA_METADATA_TABLE}' COLLATE NOCASE LIMIT 1`;
+}
+
+export function upsertSqliteSchemaMetadataSQL(tableCount: number): string {
+  const values = Array(tableCount).fill("(?, ?, ?)").join(", ");
+  return `INSERT INTO ${SQLITE_SCHEMA_METADATA_TABLE} (table_name, signature, verified_schema_version) VALUES ${values} ON CONFLICT(table_name) DO UPDATE SET signature = excluded.signature, verified_schema_version = excluded.verified_schema_version`;
+}
+
+export function isMissingSqliteSchemaMetadataError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.toLowerCase().includes("no such table") &&
+    message
+      .toLowerCase()
+      .includes(sqliteIdentifierKey(SQLITE_SCHEMA_METADATA_TABLE))
+  );
 }
 
 export function sqliteIndexSortKeyColumn(indexName: string): string {
@@ -86,10 +146,11 @@ export function sqliteIndexIdentifier(
 }
 
 export function isSqliteSortKeyColumn(columnName: string): boolean {
+  const normalizedColumnName = sqliteIdentifierKey(columnName);
   return (
-    columnName.startsWith("idx_") &&
-    (columnName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
-      columnName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
+    normalizedColumnName.startsWith("idx_") &&
+    (normalizedColumnName.endsWith(SQLITE_SORT_KEY_SUFFIX) ||
+      normalizedColumnName.endsWith(LEGACY_SQLITE_SORT_KEY_SUFFIX))
   );
 }
 

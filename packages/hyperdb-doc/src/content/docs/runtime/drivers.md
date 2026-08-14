@@ -13,12 +13,12 @@ the sync or async runtime helpers, which depends on the storage path.
 
 ## Choosing a driver
 
-| Driver              | Import                 | Mode  | Environment | Use for                                                        |
-| ------------------- | ---------------------- | ----- | ----------- | -------------------------------------------------------------- |
-| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, fully loaded app state, and the fast `HybridDB` cache   |
-| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence, usually as a `HybridDB` primary store     |
-| `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js)  |
-| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including browser SQLite as a `HybridDB` primary |
+| Driver              | Import                 | Mode  | Environment | Use for                                                       |
+| ------------------- | ---------------------- | ----- | ----------- | ------------------------------------------------------------- |
+| `BptreeInmemDriver` | `.../drivers/inmemory` | sync  | both        | Tests, fully loaded app state, and the fast `HybridDB` cache  |
+| `IdbDriver`         | `.../drivers/idb`      | async | browser     | Browser persistence, usually as a `HybridDB` primary store    |
+| `SqlDriver`         | `.../drivers/sqlite`   | sync  | both        | Any synchronous SQLite binding (native server SQLite, sql.js) |
+| `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including Turso WASM as a `HybridDB` primary    |
 
 Sync drivers work with `execSync` / `syncDispatch` / `selectSync`. Async drivers
 require `execAsync` / `asyncDispatch` / `selectAsync`. `HybridDB` also uses the
@@ -107,11 +107,24 @@ not prepare or emit SQL diagnostic events. Use
 `formatAsyncSqlDriverDebugEvent(event)` when you want the old one-line message
 but need to send it to a custom logger.
 
+HyperDB's shared driver conformance suite runs `AsyncSqlDriver` against the
+browser build of Turso Database (`@tursodatabase/database-wasm`) in Chromium,
+covering the same runtime behavior as the SQL.js, IndexedDB, and in-memory
+drivers.
+
 The SQLite storage codec encodes `bigint`, `ArrayBuffer`, and
 typed-array/data-view values around JSON storage so they round-trip exactly.
 `uniqhash` indexes are created as SQLite `UNIQUE` indexes. Upserts delete the
 same primary keys first and then insert the new rows, so a secondary unique
 conflict throws instead of replacing a different row.
+
+The SQLite drivers persist each table's physical-layout signature in the
+reserved `_hyperdb_schema_metadata` table. After the first successful
+`loadTables()` reconciliation, loading unchanged definitions takes one metadata
+read instead of inspecting and rebuilding every table and index. The stored
+signature is tied to SQLite's `schema_version`, so external schema changes make
+the next load run the full transactional reconciliation and refresh the
+metadata only after it succeeds.
 
 ## SQLite Recipes
 

@@ -42,7 +42,8 @@ and views that should re-run only when the exact index ranges they read change.
   trace metadata helpers.
 - `@will-be-done/hyperdb/drivers/inmemory`: `BptreeInmemDriver`.
 - `@will-be-done/hyperdb/drivers/sqlite`: `SqlDriver`, `AsyncSqlDriver`, and
-  SQLite adapter types.
+  SQLite adapter types. `AsyncSqlDriver` is compatible with Turso Database's
+  browser WASM build.
 - `@will-be-done/hyperdb/drivers/idb`: `openIndexedDBDriver`, `IdbDriver`, and
   IndexedDB driver options.
 - `@will-be-done/hyperdb-devtool/react`: separate package with
@@ -284,6 +285,11 @@ preparation. Use `logIdbDriverDebugEvent` from
 `@will-be-done/hyperdb/drivers/idb` to print IDB events in the old one-line
 console style, and `logAsyncSqlDriverDebugEvent` from
 `@will-be-done/hyperdb/drivers/sqlite` for async SQLite.
+
+SQLite `loadTables()` stores physical-layout signatures in the reserved
+`_hyperdb_schema_metadata` table. Unchanged definitions use a one-query fast
+path; a changed definition or SQLite `schema_version` triggers full
+transactional schema reconciliation.
 
 Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 `byId` index is a `uniqhash` index for exact id lookups. `SubscribableDB` adds
