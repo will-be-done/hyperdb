@@ -1,5 +1,14 @@
 # @will-be-done/hyperdb
 
+## 0.5.1
+
+### Patch Changes
+
+- 2287298: Speed up repeated SQLite `loadTables()` calls with persisted schema signatures
+  and make SQLite schema reconciliation handle identifiers case-insensitively.
+  Ensure rejected async driver commands run generator cleanup, including
+  transaction rollback and lock release.
+
 ## 0.5.0
 
 ### Minor Changes
