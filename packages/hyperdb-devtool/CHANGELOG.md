@@ -1,5 +1,12 @@
 # @will-be-done/hyperdb-devtool
 
+## 0.4.7
+
+### Patch Changes
+
+- Updated dependencies [266b765]
+  - @will-be-done/hyperdb@0.6.0
+
 ## 0.4.6
 
 ### Patch Changes
