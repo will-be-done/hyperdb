@@ -1639,6 +1639,27 @@ export class IdbDriver implements DBDriver {
     }
   }
 
+  *scanAll(
+    tableName: string,
+    options: DBDriverOperationOptions = {},
+  ): Generator<DBCmd, Row[]> {
+    this.getTableDefinition(tableName);
+    return yield* this.withTransaction(
+      "readonly",
+      [tableStoreName(tableName)],
+      async (tx) => {
+        const store = tx.objectStore(tableStoreName(tableName));
+        const records = await getAllRecords<NativeStoredRecord>(
+          this.factory,
+          store,
+          undefined,
+        );
+        return records.map(decodeStoredRecord);
+      },
+      options,
+    );
+  }
+
   private async ensureSchema(
     tableDefinitions: TableDefinition<any>[],
   ): Promise<void> {

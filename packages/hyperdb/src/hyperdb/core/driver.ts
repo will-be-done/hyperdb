@@ -43,6 +43,15 @@ export type BaseDBDriverOperations = {
 
 export interface DBDriver extends BaseDBDriverOperations {
   loadTables(table: TableDefinition<any, any>[]): Generator<DBCmd>;
+  /**
+   * Internal bulk-read capability used by runtimes that build derived indexes
+   * during startup. Unlike `intervalScan`, this does not require a logical
+   * full-scan index on the table.
+   */
+  scanAll?(
+    tableName: string,
+    options?: DBDriverOperationOptions,
+  ): Generator<DBCmd, unknown[]>;
   beginTx(
     mode?: DBTransactionMode,
     options?: DBDriverOperationOptions,

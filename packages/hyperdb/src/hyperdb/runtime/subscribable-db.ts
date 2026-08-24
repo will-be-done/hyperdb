@@ -36,6 +36,21 @@ import type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
 type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
 
+const notifySubscribers = (
+  subscribers: Subscriber[],
+  operations: Op[],
+  traits: Trait[],
+  revision: number,
+) => {
+  for (const subscriber of [...subscribers]) {
+    try {
+      subscriber(operations, traits, revision);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+};
+
 type AfterInsertSub = (
   db: HyperDB,
   table: TableDefinition,
@@ -546,14 +561,12 @@ export class SubscribableDBTx implements HyperDBTx {
 
     const traits = this.getTraits();
     const revision = this.subDb.incrementRevision();
-    const subscribers = [...this.subDb.subscribers];
-    for (const subscriber of subscribers) {
-      try {
-        subscriber(this.operations, traits, revision);
-      } catch (error) {
-        console.error(error);
-      }
-    }
+    notifySubscribers(
+      this.subDb.subscribers,
+      this.operations,
+      traits,
+      revision,
+    );
   }
 
   throwIfDone() {
@@ -616,6 +629,24 @@ export class SubscribableDB implements HyperDB {
   incrementRevision(): number {
     this.state.revision.val++;
     return this.state.revision.val;
+  }
+
+  /**
+   * Notifies reactive subscribers about changes that were already persisted by
+   * another database instance sharing the same storage.
+   *
+   * This does not execute mutations or lifecycle hooks. Call it only after the
+   * external write is durable and the local runtime can read its new state.
+   */
+  notifyExternalChanges(operations: Op[], traits: Trait[] = []): void {
+    if (operations.length === 0) return;
+
+    notifySubscribers(
+      this.subscribers,
+      operations,
+      [...this.getTraits(), ...traits],
+      this.incrementRevision(),
+    );
   }
 
   private delegateDB(): HyperDB {

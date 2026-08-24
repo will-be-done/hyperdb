@@ -143,6 +143,17 @@ function performScanOperation(
   }
 }
 
+function performScanAllOperation(db: SQLiteDB, tableName: string): Row[] {
+  const statement = db.prepare(`SELECT data FROM ${tableName}`);
+  try {
+    return statement
+      .values([])
+      .map((row) => parseSqliteStoredRow(row[0] as string));
+  } finally {
+    statement.finalize();
+  }
+}
+
 function rollbackQuietly(db: SQLiteDB): void {
   try {
     db.exec("ROLLBACK");
@@ -339,6 +350,16 @@ export class SqlDriver implements DBDriver {
       clauses,
       selectOptions,
     );
+  }
+
+  *scanAll(tableName: string): Generator<DBCmd, Row[]> {
+    if (this.isInTransaction) {
+      throw new Error("can't run while transaction is in progress");
+    }
+    if (!this.tableDefinitions.has(tableName)) {
+      throw new Error(`Table ${tableName} not found`);
+    }
+    return performScanAllOperation(this.db, tableName);
   }
 
   *loadTables(

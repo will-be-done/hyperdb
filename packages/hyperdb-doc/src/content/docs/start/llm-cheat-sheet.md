@@ -55,6 +55,7 @@ and views that should re-run only when the exact index ranges they read change.
 import {
   DB,
   HybridDB,
+  PreloadedHybridDB,
   SubscribableDB,
   asyncDispatch,
   createAction,
@@ -297,6 +298,11 @@ revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure
 in-memory apps can skip `HybridDB` and use `new SubscribableDB(new DB(new
 BptreeInmemDriver()))`.
 
+When another runtime has already durably changed shared storage, call
+`subscribableDb.notifyExternalChanges(ops, traits?)` with accurate
+insert/upsert/delete metadata. It invalidates reactive selector ranges without
+repeating the mutation or running mutation hooks.
+
 HybridDB readwrite transactions commit to the in-memory cache first and flush
 their final row changes to the persistent primary afterward. This keeps
 `asyncDispatch` responsive for UI writes. Cached scan intervals keep reading
@@ -318,6 +324,31 @@ permanent crashed state: `hybrid.isCrashed` becomes `true` and every subsequent
 read, write, or transaction (including cache-only reads) throws
 `HybridDBCrashedError` with the persistence error as its `cause`. Recover by
 creating a new `HybridDB` and reloading tables.
+
+For datasets where every index key fits in memory but every full row does not,
+use `PreloadedHybridDB`:
+
+```ts
+import {
+  DB,
+  PreloadedHybridDB,
+  SubscribableDB,
+  execAsync,
+} from "@will-be-done/hyperdb";
+
+const db = new SubscribableDB(new PreloadedHybridDB(primary));
+await execAsync(db.loadTables([tasksTable, projectsTable]));
+```
+
+`loadTables` automatically preloads all declared indexes with entity IDs as
+their leaves, including non-ID `uniqhash` value-to-ID pointers. A bounded scan
+resolves IDs from memory and dereferences them through the built-in `byId`
+`uniqhash`. Unresolved `byId` entries are batch-loaded from the primary and then
+reused by reads through every index. Do not add a `byIds` B-tree or call
+`preloadTables` for this runtime. Reads remain async, and writes wait for primary
+persistence before publishing copy-on-write index changes.
+Exact `byId` misses check the primary so rows added by another connected runtime
+can be discovered and incorporated into the preloaded indexes.
 
 ## React Pattern
 

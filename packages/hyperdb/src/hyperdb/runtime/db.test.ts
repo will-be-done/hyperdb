@@ -7,6 +7,7 @@ import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import { AsyncDB } from "../test-utils/async-db";
 import { createDriverFactories } from "../test-utils/driver-factories";
+import { execAsync } from "../core/executor";
 
 export const fractionalCompare = <T extends { id: string; orderToken: string }>(
   item1: T,
@@ -95,6 +96,23 @@ describe("db", async () => {
         db.preloadTables([{ table: tasksTable, scanIndex: "ids" }]),
       ).resolves.toBeUndefined();
     });
+
+    it(
+      "bulk-reads a table without requiring a full-scan index - " + driverName,
+      async () => {
+        const db = new DB(await createDriver());
+        await execAsync(db.loadTables([writeSemanticsTable]));
+        const rows = [
+          { id: "a", value: "A" },
+          { id: "b", value: "B", optionalValue: "present" },
+        ];
+        await execAsync(db.insert(writeSemanticsTable, rows));
+
+        await expect(
+          execAsync(db.scanAll(writeSemanticsTable)),
+        ).resolves.toEqual(rows);
+      },
+    );
 
     it(
       "queries matching uniqhash and B-tree logical indexes - " + driverName,

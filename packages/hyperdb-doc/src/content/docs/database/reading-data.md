@@ -350,6 +350,11 @@ const unsub = db.subscribe((ops, traits, revision) => {
 });
 ```
 
+For a write already performed by another runtime that shares the same storage,
+`db.notifyExternalChanges(ops, traits?)` publishes only the reactive operation
+metadata. It bumps the revision and lets range-aware selector stores invalidate
+the affected reads, without repeating the storage mutation or lifecycle hooks.
+
 ## Practical guidance
 
 - Default to the defaults. Root memoization on, `selfChild` off, `gcTime` 30_000.

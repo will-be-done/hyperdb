@@ -8,8 +8,10 @@ sidebar:
 A driver is the actual storage backend behind a `DB`. The same selectors and
 actions run unchanged against any driver, and in any environment. You can use a
 single driver directly, or combine a persistent primary driver with an in-memory
-cache through [`HybridDB`](/runtime/db/#hybriddb). You also choose whether to use
-the sync or async runtime helpers, which depends on the storage path.
+cache through [`HybridDB`](/runtime/db/#hybriddb), or preload ID-only indexes
+through [`PreloadedHybridDB`](/runtime/db/#preloadedhybriddb). You also choose
+whether to use the sync or async runtime helpers, which depends on the storage
+path.
 
 ## Choosing a driver
 
@@ -21,15 +23,19 @@ the sync or async runtime helpers, which depends on the storage path.
 | `AsyncSqlDriver`    | `.../drivers/sqlite`   | async | both        | Async SQLite, including Turso WASM as a `HybridDB` primary    |
 
 Sync drivers work with `execSync` / `syncDispatch` / `selectSync`. Async drivers
-require `execAsync` / `asyncDispatch` / `selectAsync`. `HybridDB` also uses the
-async helpers, because a read may miss the memory cache and fall through to the
-primary store.
+require `execAsync` / `asyncDispatch` / `selectAsync`. `HybridDB` and
+`PreloadedHybridDB` also use the async helpers, because a read may need entity
+rows from the primary store.
 
 A typical local-first browser setup uses `HybridDB` with IndexedDB or async
 SQLite as the primary store and `BptreeInmemDriver` as the cache. If your whole
 working set can be loaded eagerly, a plain `SubscribableDB` over
 `BptreeInmemDriver` keeps the UI path fully synchronous. On the server, use a
 native `SqlDriver` while running the _same_ schema, selectors, and actions.
+
+All built-in drivers support the bulk table read used by
+`PreloadedHybridDB.loadTables`. This path does not require a user-declared
+full-scan index.
 
 ## In-memory
 

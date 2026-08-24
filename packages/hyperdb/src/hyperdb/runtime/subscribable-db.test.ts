@@ -258,6 +258,51 @@ describe("SubscribableDB", async () => {
         ]);
       });
 
+      it("notifies subscribers about externally persisted changes", async () => {
+        const db = new DB(await createDriver());
+        const subscribableDB = new SubscribableDB(db).withTraits({
+          type: "database-trait",
+        }) as SubscribableDB;
+        const task: Task = {
+          id: "external-task",
+          title: "External Task",
+          state: "todo",
+          projectId: "project-1",
+          orderToken: "a",
+        };
+        const operation: Op = {
+          type: "upsert",
+          table: tasksTable,
+          newValue: task,
+        };
+        const notifications: {
+          operations: Op[];
+          traits: { type: string }[];
+          revision: number;
+        }[] = [];
+
+        subscribableDB.subscribe((operations, traits, revision) => {
+          notifications.push({ operations, traits, revision });
+        });
+
+        subscribableDB.notifyExternalChanges(
+          [operation],
+          [{ type: "external-storage" }],
+        );
+
+        expect(notifications).toEqual([
+          {
+            operations: [operation],
+            traits: [{ type: "database-trait" }, { type: "external-storage" }],
+            revision: 1,
+          },
+        ]);
+        expect(subscribableDB.getRevision()).toBe(1);
+
+        subscribableDB.notifyExternalChanges([]);
+        expect(subscribableDB.getRevision()).toBe(1);
+      });
+
       it("should unsubscribe subscribers registered through withTraits", async () => {
         const db = new DB(await createDriver());
         const subscribableDB = new SubscribableDB(db);
