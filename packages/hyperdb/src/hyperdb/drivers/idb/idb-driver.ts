@@ -195,6 +195,26 @@ function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+function readAllWithCursor<T>(source: IDBObjectStore): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const results: T[] = [];
+    const request = source.openCursor();
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve(results);
+        return;
+      }
+
+      results.push(cursor.value as T);
+      cursor.continue();
+    };
+    request.onerror = () =>
+      reject(request.error ?? new Error("IDB cursor request failed"));
+  });
+}
+
 function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -1637,6 +1657,23 @@ export class IdbDriver implements DBDriver {
     } finally {
       yield* tx.rollback();
     }
+  }
+
+  *scanAll(
+    tableName: string,
+    options: DBDriverOperationOptions = {},
+  ): Generator<DBCmd, Row[]> {
+    this.getTableDefinition(tableName);
+    return yield* this.withTransaction(
+      "readonly",
+      [tableStoreName(tableName)],
+      async (tx) => {
+        const store = tx.objectStore(tableStoreName(tableName));
+        const records = await readAllWithCursor<NativeStoredRecord>(store);
+        return records.map(decodeStoredRecord);
+      },
+      options,
+    );
   }
 
   private async ensureSchema(

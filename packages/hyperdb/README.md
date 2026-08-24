@@ -33,6 +33,9 @@ to strain:
   possible and load missing ranges from the primary store on demand. Writes
   update the cache first so the UI can respond immediately, then flush to the
   primary store in order.
+- **Preloaded indexes without preloaded rows.** `PreloadedHybridDB` loads every
+  declared index into memory as key-to-id entries at startup, then batch-loads
+  only the entity rows selected by a scan and caches them by id.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a
@@ -174,6 +177,20 @@ export async function createAppDB() {
 for successful index scans. `HybridDB` keeps the persistent store durable while
 serving cached index ranges from memory.
 
+If all index keys fit in memory but all entity rows do not, wrap
+`new PreloadedHybridDB(primary)` instead of `HybridDB`. `loadTables`
+automatically preloads every declared index as key-to-id entries. A scan first
+resolves ordered IDs in memory, including through non-ID `uniqhash` pointers.
+It then uses the built-in `byId` `uniqhash` as the canonical entity cache and
+batch-loads only unresolved IDs. This mode does not need an explicit
+`preloadTables` call or a separate B-tree `byIds` index.
+Exact `byId` misses check the primary, allowing rows added by another connected
+runtime to be incorporated after startup.
+Apply changesets already persisted by another runtime sharing the primary with
+`externalStorageMergeTrait`. Their merge updates the preloaded snapshot through
+normal transaction operations and produces normal subscriber invalidations;
+external inserts persist idempotently instead of failing as duplicates.
+
 ```tsx
 import {
   DBProvider,
@@ -235,15 +252,15 @@ that same promise resolves.
 
 ## Entry points
 
-| Import path                              | Contents                                                                             |
-| ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB` |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                         |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                               |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                  |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                        |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                   |
-| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                         |
+| Import path                              | Contents                                                                                                  |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `PreloadedHybridDB`, `SubscribableDB` |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                              |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                    |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                       |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                             |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                                        |
+| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                                              |
 
 ## Learn more
 

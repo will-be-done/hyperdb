@@ -125,6 +125,13 @@ can fall through to storage, while startup stays quick and memory stays low.
 Writes update the cache first for an immediate UI response, then flush to the
 primary store in order.
 
+`PreloadedHybridDB` offers a different memory/startup tradeoff. It reads each
+table once at startup to build every index with entity IDs as leaves, but does
+not retain the rows themselves. Scans therefore resolve bounds entirely in
+memory and batch-load only entity IDs that have not already been cached. This is
+useful when the index projection fits in memory while the complete dataset does
+not.
+
 ## Composable app logic
 
 HyperDB selectors and actions compose like ordinary code. A selector can call

@@ -14,6 +14,7 @@ export type {
 export * from "./core/query/bounds";
 export * from "./runtime/subscribable-db";
 export * from "./runtime/hybrid-db";
+export * from "./runtime/preloaded-hybrid-db";
 export * from "./schema/table";
 export * from "./schema/values";
 export * from "./tracing";

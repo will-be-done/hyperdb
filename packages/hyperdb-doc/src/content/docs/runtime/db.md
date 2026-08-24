@@ -1,6 +1,6 @@
 ---
 title: The DB Runtime
-description: DB, SubscribableDB, HybridDB, transactions, lifecycle hooks, and traits.
+description: DB, SubscribableDB, HybridDB, PreloadedHybridDB, transactions, lifecycle hooks, and traits.
 sidebar:
   order: 1
 ---
@@ -10,12 +10,13 @@ commands.
 
 ## Which runtime should I use?
 
-| Runtime shape                   | Use when                                                                                   | Tradeoff                                                                                                                                                                                                                                     |
-| ------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DB`                            | You only need `selectSync`, `insert`, `upsert`, `deleteRows`, and transactions.            | Lowest overhead. No subscriptions, reactive selector cache, revisions, or lifecycle hooks.                                                                                                                                                   |
-| `SubscribableDB` + sync driver  | Your reactive app can load its working state into memory.                                  | Best interactive path: selectors and actions can stay synchronous with `useSyncSelector`, `useSyncDispatch`, `selectSync`, and `syncDispatch`.                                                                                               |
-| `SubscribableDB` + async driver | Your reactive app should keep memory low and read directly from IndexedDB or async SQLite. | Uses async selectors/actions. Simpler than `HybridDB`, but every read follows the async driver path.                                                                                                                                         |
-| `SubscribableDB` + `HybridDB`   | Local-first browser apps that want persistent storage plus fast reads for hot data.        | Uses async APIs, but reads check the in-memory cache first. Missing index ranges fall through to the primary store, then get cached for next time. Writes update the cache first for immediate UI response, then flush to the primary store. |
+| Runtime shape                          | Use when                                                                                   | Tradeoff                                                                                                                                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DB`                                   | You only need `selectSync`, `insert`, `upsert`, `deleteRows`, and transactions.            | Lowest overhead. No subscriptions, reactive selector cache, revisions, or lifecycle hooks.                                                                                                                                                   |
+| `SubscribableDB` + sync driver         | Your reactive app can load its working state into memory.                                  | Best interactive path: selectors and actions can stay synchronous with `useSyncSelector`, `useSyncDispatch`, `selectSync`, and `syncDispatch`.                                                                                               |
+| `SubscribableDB` + async driver        | Your reactive app should keep memory low and read directly from IndexedDB or async SQLite. | Uses async selectors/actions. Simpler than `HybridDB`, but every read follows the async driver path.                                                                                                                                         |
+| `SubscribableDB` + `HybridDB`          | Local-first browser apps that want persistent storage plus fast reads for hot data.        | Uses async APIs, but reads check the in-memory cache first. Missing index ranges fall through to the primary store, then get cached for next time. Writes update the cache first for immediate UI response, then flush to the primary store. |
+| `SubscribableDB` + `PreloadedHybridDB` | Index keys fit in memory, but retaining every entity row would be too expensive.           | `loadTables` eagerly reads all tables once to build ID-only indexes. Scans never need persistent index work, but the first access to an entity row is asynchronous. Writes are persisted before the in-memory indexes are published.         |
 
 ## `DB`
 
@@ -235,6 +236,78 @@ the known old and new values. The built-in `byId` lookup is covered by id even
 when a delete did not know the old row. That lets exact unique reads return from
 memory while broader uncached scans still wait when a pending write could affect
 their interval.
+
+## `PreloadedHybridDB`
+
+`PreloadedHybridDB` is the middle ground between range-cached `HybridDB` and a
+fully resident `BptreeInmemDriver`. On `loadTables`, it preloads every declared
+index on every loaded table. Each B-tree or hash leaf stores only the entity ID;
+the startup rows used to build those keys are then released.
+
+```ts
+import {
+  DB,
+  PreloadedHybridDB,
+  SubscribableDB,
+  externalStorageMergeTrait,
+  execAsync,
+} from "@will-be-done/hyperdb";
+import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
+
+const primary = new DB(await openIndexedDBDriver("my-app"));
+const db = new SubscribableDB(new PreloadedHybridDB(primary));
+
+// Automatically preloads all indexes on both tables, including byId.
+await execAsync(db.loadTables([tasksTable, projectsTable]));
+```
+
+`loadTables` is incremental. A later call keeps previously loaded tables and
+adds or refreshes only the table definitions passed to that call.
+
+A scan first reads its bounds from the in-memory ID-only index. This includes
+non-ID `uniqhash` indexes, which are preloaded as unique value-to-ID pointers.
+The built-in `byId` `uniqhash` is the canonical entity store: it begins with
+unresolved ID entries, loads missing rows from the primary in batches, and
+replaces those entries with hydrated rows. The result is returned in the order
+produced by the scanned index. Repeating the scan—or reaching the same entities
+through another index—reuses the hydrated `byId` entries.
+
+An exact `byId` miss checks the primary before returning no row. This lets an
+independently connected runtime, such as another browser tab, add a row after
+the preload snapshot; discovering that row also adds its secondary index
+pointers locally.
+
+When merging a changeset that another runtime has already committed to the same
+primary storage, add `externalStorageMergeTrait` alongside the trait that
+suppresses local change tracking:
+
+```ts
+await asyncDispatch(
+  db.withTraits({ type: "skip-sync" }, externalStorageMergeTrait),
+  mergeChanges(args),
+);
+```
+
+In this mode the merge compares against the preloaded snapshot. A row absent
+from that snapshot follows the normal insert path, while persistence uses an
+idempotent upsert because the external writer may already have stored it. The
+committed insert/upsert/delete operations therefore update every preloaded
+index and notify `SubscribableDB` subscribers normally. Use this trait only for
+already-persisted external changesets; ordinary inserts retain duplicate-ID
+checking.
+
+`preloadTables` is unnecessary in this mode because `loadTables` always covers
+all indexes, and tables do not need an extra B-tree full-scan index. Inserts,
+upserts, deletes, and transactions update both the durable primary and the
+ID-only indexes. Unlike `HybridDB`'s optimistic write path, these writes wait for
+the primary operation before publishing the new in-memory index state.
+Transactional hash-index changes use copy-on-write buckets and are published or
+discarded together with the transaction.
+
+Use this runtime when index keys are substantially smaller than complete rows
+and startup can afford one bulk read of each table. Use regular `HybridDB` when
+startup should touch only queried ranges, or a plain in-memory driver when all
+rows comfortably fit in memory and reads must remain synchronous.
 
 ## Executing commands
 

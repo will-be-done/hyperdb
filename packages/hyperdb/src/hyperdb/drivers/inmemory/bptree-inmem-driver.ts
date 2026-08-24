@@ -13,17 +13,23 @@ import { InMemoryBinaryPlusTree } from "../../structures/bptree";
 import { compareStoredTuple, compareTuple } from "../../core/query/tuple";
 import { convertWhereToBound } from "../../core/query/bounds";
 import type { DBCmd } from "../../commands/async";
+import {
+  HashIndex as HashIndexStore,
+  HashIndexTx as HashIndexStoreTx,
+  hashIndexKey,
+  type HashIndexEntry,
+} from "../../structures/hash-index";
 
 type TableData = {
   tableDef: TableDefinition;
   indexes: Map<string, Index>;
-  idIndex: HashIndex;
+  idIndex: DriverHashIndex;
 };
 
 type TxTableData = {
   tableDef: TableDefinition;
   indexes: Map<string, IndexTx>;
-  idIndex: HashIndexTx;
+  idIndex: DriverHashIndexTx;
 };
 
 type BtreeIndexDef = {
@@ -85,30 +91,6 @@ const getHashIndexValue = (row: Row, column: string): Value | undefined => {
   const value = row[column];
   return value === undefined ? null : (value as Value);
 };
-
-function bytesOfHashValue(value: ArrayBuffer | ArrayBufferView): number[] {
-  if (value instanceof ArrayBuffer) {
-    return Array.from(new Uint8Array(value));
-  }
-  return Array.from(
-    new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
-  );
-}
-
-function toHex(value: number): string {
-  return value.toString(16).padStart(2, "0");
-}
-
-function hashIndexKey(value: Value): HashColumnKey {
-  if (value === null) return "null:";
-  if (typeof value === "string") return `string:${value}`;
-  if (typeof value === "number") {
-    return `number:${Object.is(value, -0) ? 0 : value}`;
-  }
-  if (typeof value === "bigint") return `bigint:${value.toString()}`;
-  if (typeof value === "boolean") return `boolean:${value ? "1" : "0"}`;
-  return `bytes:${bytesOfHashValue(value).map(toHex).join("")}`;
-}
 
 function stringifyWithBigInt(value: unknown): string {
   return JSON.stringify(value, (_key, item) =>
@@ -392,7 +374,7 @@ const getColumnValuesFromBounds = (
   indexDef: HashIndexDef,
   tupleBounds: TupleScanOptions[],
 ) => {
-  const idxValues = new Set<HashColumnKey>();
+  const idxValues = new Map<string, Value>();
 
   for (const bound of tupleBounds) {
     if (
@@ -436,24 +418,35 @@ const getColumnValuesFromBounds = (
       );
     }
 
-    idxValues.add(lteKey);
+    idxValues.set(lteKey, bound.lte[0] as Value);
   }
 
-  return idxValues;
+  return idxValues.values();
 };
 
-type HashColumnKey = string;
+function hashEntries(
+  indexDef: HashIndexDef,
+  values: readonly Row[],
+): HashIndexEntry<Row>[] {
+  return values.flatMap((record) => {
+    const key = getHashIndexValue(record, indexDef.column);
+    return key === undefined ? [] : [{ key, id: record.id, value: record }];
+  });
+}
 
-class HashIndex implements Index {
+class DriverHashIndex implements Index {
   get type(): "hash" | "uniqhash" {
     return this.indexDef.unique ? "uniqhash" : "hash";
   }
-  indexDef: HashIndexDef;
-  records: Map<HashColumnKey, Map<string, Row>> = new Map();
-  rowKeys: Map<RowId, HashColumnKey> = new Map();
+  readonly indexDef: HashIndexDef;
+  readonly store: HashIndexStore<Row>;
 
   constructor(indexDef: HashIndexDef) {
     this.indexDef = indexDef;
+    this.store = new HashIndexStore({
+      name: indexDef.name,
+      unique: indexDef.unique,
+    });
   }
 
   cols(): string[] {
@@ -461,112 +454,43 @@ class HashIndex implements Index {
   }
 
   scan(tupleBounds: TupleScanOptions[], selectOptions: SelectOptions): Row[] {
-    if (selectOptions.limit !== undefined && selectOptions.limit <= 0)
-      return [];
-
-    const idxValues = getColumnValuesFromBounds(this.indexDef, tupleBounds);
-
-    const results: Row[] = [];
-
-    for (const idxValue of idxValues) {
-      const rows = this.records.get(idxValue);
-
-      if (!rows) continue;
-
-      for (const row of rows.values()) {
-        results.push(row);
-
-        if (
-          selectOptions.limit !== undefined &&
-          results.length >= selectOptions.limit
-        ) {
-          return results;
-        }
-      }
-    }
-
-    return results;
+    return this.store.scan(
+      getColumnValuesFromBounds(this.indexDef, tupleBounds),
+      selectOptions,
+    );
   }
 
   validateInsert(values: Row[], replacingIds: Set<string>): void {
-    if (!this.indexDef.unique) return;
-
-    const batchKeys = new Map<HashColumnKey, string>();
-    for (const record of values) {
-      const colValue = getHashIndexValue(record, this.indexDef.column);
-      if (colValue === undefined) continue;
-      const key = hashIndexKey(colValue);
-      const batchId = batchKeys.get(key);
-      if (batchId !== undefined && batchId !== record.id) {
-        throw new Error(
-          `Unique hash index ${this.indexDef.name} already has value for record ${batchId}`,
-        );
-      }
-      batchKeys.set(key, record.id);
-
-      const existingRows = this.records.get(key);
-      if (!existingRows) continue;
-
-      for (const existingId of existingRows.keys()) {
-        if (existingId === record.id || replacingIds.has(existingId)) continue;
-        throw new Error(
-          `Unique hash index ${this.indexDef.name} already has value for record ${existingId}`,
-        );
-      }
-    }
+    this.store.validateInsert(hashEntries(this.indexDef, values), replacingIds);
   }
 
   insert(values: Row[]): void {
-    for (const record of values) {
-      const colValue = getHashIndexValue(record, this.indexDef.column);
-      if (colValue === undefined) continue;
-      const key = hashIndexKey(colValue);
-      this.rowKeys.set(record.id, key);
-
-      const rows = this.records.get(key);
-
-      if (!rows) {
-        const m = new Map();
-        m.set(record.id, record);
-        this.records.set(key, m);
-      } else {
-        rows.set(record.id, record);
-      }
-    }
+    this.store.insert(hashEntries(this.indexDef, values));
   }
 
   delete(values: Row[]): void {
-    for (const record of values) {
-      const key = this.rowKeys.get(record.id);
-      if (key === undefined) continue;
-
-      const rows = this.records.get(key);
-
-      if (!rows) continue;
-
-      rows.delete(record.id);
-      this.rowKeys.delete(record.id);
-    }
+    this.store.delete(values.map((record) => record.id));
   }
 
   tx(): IndexTx {
-    return new HashIndexTx(this);
+    return new DriverHashIndexTx(this, this.store.tx());
+  }
+
+  values(): Row[] {
+    return this.store.values();
   }
 }
 
-type RowId = string;
-type ColumnValue = HashColumnKey;
-class HashIndexTx implements IndexTx {
+class DriverHashIndexTx implements IndexTx {
   get type(): "hash" | "uniqhash" {
     return this.originalIndex.type;
   }
-  originalIndex: HashIndex;
-  private txBuckets = new Map<ColumnValue, Map<RowId, Row>>();
-  private txRowKeys = new Map<RowId, HashColumnKey | undefined>();
-  isCommitted = false;
+  readonly originalIndex: DriverHashIndex;
+  private readonly store: HashIndexStoreTx<Row>;
 
-  constructor(index: HashIndex) {
+  constructor(index: DriverHashIndex, store: HashIndexStoreTx<Row>) {
     this.originalIndex = index;
+    this.store = store;
   }
 
   cols(): string[] {
@@ -574,147 +498,33 @@ class HashIndexTx implements IndexTx {
   }
 
   commit(): void {
-    if (this.isCommitted) throw new Error("Can't commit after commit");
-
-    this.isCommitted = true;
-    for (const [columnValue, rows] of this.txBuckets) {
-      if (rows.size === 0) {
-        this.originalIndex.records.delete(columnValue);
-      } else {
-        this.originalIndex.records.set(columnValue, rows);
-      }
-    }
-    for (const [rowId, key] of this.txRowKeys) {
-      if (key === undefined) {
-        this.originalIndex.rowKeys.delete(rowId);
-      } else {
-        this.originalIndex.rowKeys.set(rowId, key);
-      }
-    }
+    this.store.commit();
   }
 
   rollback(): void {
-    if (this.isCommitted) throw new Error("Can't rollback after commit");
-
-    this.isCommitted = true;
+    this.store.rollback();
   }
 
   scan(tupleBounds: TupleScanOptions[], selectOptions: SelectOptions): Row[] {
-    if (this.isCommitted) throw new Error("Can't scan after commit");
-    if (selectOptions.limit !== undefined && selectOptions.limit <= 0)
-      return [];
-
-    const idxValues = getColumnValuesFromBounds(
-      this.originalIndex.indexDef,
-      tupleBounds,
+    return this.store.scan(
+      getColumnValuesFromBounds(this.originalIndex.indexDef, tupleBounds),
+      selectOptions,
     );
-
-    const results: Row[] = [];
-
-    for (const idxValue of idxValues) {
-      const rows = this.txBuckets.has(idxValue)
-        ? this.txBuckets.get(idxValue)
-        : this.originalIndex.records.get(idxValue);
-
-      if (!rows) continue;
-
-      for (const row of rows.values()) {
-        results.push(row);
-
-        if (
-          selectOptions.limit !== undefined &&
-          results.length >= selectOptions.limit
-        ) {
-          return results;
-        }
-      }
-    }
-
-    return results;
-  }
-
-  private writableRows(columnValue: ColumnValue): Map<RowId, Row> | undefined {
-    const txRows = this.txBuckets.get(columnValue);
-    if (txRows) return txRows;
-
-    const rows = this.originalIndex.records.get(columnValue);
-    if (!rows) return undefined;
-
-    const copiedRows = new Map(rows);
-    this.txBuckets.set(columnValue, copiedRows);
-    return copiedRows;
   }
 
   validateInsert(values: Row[], replacingIds: Set<string>): void {
-    if (!this.originalIndex.indexDef.unique) return;
-
-    const batchKeys = new Map<HashColumnKey, string>();
-    for (const record of values) {
-      const colValue = getHashIndexValue(
-        record,
-        this.originalIndex.indexDef.column,
-      );
-      if (colValue === undefined) continue;
-      const key = hashIndexKey(colValue);
-      const batchId = batchKeys.get(key);
-      if (batchId !== undefined && batchId !== record.id) {
-        throw new Error(
-          `Unique hash index ${this.originalIndex.indexDef.name} already has value for record ${batchId}`,
-        );
-      }
-      batchKeys.set(key, record.id);
-
-      const existingRows = this.txBuckets.has(key)
-        ? this.txBuckets.get(key)
-        : this.originalIndex.records.get(key);
-      if (!existingRows) continue;
-
-      for (const existingId of existingRows.keys()) {
-        if (existingId === record.id || replacingIds.has(existingId)) continue;
-        throw new Error(
-          `Unique hash index ${this.originalIndex.indexDef.name} already has value for record ${existingId}`,
-        );
-      }
-    }
+    this.store.validateInsert(
+      hashEntries(this.originalIndex.indexDef, values),
+      replacingIds,
+    );
   }
 
   insert(values: Row[]): void {
-    if (this.isCommitted) throw new Error("Can't insert after commit");
-
-    for (const record of values) {
-      const colValue = getHashIndexValue(
-        record,
-        this.originalIndex.indexDef.column,
-      );
-      if (colValue === undefined) continue;
-      const key = hashIndexKey(colValue);
-      this.txRowKeys.set(record.id, key);
-
-      const rows = this.writableRows(key);
-
-      if (!rows) {
-        const m = new Map();
-        m.set(record.id, record);
-        this.txBuckets.set(key, m);
-      } else {
-        rows.set(record.id, record);
-      }
-    }
+    this.store.insert(hashEntries(this.originalIndex.indexDef, values));
   }
 
   delete(values: Row[]): void {
-    if (this.isCommitted) throw new Error("Can't delete after commit");
-
-    for (const record of values) {
-      const key = this.txRowKeys.has(record.id)
-        ? this.txRowKeys.get(record.id)
-        : this.originalIndex.rowKeys.get(record.id);
-      if (key === undefined) continue;
-
-      const rows = this.writableRows(key);
-      rows?.delete(record.id);
-      this.txRowKeys.set(record.id, undefined);
-    }
+    this.store.delete(values.map((record) => record.id));
   }
 }
 
@@ -954,12 +764,12 @@ export class BptreeInmemDriverTx implements DBDriverTX {
 
     const indexes = new Map<string, IndexTx>();
 
-    let idTxIndex: HashIndexTx | undefined;
+    let idTxIndex: DriverHashIndexTx | undefined;
     for (const [name, index] of noTxTableData.indexes) {
       const txIndex = index.tx();
 
       if (index === noTxTableData.idIndex) {
-        idTxIndex = txIndex as HashIndexTx;
+        idTxIndex = txIndex as DriverHashIndexTx;
       }
 
       indexes.set(name, txIndex);
@@ -1033,7 +843,7 @@ export class BptreeInmemDriver implements DBDriver {
 
           indexes.set(
             indexName,
-            new HashIndex({
+            new DriverHashIndex({
               name: indexName,
               column: indexDef.cols[0] as string,
               unique: indexDef.type === "uniqhash",
@@ -1044,9 +854,12 @@ export class BptreeInmemDriver implements DBDriver {
         }
       }
 
-      let idIndex: HashIndex | undefined;
+      let idIndex: DriverHashIndex | undefined;
       for (const index of indexes.values()) {
-        if (index instanceof HashIndex && index.indexDef.column === "id") {
+        if (
+          index instanceof DriverHashIndex &&
+          index.indexDef.column === "id"
+        ) {
           idIndex = index;
           break;
         }
@@ -1064,6 +877,19 @@ export class BptreeInmemDriver implements DBDriver {
 
       this.tblDatas.set(tableDef.tableName, tableData);
     }
+  }
+
+  *scanAll(tableName: string): Generator<DBCmd, Row[]> {
+    if (this.isInTransaction) {
+      throw new Error("can't run while transaction is in progress");
+    }
+
+    const tableData = this.tblDatas.get(tableName);
+    if (!tableData) {
+      throw new Error(`Table ${tableName} not found`);
+    }
+
+    return tableData.idIndex.values();
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {

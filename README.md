@@ -37,6 +37,9 @@ to strain:
   possible and load missing ranges from the primary store on demand. Writes
   update the cache first so the UI can respond immediately, then flush to the
   primary store in order.
+- **Preloaded indexes without preloaded rows.** `PreloadedHybridDB` loads every
+  declared index into memory as key-to-id entries at startup, then batch-loads
+  only the entity rows selected by a scan and caches them by id.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a
@@ -176,6 +179,20 @@ export async function createAppDB() {
 `AsyncSqlDriver` is also exercised against Turso Database's browser WASM
 engine in the shared driver conformance suite.
 
+If all index keys fit in memory but all entity rows do not, use
+`new SubscribableDB(new PreloadedHybridDB(primary))` instead. Its `loadTables`
+call automatically preloads every index on every loaded table; scans resolve
+ordered IDs in memory, including non-ID `uniqhash` value-to-ID pointers, and
+batch-fetch only unresolved rows through the built-in `byId` entity index. No
+explicit `preloadTables` call or extra B-tree `byIds` index is needed.
+Repeated `loadTables` calls are incremental: previously loaded tables remain
+available while supplied table definitions are added or refreshed.
+Exact `byId` misses reconcile rows added by another connected runtime.
+Apply changesets already persisted by another runtime sharing the primary with
+`externalStorageMergeTrait`. Their normal merge operations update the preloaded
+snapshot and invalidate subscribers, while external inserts persist
+idempotently instead of failing as duplicates.
+
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
 reads and writes synchronous, so you can use `useSyncSelector`, `useSyncDispatch`,
@@ -256,15 +273,15 @@ internally, so the same async subscription behavior is available without React.
 
 ## Entry points
 
-| Import path                              | Contents                                                                             |
-| ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB` |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                         |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                               |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                  |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                        |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                   |
-| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                         |
+| Import path                              | Contents                                                                                                  |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `PreloadedHybridDB`, `SubscribableDB` |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                              |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                    |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                       |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                             |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                                        |
+| `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                                              |
 
 ## Learn more
 

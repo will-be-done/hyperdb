@@ -36,6 +36,21 @@ import type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
 type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
 
+const notifySubscribers = (
+  subscribers: Subscriber[],
+  operations: Op[],
+  traits: Trait[],
+  revision: number,
+) => {
+  for (const subscriber of [...subscribers]) {
+    try {
+      subscriber(operations, traits, revision);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+};
+
 type AfterInsertSub = (
   db: HyperDB,
   table: TableDefinition,
@@ -546,14 +561,12 @@ export class SubscribableDBTx implements HyperDBTx {
 
     const traits = this.getTraits();
     const revision = this.subDb.incrementRevision();
-    const subscribers = [...this.subDb.subscribers];
-    for (const subscriber of subscribers) {
-      try {
-        subscriber(this.operations, traits, revision);
-      } catch (error) {
-        console.error(error);
-      }
-    }
+    notifySubscribers(
+      this.subDb.subscribers,
+      this.operations,
+      traits,
+      revision,
+    );
   }
 
   throwIfDone() {

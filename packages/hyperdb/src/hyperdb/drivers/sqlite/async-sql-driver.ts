@@ -346,6 +346,42 @@ function* performAsyncScanOperation(
   });
 }
 
+function* performAsyncScanAllOperation(
+  db: AsyncSQLiteDB,
+  tableName: string,
+  debug?: AsyncSqlDriverDebug,
+): Generator<DBCmd, Row[]> {
+  return yield* unwrapCb(async () => {
+    const sql = `SELECT data FROM ${tableName}`;
+    const result: Row[] = [];
+    const startedAt = debug ? nowMs() : 0;
+    const statement = await db.prepare(sql);
+
+    try {
+      for (const row of await statement.values([])) {
+        result.push(parseSqliteStoredRow(row[0] as string));
+      }
+      emitAsyncSqlDebug(debug, "scan", sql, startedAt, () => ({
+        tableName,
+        rowCount: result.length,
+      }));
+      return result;
+    } catch (error) {
+      emitAsyncSqlDebug(
+        debug,
+        "scan",
+        sql,
+        startedAt,
+        () => ({ tableName, rowCount: result.length }),
+        error,
+      );
+      throw error;
+    } finally {
+      await statement.finalize();
+    }
+  });
+}
+
 class AsyncSqlDriverTx implements DBDriverTX {
   private db: AsyncSQLiteDB;
   private tableDefinitions: Map<string, TableDefinition>;
@@ -671,6 +707,23 @@ export class AsyncSqlDriver implements DBDriver {
         indexName,
         clauses,
         selectOptions,
+        this.debug,
+      );
+    } finally {
+      this.txAndQueryLock.release();
+    }
+  }
+
+  *scanAll(tableName: string): Generator<DBCmd, Row[]> {
+    yield* unwrapCb(async () => {
+      await this.txAndQueryLock.acquireAsync();
+    });
+
+    try {
+      this.getTableDefinition(tableName);
+      return yield* performAsyncScanAllOperation(
+        this.db,
+        tableName,
         this.debug,
       );
     } finally {

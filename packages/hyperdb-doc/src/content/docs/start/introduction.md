@@ -41,6 +41,9 @@ both the client and server.
   cache. Reads use cached index ranges when possible and fall through to the
   primary store only for missing ranges. Writes update the cache first for
   immediate UI feedback, then flush to the primary store.
+- Index-preloaded reads: `PreloadedHybridDB` keeps every declared index in
+  memory with ID-only leaves, then batch-loads and caches entity rows only when
+  scans select them.
 - JavaScript selectors and actions: selectors and actions are ordinary JS, with loops,
   conditionals, and function calls. HyperDB gives you fast indexed lookups and
   inserts underneath, not a query language to learn, and the same mental model on
@@ -93,14 +96,14 @@ npm install react react-dom
 
 The core package ships several entry points:
 
-| Import path                              | Contents                                                                                              |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `SubscribableDB`, runtime helpers |
-| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                          |
-| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                |
-| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                   |
-| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                         |
-| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                                    |
+| Import path                              | Contents                                                                                                                   |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `PreloadedHybridDB`, `SubscribableDB`, runtime helpers |
+| `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                                               |
+| `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                                     |
+| `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                                        |
+| `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                                              |
+| `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                                                         |
 
 The React devtool ships as a separate package, `@will-be-done/hyperdb-devtool`,
 exposing `HyperDBDevtools` from `@will-be-done/hyperdb-devtool/react`.

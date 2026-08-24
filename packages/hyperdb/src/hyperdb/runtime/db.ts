@@ -223,6 +223,22 @@ export class DB implements HyperDB {
     _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {}
 
+  /** @internal Bulk source for runtimes that preload derived indexes. */
+  *scanAll<TTable extends TableDefinition>(
+    table: TTable,
+  ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    if (!this.driver.scanAll) {
+      throw new Error(
+        `Driver does not support startup index preloading for table: ${table.tableName}`,
+      );
+    }
+
+    const records = yield* this.driver.scanAll(table.tableName, {
+      traceContext: getDriverTraceContextForDB(this),
+    });
+    return validateRecordsFromDriver(table, records, this.options);
+  }
+
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, DBTx> {
     const tx = yield* this.driver.beginTx(mode, {
       traceContext: getDriverTraceContextForDB(this),
