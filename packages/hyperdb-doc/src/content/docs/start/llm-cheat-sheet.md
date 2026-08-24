@@ -337,12 +337,14 @@ await execAsync(db.loadTables([tasksTable, projectsTable]));
 ```
 
 `loadTables` automatically preloads all declared indexes with entity IDs as
-their leaves, including non-ID `uniqhash` value-to-ID pointers. A bounded scan
-resolves IDs from memory and dereferences them through the built-in `byId`
-`uniqhash`. Unresolved `byId` entries are batch-loaded from the primary and then
-reused by reads through every index. Do not add a `byIds` B-tree or call
-`preloadTables` for this runtime. Reads remain async, and writes wait for primary
-persistence before publishing copy-on-write index changes.
+their leaves, including non-ID `uniqhash` value-to-ID pointers. Calls are
+incremental: existing tables remain loaded while supplied definitions are added
+or refreshed. A bounded scan resolves IDs from memory and dereferences them
+through the built-in `byId` `uniqhash`. Unresolved `byId` entries are batch-loaded
+from the primary and then reused by reads through every index. Do not add a
+`byIds` B-tree or call `preloadTables` for this runtime. Reads remain async, and
+writes wait for primary persistence before publishing copy-on-write index
+changes.
 Exact `byId` misses check the primary so rows added by another connected runtime
 can be discovered and incorporated into the preloaded indexes.
 For a changeset already persisted by another runtime sharing the primary, run

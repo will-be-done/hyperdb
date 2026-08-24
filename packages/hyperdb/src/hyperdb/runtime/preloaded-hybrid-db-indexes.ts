@@ -273,14 +273,12 @@ class IdHashIndex implements IdOnlyIndex {
 
   validateUpsert(rows: Row[]): void {
     const entries = this.entries(rows);
-    this.index.validateInsert(
-      entries,
-      new Set(entries.map((entry) => entry.id)),
-    );
+    this.index.validateInsert(entries, new Set(rows.map((row) => row.id)));
   }
 
   upsert(rows: Row[]): void {
-    this.index.upsert(this.entries(rows));
+    this.index.delete(rows.map((row) => row.id));
+    this.index.insert(this.entries(rows));
   }
 
   delete(ids: string[]): void {
@@ -352,8 +350,18 @@ export class PreloadedTableIndexes {
   private readonly indexes = new Map<string, IdOnlyIndex>();
   readonly table: TableDefinition;
 
-  constructor(table: TableDefinition, rows: Row[] = []) {
+  private static empty(table: TableDefinition): PreloadedTableIndexes {
+    return new PreloadedTableIndexes(table, [], false);
+  }
+
+  constructor(
+    table: TableDefinition,
+    rows: Row[] = [],
+    initializeIndexes = true,
+  ) {
     this.table = table;
+    if (!initializeIndexes) return;
+
     for (const [indexName, definition] of Object.entries(table.indexes)) {
       if (indexName === table.idIndexName) continue;
       this.indexes.set(
@@ -391,8 +399,7 @@ export class PreloadedTableIndexes {
   }
 
   fork(): PreloadedTableIndexes {
-    const fork = new PreloadedTableIndexes(this.table);
-    fork.indexes.clear();
+    const fork = PreloadedTableIndexes.empty(this.table);
     for (const [name, index] of this.indexes) {
       fork.indexes.set(name, index.fork());
     }

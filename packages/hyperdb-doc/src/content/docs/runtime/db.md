@@ -261,6 +261,9 @@ const db = new SubscribableDB(new PreloadedHybridDB(primary));
 await execAsync(db.loadTables([tasksTable, projectsTable]));
 ```
 
+`loadTables` is incremental. A later call keeps previously loaded tables and
+adds or refreshes only the table definitions passed to that call.
+
 A scan first reads its bounds from the in-memory ID-only index. This includes
 non-ID `uniqhash` indexes, which are preloaded as unique value-to-ID pointers.
 The built-in `byId` `uniqhash` is the canonical entity store: it begins with

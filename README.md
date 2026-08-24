@@ -185,6 +185,8 @@ call automatically preloads every index on every loaded table; scans resolve
 ordered IDs in memory, including non-ID `uniqhash` value-to-ID pointers, and
 batch-fetch only unresolved rows through the built-in `byId` entity index. No
 explicit `preloadTables` call or extra B-tree `byIds` index is needed.
+Repeated `loadTables` calls are incremental: previously loaded tables remain
+available while supplied table definitions are added or refreshed.
 Exact `byId` misses reconcile rows added by another connected runtime.
 Apply changesets already persisted by another runtime sharing the primary with
 `externalStorageMergeTrait`. Their normal merge operations update the preloaded

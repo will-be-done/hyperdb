@@ -8,7 +8,7 @@ import { SubscribableDB, type Op } from "./subscribable-db";
 import { PreloadedTableIndexes } from "./preloaded-hybrid-db-indexes";
 import { AsyncDB } from "../test-utils/async-db";
 import { createSqlJsDriver } from "../test-utils/sql-js-driver";
-import { defineTable } from "../schema/table";
+import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
 import { execAsync } from "../core/executor";
 
@@ -26,6 +26,16 @@ const projectsTable = defineTable("preloadedHybridProjects", {
   id: v.string(),
   title: v.string(),
 });
+
+const schemalessHashTable = {
+  tableName: "preloadedHybridSchemalessHash",
+  schema: {},
+  indexes: {
+    byId: { type: "uniqhash", cols: ["id"] },
+    byTag: { type: "hash", cols: ["tag"] },
+  },
+  idIndexName: "byId",
+} as unknown as TableDefinition;
 
 type Task = {
   id: string;
@@ -111,6 +121,30 @@ describe("PreloadedHybridDB", () => {
     ).resolves.toEqual([{ id: "p1", title: "Project" }]);
     expect(intervalScanSpy).toHaveBeenCalledTimes(1);
     expect(intervalScanSpy.mock.calls[0]?.[1]).toBe("byId");
+  });
+
+  it("preserves tables loaded by earlier loadTables calls", async () => {
+    const primary = new DB(await createSqlJsDriver());
+    const primaryDB = new AsyncDB(primary);
+    const row = task(1);
+    await primaryDB.loadTables([tasksTable, projectsTable]);
+    await primaryDB.insert(tasksTable, [row]);
+    await primaryDB.insert(projectsTable, [{ id: "p1", title: "Project" }]);
+
+    const db = new AsyncDB(new PreloadedHybridDB(primary));
+    await db.loadTables([tasksTable]);
+    await db.loadTables([projectsTable]);
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: row.value }] },
+      ]),
+    ).resolves.toEqual([row]);
+    await expect(
+      db.intervalScan(projectsTable, "byId", [
+        { eq: [{ col: "id", val: "p1" }] },
+      ]),
+    ).resolves.toEqual([{ id: "p1", title: "Project" }]);
   });
 
   it("uses the built-in byId hash index as the canonical entity cache", async () => {
@@ -243,6 +277,25 @@ describe("PreloadedHybridDB", () => {
     ]);
   });
 
+  it("applies byId limits before hydrating entities", async () => {
+    const rows = [task(1), task(2), task(3)];
+    const { db, intervalScanSpy } = await createRuntime(rows);
+    const clauses = rows.map((row) => ({
+      eq: [{ col: "id", val: row.id }],
+    }));
+
+    await expect(
+      db.intervalScan(tasksTable, "byId", clauses, { limit: 2 }),
+    ).resolves.toEqual(rows.slice(0, 2));
+    expect(intervalScanSpy.mock.calls[0]?.[2]).toEqual(clauses.slice(0, 2));
+
+    intervalScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "byId", clauses, { limit: 0 }),
+    ).resolves.toEqual([]);
+    expect(intervalScanSpy).not.toHaveBeenCalled();
+  });
+
   it("updates preloaded indexes and the entity cache on writes", async () => {
     const original = task(1);
     const { db, intervalScanSpy } = await createRuntime([original]);
@@ -337,6 +390,18 @@ describe("PreloadedHybridDB", () => {
     ).resolves.toEqual([swapped[1]]);
   });
 
+  it("removes stale hash entries when a schemaless row loses the column", () => {
+    const indexes = new PreloadedTableIndexes(schemalessHashTable, [
+      { id: "row-1", tag: "old" },
+    ]);
+
+    indexes.upsert([{ id: "row-1" }]);
+
+    expect(
+      indexes.scan("byTag", [{ eq: [{ col: "tag", val: "old" }] }]),
+    ).toEqual([]);
+  });
+
   it("stores entity IDs, not rows, in B-tree and hash index leaves", () => {
     const indexes = new PreloadedTableIndexes(tasksTable, [
       task(1, "same"),
@@ -358,7 +423,7 @@ describe("PreloadedHybridDB", () => {
       .flatMap((node) => node.values ?? []) as { value: unknown }[];
     expect(btreeLeafValues.map((entry) => entry.value)).toEqual(["001", "002"]);
 
-    const hashBuckets = internal.indexes.get("byTitle")?.index.buckets;
+    const hashBuckets = internal.indexes.get("byTitle")?.index?.buckets;
     expect(
       Array.from(hashBuckets?.values() ?? []).flatMap((bucket) => [
         ...bucket.values(),

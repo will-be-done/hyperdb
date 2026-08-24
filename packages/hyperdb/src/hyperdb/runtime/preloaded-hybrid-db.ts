@@ -169,6 +169,9 @@ function* scanPreloaded<TTable extends TableDefinition>(
   selectOptions?: SelectOptions,
 ): Generator<DBCmd, ExtractSchema<TTable>[]> {
   const tableState = data.get(table);
+  const limit = selectOptions?.limit;
+  if (limit !== undefined && limit <= 0) return [];
+
   const scansById = String(indexName) === table.idIndexName;
   let ids: string[];
   if (scansById) {
@@ -184,6 +187,8 @@ function* scanPreloaded<TTable extends TableDefinition>(
   } else {
     ids = tableState.indexes.scan(String(indexName), clauses, selectOptions);
   }
+  if (limit !== undefined) ids = ids.slice(0, limit);
+
   const missingIds = ids.filter((id) => {
     const entry = entityById(tableState.byId, id);
     return entry === undefined
@@ -222,9 +227,7 @@ function* scanPreloaded<TTable extends TableDefinition>(
     const entry = entityById(tableState.byId, id);
     return entry?.loaded ? [entry.row as ExtractSchema<TTable>] : [];
   });
-  return selectOptions?.limit === undefined
-    ? rows
-    : rows.slice(0, Math.max(0, selectOptions.limit));
+  return rows;
 }
 
 /**
@@ -286,7 +289,7 @@ export class PreloadedHybridDB implements HyperDB {
     const release = yield* acquireLock(this.state.lock);
     try {
       yield* this.delegatePrimary().loadTables(tables);
-      const data = new PreloadedHybridData();
+      const data = this.state.data;
       for (const table of tables) {
         const rows = yield* this.primary.scanAll(table);
         const byId = new HashIndex<EntityEntry>({
@@ -299,7 +302,6 @@ export class PreloadedHybridDB implements HyperDB {
           byId,
         });
       }
-      this.state.data = data;
     } finally {
       release();
     }
