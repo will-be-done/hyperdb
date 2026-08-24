@@ -186,6 +186,10 @@ ordered IDs in memory, including non-ID `uniqhash` value-to-ID pointers, and
 batch-fetch only unresolved rows through the built-in `byId` entity index. No
 explicit `preloadTables` call or extra B-tree `byIds` index is needed.
 Exact `byId` misses reconcile rows added by another connected runtime.
+Apply changesets already persisted by another runtime sharing the primary with
+`externalStorageMergeTrait`. Their normal merge operations update the preloaded
+snapshot and invalidate subscribers, while external inserts persist
+idempotently instead of failing as duplicates.
 
 If your whole app state can be loaded into memory at startup, you may not need
 `HybridDB`. A plain `new SubscribableDB(new DB(new BptreeInmemDriver()))` keeps
@@ -203,10 +207,6 @@ resolve a promise and expose query state.
 for successful index scans. `HybridDB` keeps the primary store persistent while
 serving cached index ranges from memory and loading missing range portions from
 the primary store.
-For writes already persisted by another runtime sharing that storage,
-`notifyExternalChanges(ops, traits?)` advances the reactive revision and
-invalidates affected selector ranges without repeating the mutation or running
-mutation hooks.
 
 ```tsx
 import {

@@ -298,11 +298,6 @@ revisions, subscriptions, selector invalidation, and lifecycle hooks. Pure
 in-memory apps can skip `HybridDB` and use `new SubscribableDB(new DB(new
 BptreeInmemDriver()))`.
 
-When another runtime has already durably changed shared storage, call
-`subscribableDb.notifyExternalChanges(ops, traits?)` with accurate
-insert/upsert/delete metadata. It invalidates reactive selector ranges without
-repeating the mutation or running mutation hooks.
-
 HybridDB readwrite transactions commit to the in-memory cache first and flush
 their final row changes to the persistent primary afterward. This keeps
 `asyncDispatch` responsive for UI writes. Cached scan intervals keep reading
@@ -333,6 +328,7 @@ import {
   DB,
   PreloadedHybridDB,
   SubscribableDB,
+  externalStorageMergeTrait,
   execAsync,
 } from "@will-be-done/hyperdb";
 
@@ -349,6 +345,11 @@ reused by reads through every index. Do not add a `byIds` B-tree or call
 persistence before publishing copy-on-write index changes.
 Exact `byId` misses check the primary so rows added by another connected runtime
 can be discovered and incorporated into the preloaded indexes.
+For a changeset already persisted by another runtime sharing the primary, run
+its merge with `externalStorageMergeTrait` and the app's change-tracking
+suppression trait. The merge then updates the preloaded snapshot through normal
+transaction operations, subscribers receive normal invalidations, and an
+external insert is persisted idempotently rather than failing as a duplicate.
 
 ## React Pattern
 

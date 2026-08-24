@@ -41,6 +41,13 @@ import {
 
 const entityLoadBatchSize = 500;
 
+export const externalStorageMergeTrait = {
+  type: "external-storage-merge",
+} as const satisfies Trait;
+
+const usesExternalStorageMerge = (db: HyperDB): boolean =>
+  db.getTraits().some((trait) => trait.type === externalStorageMergeTrait.type);
+
 type EntityEntry =
   | { id: string; loaded: false }
   | { id: string; loaded: true; row: Row };
@@ -179,7 +186,9 @@ function* scanPreloaded<TTable extends TableDefinition>(
   }
   const missingIds = ids.filter((id) => {
     const entry = entityById(tableState.byId, id);
-    return entry === undefined || !entry.loaded;
+    return entry === undefined
+      ? !usesExternalStorageMerge(owner)
+      : !entry.loaded;
   });
   const selectEvent = getCurrentSelectEventForDB(owner);
 
@@ -337,7 +346,12 @@ export class PreloadedHybridDB implements HyperDB {
   ): Generator<DBCmd, void> {
     const release = yield* acquireLock(this.state.lock);
     try {
-      yield* this.delegatePrimary().insert(table, records);
+      const primary = this.delegatePrimary();
+      if (usesExternalStorageMerge(this)) {
+        yield* primary.upsert(table, records);
+      } else {
+        yield* primary.insert(table, records);
+      }
       const state = this.state.data.get(table);
       state.indexes.upsert(records as Row[]);
       state.byId.upsert(loadedEntities(records as Row[]));
@@ -523,7 +537,12 @@ class PreloadedHybridDBTx implements HyperDBTx {
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
-    yield* this.delegatePrimary().insert(table, records);
+    const primary = this.delegatePrimary();
+    if (usesExternalStorageMerge(this)) {
+      yield* primary.upsert(table, records);
+    } else {
+      yield* primary.insert(table, records);
+    }
     const state = this.data.get(table);
     state.indexes.upsert(records as Row[]);
     state.byId.upsert(loadedEntities(records as Row[]));

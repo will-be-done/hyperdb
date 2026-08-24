@@ -82,21 +82,6 @@ const unsub = db.subscribe((ops, traits, revision) => {
 
 This is the mechanism the [selector cache](/database/reading-data/) uses.
 
-If another database instance writes to the same persistent storage, call
-`notifyExternalChanges(ops, traits?)` after that write is durable and readable.
-It advances the revision and invalidates affected selector ranges without
-executing another mutation or running mutation lifecycle hooks:
-
-```ts
-db.notifyExternalChanges([
-  { type: "upsert", table: tasksTable, newValue: taskWrittenElsewhere },
-]);
-```
-
-The caller must describe the externally persisted rows accurately. This API is
-intended for cross-tab or multi-runtime storage coordination, not as a
-replacement for normal actions.
-
 ### Lifecycle hooks
 
 You can run extra commands from lifecycle hooks. Mutation hooks run inside the
@@ -264,6 +249,7 @@ import {
   DB,
   PreloadedHybridDB,
   SubscribableDB,
+  externalStorageMergeTrait,
   execAsync,
 } from "@will-be-done/hyperdb";
 import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
@@ -287,6 +273,25 @@ An exact `byId` miss checks the primary before returning no row. This lets an
 independently connected runtime, such as another browser tab, add a row after
 the preload snapshot; discovering that row also adds its secondary index
 pointers locally.
+
+When merging a changeset that another runtime has already committed to the same
+primary storage, add `externalStorageMergeTrait` alongside the trait that
+suppresses local change tracking:
+
+```ts
+await asyncDispatch(
+  db.withTraits({ type: "skip-sync" }, externalStorageMergeTrait),
+  mergeChanges(args),
+);
+```
+
+In this mode the merge compares against the preloaded snapshot. A row absent
+from that snapshot follows the normal insert path, while persistence uses an
+idempotent upsert because the external writer may already have stored it. The
+committed insert/upsert/delete operations therefore update every preloaded
+index and notify `SubscribableDB` subscribers normally. Use this trait only for
+already-persisted external changesets; ordinary inserts retain duplicate-ID
+checking.
 
 `preloadTables` is unnecessary in this mode because `loadTables` always covers
 all indexes, and tables do not need an extra B-tree full-scan index. Inserts,

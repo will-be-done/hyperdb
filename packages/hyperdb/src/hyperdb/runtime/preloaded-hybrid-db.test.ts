@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { DB } from "./db";
-import { PreloadedHybridDB } from "./preloaded-hybrid-db";
+import {
+  externalStorageMergeTrait,
+  PreloadedHybridDB,
+} from "./preloaded-hybrid-db";
+import { SubscribableDB, type Op } from "./subscribable-db";
 import { PreloadedTableIndexes } from "./preloaded-hybrid-db-indexes";
 import { AsyncDB } from "../test-utils/async-db";
 import { createSqlJsDriver } from "../test-utils/sql-js-driver";
@@ -171,6 +175,56 @@ describe("PreloadedHybridDB", () => {
       ]),
     ).resolves.toEqual([external]);
     expect(intervalScanSpy).not.toHaveBeenCalled();
+  });
+
+  it("naturally publishes an external insert already present in storage", async () => {
+    const { runtime, primary, intervalScanSpy } = await createRuntime([]);
+    const subscribable = new SubscribableDB(runtime);
+    const external = task(8, "external merge");
+    await execAsync(primary.insert(tasksTable, [external]));
+    intervalScanSpy.mockClear();
+
+    const notifications: { operations: Op[]; traits: string[] }[] = [];
+    subscribable.subscribe((operations, traits) => {
+      notifications.push({
+        operations,
+        traits: traits.map((trait) => trait.type),
+      });
+    });
+
+    const externalMergeDB = new AsyncDB(
+      subscribable.withTraits({ type: "skip-sync" }, externalStorageMergeTrait),
+    );
+
+    await expect(
+      externalMergeDB.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: external.id }] },
+      ]),
+    ).resolves.toEqual([]);
+    expect(intervalScanSpy).not.toHaveBeenCalled();
+
+    await externalMergeDB.insert(tasksTable, [external]);
+
+    expect(notifications).toEqual([
+      {
+        operations: [{ type: "insert", table: tasksTable, newValue: external }],
+        traits: ["skip-sync", externalStorageMergeTrait.type],
+      },
+    ]);
+    await expect(
+      new AsyncDB(subscribable).intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: external.slug }] },
+      ]),
+    ).resolves.toEqual([external]);
+    await expect(
+      new AsyncDB(primary).intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: external.id }] },
+      ]),
+    ).resolves.toEqual([external]);
+
+    await expect(
+      new AsyncDB(subscribable).insert(tasksTable, [external]),
+    ).rejects.toThrow();
   });
 
   it("keeps B-tree ordering and limits while hydrating only selected IDs", async () => {

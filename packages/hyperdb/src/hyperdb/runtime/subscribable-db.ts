@@ -631,24 +631,6 @@ export class SubscribableDB implements HyperDB {
     return this.state.revision.val;
   }
 
-  /**
-   * Notifies reactive subscribers about changes that were already persisted by
-   * another database instance sharing the same storage.
-   *
-   * This does not execute mutations or lifecycle hooks. Call it only after the
-   * external write is durable and the local runtime can read its new state.
-   */
-  notifyExternalChanges(operations: Op[], traits: Trait[] = []): void {
-    if (operations.length === 0) return;
-
-    notifySubscribers(
-      this.subscribers,
-      operations,
-      [...this.getTraits(), ...traits],
-      this.incrementRevision(),
-    );
-  }
-
   private delegateDB(): HyperDB {
     return this.traits.length > 0
       ? this.db.withTraits(...this.traits)

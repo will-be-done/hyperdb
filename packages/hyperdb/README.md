@@ -176,10 +176,6 @@ export async function createAppDB() {
 `afterInsert`, `afterUpsert`, `afterDelete`, and `afterChange`, plus `afterScan`
 for successful index scans. `HybridDB` keeps the persistent store durable while
 serving cached index ranges from memory.
-For writes already persisted by another runtime sharing that storage,
-`notifyExternalChanges(ops, traits?)` advances the reactive revision and
-invalidates affected selector ranges without repeating the mutation or running
-mutation hooks.
 
 If all index keys fit in memory but all entity rows do not, wrap
 `new PreloadedHybridDB(primary)` instead of `HybridDB`. `loadTables`
@@ -190,6 +186,10 @@ batch-loads only unresolved IDs. This mode does not need an explicit
 `preloadTables` call or a separate B-tree `byIds` index.
 Exact `byId` misses check the primary, allowing rows added by another connected
 runtime to be incorporated after startup.
+Apply changesets already persisted by another runtime sharing the primary with
+`externalStorageMergeTrait`. Their merge updates the preloaded snapshot through
+normal transaction operations and produces normal subscriber invalidations;
+external inserts persist idempotently instead of failing as duplicates.
 
 ```tsx
 import {
