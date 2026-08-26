@@ -332,14 +332,20 @@ import {
   execAsync,
 } from "@will-be-done/hyperdb";
 
-const db = new SubscribableDB(new PreloadedHybridDB(primary));
+const db = new SubscribableDB(
+  new PreloadedHybridDB(primary, { preloadConcurrency: "whole" }),
+);
 await execAsync(db.loadTables([tasksTable, projectsTable]));
 ```
 
 `loadTables` automatically preloads all declared indexes with entity IDs as
 their leaves, including non-ID `uniqhash` value-to-ID pointers. Calls are
 incremental: existing tables remain loaded while supplied definitions are added
-or refreshed. A bounded scan resolves IDs from memory and dereferences them
+or refreshed. Supplied tables preload concurrently by default; use a positive
+numeric `preloadConcurrency` to cap active reads (`1` is sequential), or
+`"whole"` to start all supplied tables. Drivers may serialize internally, and
+greater concurrency raises temporary startup memory. A bounded scan resolves
+IDs from memory and dereferences them
 through the built-in `byId` `uniqhash`. Unresolved `byId` entries are batch-loaded
 from the primary and then reused by reads through every index. Do not add a
 `byIds` B-tree or call `preloadTables` for this runtime. Reads remain async, and

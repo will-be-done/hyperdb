@@ -7,10 +7,14 @@ import {
 import { SubscribableDB, type Op } from "./subscribable-db";
 import { PreloadedTableIndexes } from "./preloaded-hybrid-db-indexes";
 import { AsyncDB } from "../test-utils/async-db";
-import { createSqlJsDriver } from "../test-utils/sql-js-driver";
+import {
+  createSqlJsAsyncDriver,
+  createSqlJsDriver,
+} from "../test-utils/sql-js-driver";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
-import { execAsync } from "../core/executor";
+import { execAsync, execSync } from "../core/executor";
+import { unwrap } from "../commands/async";
 
 const tasksTable = defineTable("preloadedHybridTasks", {
   id: v.string(),
@@ -23,6 +27,11 @@ const tasksTable = defineTable("preloadedHybridTasks", {
   .index("bySlug", ["slug"], { type: "uniqhash" });
 
 const projectsTable = defineTable("preloadedHybridProjects", {
+  id: v.string(),
+  title: v.string(),
+});
+
+const labelsTable = defineTable("preloadedHybridLabels", {
   id: v.string(),
   title: v.string(),
 });
@@ -51,6 +60,52 @@ const task = (value: number, title = `Task ${value}`): Task => ({
   slug: `task-${value}`,
 });
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function controlTableScans(primary: DB, tables: TableDefinition[]) {
+  const gates = new Map(
+    tables.map((table) => [table.tableName, deferred<unknown[]>()]),
+  );
+  const started: string[] = [];
+  let active = 0;
+  let maxActive = 0;
+
+  vi.spyOn(primary, "scanAll").mockImplementation(function* (
+    table: TableDefinition,
+  ) {
+    const gate = gates.get(table.tableName);
+    if (!gate) throw new Error(`Missing scan gate for ${table.tableName}`);
+    started.push(table.tableName);
+    active++;
+    maxActive = Math.max(maxActive, active);
+    try {
+      return yield* unwrap(gate.promise);
+    } finally {
+      active--;
+    }
+  } as typeof primary.scanAll);
+
+  return {
+    gates,
+    started,
+    maxActive: () => maxActive,
+  };
+}
+
 async function createRuntime(rows: Task[]) {
   const primary = new DB(await createSqlJsDriver());
   const primaryDB = new AsyncDB(primary);
@@ -68,6 +123,118 @@ async function createRuntime(rows: Task[]) {
 }
 
 describe("PreloadedHybridDB", () => {
+  it("preloads all supplied tables concurrently by default", async () => {
+    const primary = new DB(await createSqlJsDriver());
+    const tables = [tasksTable, projectsTable, labelsTable];
+    const controlled = controlTableScans(primary, tables);
+    const loading = new AsyncDB(new PreloadedHybridDB(primary)).loadTables(
+      tables,
+    );
+
+    expect(controlled.started).toEqual(tables.map((table) => table.tableName));
+    expect(controlled.maxActive()).toBe(3);
+    for (const gate of controlled.gates.values()) gate.resolve([]);
+    await loading;
+  });
+
+  it("bounds concurrent table preloads and preserves the option through traits", async () => {
+    const primary = new DB(await createSqlJsDriver());
+    const tables = [tasksTable, projectsTable, labelsTable];
+    const controlled = controlTableScans(primary, tables);
+    const runtime = new PreloadedHybridDB(primary, { preloadConcurrency: 2 });
+    const loading = new AsyncDB(
+      runtime.withTraits({ type: "test" }),
+    ).loadTables(tables);
+
+    expect(controlled.started).toEqual(
+      tables.slice(0, 2).map((table) => table.tableName),
+    );
+    controlled.gates.get(tasksTable.tableName)!.resolve([]);
+    await vi.waitFor(() => {
+      expect(controlled.started).toHaveLength(3);
+    });
+    expect(controlled.maxActive()).toBe(2);
+    controlled.gates.get(projectsTable.tableName)!.resolve([]);
+    controlled.gates.get(labelsTable.tableName)!.resolve([]);
+    await loading;
+  });
+
+  it("keeps successful table preloads when another table fails", async () => {
+    const primary = new DB(await createSqlJsDriver());
+    const tables = [tasksTable, projectsTable, labelsTable];
+    const controlled = controlTableScans(primary, tables);
+    const runtime = new PreloadedHybridDB(primary, {
+      preloadConcurrency: "whole",
+    });
+    const db = new AsyncDB(runtime);
+    const loading = db.loadTables(tables);
+    const failure = new Error("projects preload failed");
+
+    controlled.gates.get(tasksTable.tableName)!.resolve([task(1)]);
+    controlled.gates.get(projectsTable.tableName)!.reject(failure);
+    controlled.gates
+      .get(labelsTable.tableName)!
+      .resolve([{ id: "label-1", title: "Label" }]);
+
+    await expect(loading).rejects.toBe(failure);
+    await expect(
+      db.preloadTables([
+        { table: tasksTable, scanIndex: "byId" },
+        { table: labelsTable, scanIndex: "byId" },
+      ]),
+    ).resolves.toBeUndefined();
+    await expect(
+      db.preloadTables([{ table: projectsTable, scanIndex: "byId" }]),
+    ).rejects.toThrow(`Table ${projectsTable.tableName} not found`);
+  });
+
+  it("supports sequential synchronous preloading with concurrency one", async () => {
+    const primary = new DB(await createSqlJsDriver());
+    const runtime = new PreloadedHybridDB(primary, { preloadConcurrency: 1 });
+
+    expect(() =>
+      execSync(runtime.loadTables([tasksTable, projectsTable])),
+    ).not.toThrow();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "all"])(
+    "rejects invalid preload concurrency %s",
+    async (preloadConcurrency) => {
+      const primary = new DB(await createSqlJsDriver());
+      expect(
+        () =>
+          new PreloadedHybridDB(primary, {
+            preloadConcurrency: preloadConcurrency as 1,
+          }),
+      ).toThrow('preloadConcurrency must be "whole" or a positive integer');
+    },
+  );
+
+  it("loads through an async SQLite primary with whole concurrency", async () => {
+    const primary = new DB(await createSqlJsAsyncDriver());
+    const primaryDB = new AsyncDB(primary);
+    const row = task(1);
+    await primaryDB.loadTables([tasksTable, projectsTable]);
+    await primaryDB.insert(tasksTable, [row]);
+    await primaryDB.insert(projectsTable, [{ id: "p1", title: "Project" }]);
+
+    const db = new AsyncDB(
+      new PreloadedHybridDB(primary, { preloadConcurrency: "whole" }),
+    );
+    await db.loadTables([tasksTable, projectsTable]);
+
+    await expect(
+      db.intervalScan(tasksTable, "byValue", [
+        { eq: [{ col: "value", val: row.value }] },
+      ]),
+    ).resolves.toEqual([row]);
+    await expect(
+      db.intervalScan(projectsTable, "byId", [
+        { eq: [{ col: "id", val: "p1" }] },
+      ]),
+    ).resolves.toEqual([{ id: "p1", title: "Project" }]);
+  });
+
   it("preloads every table index without retaining entity rows", async () => {
     const rows = [task(1, "same"), task(2, "same"), task(3, "other")];
     const { db, scanAllSpy, intervalScanSpy } = await createRuntime(rows);

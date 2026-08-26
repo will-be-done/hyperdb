@@ -9,3 +9,5 @@ hash-index transactions provide copy-on-write commit and rollback behavior.
 Add `externalStorageMergeTrait` for changesets already persisted by another
 runtime sharing the primary. Their normal merge operations update the preloaded
 snapshot, notify subscribers, and persist external inserts idempotently.
+Preloaded tables now load concurrently by default, with a generic
+`preloadConcurrency` option accepting a positive bound or `"whole"`.

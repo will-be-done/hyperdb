@@ -255,7 +255,9 @@ import {
 import { openIndexedDBDriver } from "@will-be-done/hyperdb/drivers/idb";
 
 const primary = new DB(await openIndexedDBDriver("my-app"));
-const db = new SubscribableDB(new PreloadedHybridDB(primary));
+const db = new SubscribableDB(
+  new PreloadedHybridDB(primary, { preloadConcurrency: "whole" }),
+);
 
 // Automatically preloads all indexes on both tables, including byId.
 await execAsync(db.loadTables([tasksTable, projectsTable]));
@@ -263,6 +265,14 @@ await execAsync(db.loadTables([tasksTable, projectsTable]));
 
 `loadTables` is incremental. A later call keeps previously loaded tables and
 adds or refreshes only the table definitions passed to that call.
+
+Tables supplied to one `loadTables` call preload concurrently by default. Set
+`preloadConcurrency` to a positive integer to bound active whole-table reads;
+`1` is sequential, while `"whole"` starts every supplied table and is the
+default. Scheduling is driver-agnostic: IndexedDB can overlap readonly cursor
+transactions, while a SQLite driver may serialize access to its connection.
+Each completed scan immediately builds ID-only indexes so its decoded rows can
+be released, but higher concurrency can still increase peak startup memory.
 
 A scan first reads its bounds from the in-memory ID-only index. This includes
 non-ID `uniqhash` indexes, which are preloaded as unique value-to-ID pointers.
