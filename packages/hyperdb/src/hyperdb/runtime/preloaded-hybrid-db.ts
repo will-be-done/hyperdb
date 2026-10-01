@@ -1,5 +1,6 @@
 import type { DBCmd } from "../commands/async";
 import { unwrap } from "../commands/async";
+import { execMaybeAsync } from "../core/executor";
 import type {
   HyperDB,
   HyperDBTx,
@@ -139,7 +140,74 @@ const createState = (): PreloadedHybridDBState => ({
 
 export type PreloadedHybridDBOptions = {
   traits?: Trait[];
+  preloadConcurrency?: number | "whole";
 };
+
+type TablePreloadResult =
+  | {
+      status: "fulfilled";
+      table: TableDefinition;
+      state: PreloadedTableState;
+    }
+  | { status: "rejected"; table: TableDefinition; reason: unknown };
+
+function normalizePreloadConcurrency(
+  concurrency: number | "whole" | undefined,
+): number | "whole" {
+  if (concurrency === undefined || concurrency === "whole") return "whole";
+  if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+    throw new Error('preloadConcurrency must be "whole" or a positive integer');
+  }
+  return concurrency;
+}
+
+function createPreloadedTableState(
+  table: TableDefinition,
+  rows: Row[],
+): PreloadedTableState {
+  const byId = new HashIndex<EntityEntry>({
+    name: table.idIndexName,
+    unique: true,
+  });
+  byId.insert(entityPointers(rows));
+  return {
+    indexes: new PreloadedTableIndexes(table, rows),
+    byId,
+  };
+}
+
+async function preloadTablesConcurrently(
+  primary: DB,
+  tables: TableDefinition[],
+  concurrency: number,
+): Promise<TablePreloadResult[]> {
+  const results = new Array<TablePreloadResult>(tables.length);
+  let nextTableIndex = 0;
+
+  const worker = async (): Promise<void> => {
+    while (nextTableIndex < tables.length) {
+      const tableIndex = nextTableIndex++;
+      const table = tables[tableIndex]!;
+      try {
+        const pendingRows = execMaybeAsync(primary.scanAll(table));
+        const rows =
+          pendingRows instanceof Promise ? await pendingRows : pendingRows;
+        results[tableIndex] = {
+          status: "fulfilled",
+          table,
+          state: createPreloadedTableState(table, rows as Row[]),
+        };
+      } catch (reason) {
+        results[tableIndex] = { status: "rejected", table, reason };
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, tables.length) }, worker),
+  );
+  return results;
+}
 
 function* acquireLock(lock: AwaitLock): Generator<DBCmd, () => void> {
   if (!lock.tryAcquire()) yield* unwrap(lock.acquireAsync());
@@ -239,17 +307,22 @@ function* scanPreloaded<TTable extends TableDefinition>(
 export class PreloadedHybridDB implements HyperDB {
   readonly primary: DB;
   traits: Trait[];
+  private readonly preloadConcurrency: number | "whole";
   private state: PreloadedHybridDBState;
 
   constructor(primary: DB, options: PreloadedHybridDBOptions = {}) {
     this.primary = primary;
     this.traits = options.traits ?? [];
+    this.preloadConcurrency = normalizePreloadConcurrency(
+      options.preloadConcurrency,
+    );
     this.state = createState();
   }
 
   withTraits(...traits: Trait[]): HyperDB {
     const db = new PreloadedHybridDB(this.primary, {
       traits: [...this.traits, ...traits],
+      preloadConcurrency: this.preloadConcurrency,
     });
     db.state = this.state;
     return db;
@@ -290,17 +363,41 @@ export class PreloadedHybridDB implements HyperDB {
     try {
       yield* this.delegatePrimary().loadTables(tables);
       const data = this.state.data;
-      for (const table of tables) {
-        const rows = yield* this.primary.scanAll(table);
-        const byId = new HashIndex<EntityEntry>({
-          name: table.idIndexName,
-          unique: true,
-        });
-        byId.insert(entityPointers(rows));
-        data.tables.set(table.tableName, {
-          indexes: new PreloadedTableIndexes(table, rows as Row[]),
-          byId,
-        });
+      const concurrency =
+        this.preloadConcurrency === "whole"
+          ? tables.length
+          : Math.min(this.preloadConcurrency, tables.length);
+
+      if (concurrency <= 1) {
+        let hasError = false;
+        let firstError: unknown;
+        for (const table of tables) {
+          try {
+            const rows = yield* this.primary.scanAll(table);
+            data.tables.set(
+              table.tableName,
+              createPreloadedTableState(table, rows as Row[]),
+            );
+          } catch (error) {
+            if (!hasError) firstError = error;
+            hasError = true;
+          }
+        }
+        if (hasError) throw firstError;
+        return;
+      }
+
+      const results = yield* unwrap(
+        preloadTablesConcurrently(this.primary, tables, concurrency),
+      );
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          data.tables.set(result.table.tableName, result.state);
+        }
+      }
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") {
+        throw failed.reason;
       }
     } finally {
       release();

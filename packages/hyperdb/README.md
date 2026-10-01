@@ -184,6 +184,11 @@ resolves ordered IDs in memory, including through non-ID `uniqhash` pointers.
 It then uses the built-in `byId` `uniqhash` as the canonical entity cache and
 batch-loads only unresolved IDs. This mode does not need an explicit
 `preloadTables` call or a separate B-tree `byIds` index.
+Tables supplied to `loadTables` preload concurrently by default. Use
+`new PreloadedHybridDB(primary, { preloadConcurrency: n })` to cap concurrent
+whole-table reads, or `"whole"` to make the default explicit. The storage driver
+may still serialize reads internally, and higher concurrency increases temporary
+startup memory.
 Exact `byId` misses check the primary, allowing rows added by another connected
 runtime to be incorporated after startup.
 Apply changesets already persisted by another runtime sharing the primary with
