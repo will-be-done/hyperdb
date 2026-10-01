@@ -1,5 +1,12 @@
 # @will-be-done/hyperdb
 
+## 0.7.0
+
+### Minor Changes
+
+- Preloaded tables now load concurrently by default, with a generic
+  `preloadConcurrency` option accepting a positive bound or `"whole"`.
+
 ## 0.6.0
 
 ### Minor Changes
