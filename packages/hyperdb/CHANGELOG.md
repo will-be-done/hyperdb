@@ -1,5 +1,17 @@
 # @will-be-done/hyperdb
 
+## 0.6.0
+
+### Minor Changes
+
+- 266b765: Add `PreloadedHybridDB`, which preloads every declared index with ID-only leaves
+  and batch-hydrates missing entity rows through the built-in `byId` `uniqhash`.
+  Secondary `uniqhash` indexes are preloaded as value-to-ID pointers, while shared
+  hash-index transactions provide copy-on-write commit and rollback behavior.
+  Add `externalStorageMergeTrait` for changesets already persisted by another
+  runtime sharing the primary. Their normal merge operations update the preloaded
+  snapshot, notify subscribers, and persist external inserts idempotently.
+
 ## 0.5.1
 
 ### Patch Changes
