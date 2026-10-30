@@ -334,7 +334,6 @@ export class UndoManager {
     const group = this.openGroup;
     if (group && captured.every((entry) => entry.group === group)) {
       group.changes.push(...changes);
-      this.redoStack = [];
       this.notify();
       return;
     }
@@ -379,6 +378,7 @@ export class UndoManager {
     group.closed = true;
     this.openGroup = undefined;
     if (hasChanges(group.changes)) {
+      this.redoStack = [];
       this.push(
         this.undoStack,
         { name: group.name, changes: group.changes },
@@ -393,6 +393,7 @@ export class UndoManager {
     this.busy = true;
     let tx: HyperDBTx | undefined;
     let committed = false;
+    let failed = false;
     try {
       tx = yield* this.db
         .withTraits({
@@ -459,16 +460,24 @@ export class UndoManager {
         );
       }
     } catch (error) {
-      if (tx && !committed) {
-        try {
-          yield* tx.rollback();
-        } catch {
-          // Some runtimes finish a failed commit. Preserve the original error.
-        }
-      }
+      failed = true;
       throw error;
     } finally {
-      this.busy = false;
+      try {
+        if (tx && !committed) {
+          if (failed) {
+            try {
+              yield* tx.rollback();
+            } catch {
+              // Some runtimes finish a failed commit. Preserve the original error.
+            }
+          } else {
+            yield* tx.rollback();
+          }
+        }
+      } finally {
+        this.busy = false;
+      }
     }
     this.notify();
   }

@@ -16,7 +16,7 @@ import {
 } from "../commands/action/builders";
 import { selectFrom } from "../commands/selector/builder";
 import { createSelector, selectSync } from "../commands/selector/selector";
-import { unwrap } from "../commands/async";
+import { isUnwrapCmd, noop, unwrap } from "../commands/async";
 import { createDriverFactories } from "../test-utils/driver-factories";
 import {
   undoMiddleware,
@@ -56,6 +56,81 @@ function setup() {
 }
 
 describe("undo middleware", () => {
+  for (const direction of ["undo", "redo"] as const) {
+    it(`rolls back an unfinished ${direction} when its generator is closed`, () => {
+      const { db, history, rows } = setup();
+      syncDispatch(db, insert(items, [{ id: "a", value: 1 }]));
+      if (direction === "redo") execSync(history.undo());
+      const before = rows();
+      const undoLevels = history.undoLevels;
+      const redoLevels = history.redoLevels;
+      const off = db.afterChange(function* (_tx, _table, traits) {
+        if (isUndoReplay(traits)) yield* noop();
+      });
+
+      const replay = history[direction]();
+      expect(replay.next().done).toBe(false);
+      expect(replay.return(undefined).done).toBe(true);
+      expect(rows()).toEqual(before);
+      expect(history.undoLevels).toBe(undoLevels);
+      expect(history.redoLevels).toBe(redoLevels);
+      off();
+      execSync(history[direction]());
+      expect(rows()).toEqual(
+        direction === "undo" ? [] : [{ id: "a", value: 1 }],
+      );
+    });
+
+    it(`finishes async rollback before unlocking a closed ${direction}`, async () => {
+      const { db, history, rows } = setup();
+      syncDispatch(db, insert(items, [{ id: "a", value: 1 }]));
+      if (direction === "redo") execSync(history.undo());
+      const before = rows();
+      const undoLevels = history.undoLevels;
+      const redoLevels = history.redoLevels;
+      let release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const driver = (db.db as DB).driver;
+      const beginTx = driver.beginTx.bind(driver);
+      const spy = vi.spyOn(driver, "beginTx").mockImplementation(function* (
+        ...args
+      ) {
+        const tx = yield* beginTx(...args);
+        const rollback = tx.rollback.bind(tx);
+        tx.rollback = function* () {
+          yield* unwrap(ready);
+          yield* rollback();
+        };
+        return tx;
+      });
+      const off = db.afterChange(function* (_tx, _table, traits) {
+        if (isUndoReplay(traits)) yield* noop();
+      });
+
+      const replay = history[direction]();
+      expect(replay.next().done).toBe(false);
+      const closing = replay.return(undefined);
+      expect(closing.done).toBe(false);
+      if (closing.done || !isUnwrapCmd(closing.value))
+        throw new Error("Expected async rollback");
+      expect(() => history.clearUndo()).toThrow("already executing");
+      expect(() => execSync(driver.beginTx())).toThrow(
+        "transaction is in progress",
+      );
+      release();
+      await closing.value.data;
+      expect(replay.next().done).toBe(true);
+      expect(rows()).toEqual(before);
+      expect(history.undoLevels).toBe(undoLevels);
+      expect(history.redoLevels).toBe(redoLevels);
+      off();
+      spy.mockRestore();
+      execSync(history[direction]());
+    });
+  }
+
   it("preserves unique-key swaps in upsert batches", () => {
     const table = defineTable(
       "undoUnique",
@@ -350,6 +425,37 @@ describe("undo middleware", () => {
     expect(rows()).toEqual([]);
     execSync(history.redo());
     expect(rows()).toEqual([{ id: "a", value: 2 }]);
+  });
+
+  it("preserves redo when grouped edits have no net effect", () => {
+    const { db, history, rows } = setup();
+    syncDispatch(db, insert(items, [{ id: "a", value: 1 }]));
+    syncDispatch(db, upsert(items, [{ id: "a", value: 2 }]));
+    execSync(history.undo());
+    const redoQueue = history.redoQueue;
+    history.withGroup((scoped) => {
+      syncDispatch(scoped, upsert(items, [{ id: "a", value: 3 }]));
+      syncDispatch(scoped, upsert(items, [{ id: "a", value: 1 }]));
+    });
+    expect(history.undoLevels).toBe(1);
+    expect(history.redoQueue).toEqual(redoQueue);
+    execSync(history.redo());
+    expect(rows()).toEqual([{ id: "a", value: 2 }]);
+  });
+
+  it("clears redo only when a manual group ends with effective changes", () => {
+    const { db, history } = setup();
+    syncDispatch(db, insert(items, [{ id: "a", value: 1 }]));
+    syncDispatch(db, upsert(items, [{ id: "a", value: 2 }]));
+    execSync(history.undo());
+    const group = history.createGroup();
+    group.continue((scoped) =>
+      syncDispatch(scoped, upsert(items, [{ id: "a", value: 3 }])),
+    );
+    expect(history.redoLevels).toBe(1);
+    group.end();
+    expect(history.redoLevels).toBe(0);
+    expect(history.undoLevels).toBe(2);
   });
 
   it("supports manual groups across separate synchronous blocks", async () => {

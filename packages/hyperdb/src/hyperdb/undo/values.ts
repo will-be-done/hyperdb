@@ -17,6 +17,7 @@ export function equalValues(a: unknown, b: unknown): boolean {
     return (
       !!aBinary &&
       !!bBinary &&
+      a.constructor === b.constructor &&
       aBinary.length === bBinary.length &&
       aBinary.every((value, index) => value === bBinary[index])
     );

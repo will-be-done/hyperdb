@@ -65,7 +65,8 @@ cache-first commit and background persistence behavior.
 `tables` is required. Limits are optional and unlimited by default; each must
 be a non-negative safe integer. Zero disables retention in that queue. A new
 recorded edit clears redo. Excluded edits do not clear redo, but can cause a
-conflict when replayed later.
+conflict when replayed later. A group clears redo only when it ends with effective
+changes; a group with no net changes preserves redo.
 
 ## Exclude writes inside actions
 
@@ -185,11 +186,13 @@ mutations can be registered before or after the manager.
 Before replay, the manager checks expected current rows inside its transaction.
 If an excluded write, remote change, or another manager has changed a row,
 replay throws `UndoConflictError` with `tableName` and `rowId`. It also checks
-that hooks leave replayed rows in their expected final state. On failure, data
-rolls back and neither queue moves. Hook, validation, and storage failures also
-leave history in place.
+that hooks leave replayed rows in their expected final state. Conflicts, hook
+failures, and validation failures roll back the transaction without moving either
+queue. Transaction-storage failures also leave history in place. With `HybridDB`,
+a later background persistence failure can occur after the cache commit and queue
+movement; it does not roll back the completed replay.
 
 Conflict checks compare entire rows, including nested values, bigint, and binary
-contents. They do not merge concurrent edits. Resolve the conflict or clear the
-affected queue before continuing. History is kept only in memory; persisted
+view types and contents. They do not merge concurrent edits. Resolve the conflict
+or clear the affected queue before continuing. History is kept only in memory; persisted
 history and attached cursor/selection state are not supported yet.

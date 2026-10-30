@@ -308,6 +308,8 @@ The manager exposes queues, `canUndo` / `canRedo`, limits, subscriptions,
 `withGroup`, and `createGroup`. Replay runs atomically and reports a conflict
 rather than overwriting rows changed outside history. Track source tables and
 let mutation hooks rebuild derived data. History is in memory.
+Groups with no net changes preserve redo. With `HybridDB`, a background persistence
+failure can occur after the cache commit and history queues have moved.
 See [Undo & Redo](https://hyperdb.will-be-done.app/integrations/undo/) for callback
 exclusions outside actions, grouping rules, hooks, and conflict handling.
 

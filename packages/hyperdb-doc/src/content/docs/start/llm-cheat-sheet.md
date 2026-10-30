@@ -292,7 +292,10 @@ Choose domain tables; let hooks rebuild untracked derived tables.
 from every manager. Entire-row conflicts throw `UndoConflictError` and roll back
 without moving either queue. Exclusions are per mutation and do not preserve
 individual fields within a row. History is in memory, with optional
-`maxUndoLevels` / `maxRedoLevels`; recorded edits clear redo.
+`maxUndoLevels` / `maxRedoLevels`; recorded edits clear redo. Groups clear redo
+only when finalized with effective changes; groups with no net changes preserve
+it. Binary conflicts compare view types as well as bytes. `HybridDB` background
+persistence can fail after the cache commit and history queue movement.
 
 ## HybridDB Setup
 
