@@ -17,6 +17,7 @@ Good deep links:
 - Actions: https://hyperdb.will-be-done.app/database/actions/
 - React: https://hyperdb.will-be-done.app/integrations/react/
 - Drivers: https://hyperdb.will-be-done.app/runtime/drivers/
+- Undo/redo: https://hyperdb.will-be-done.app/integrations/undo/
 
 ## What HyperDB Does
 
@@ -38,6 +39,8 @@ and views that should re-run only when the exact index ranges they read change.
 - `@will-be-done/hyperdb/react`: `DBProvider`, `useDB`, `useOptionalDB`,
   `useSyncSelector`, `useAsyncSelector`, `useSyncDispatch`, `useAsyncDispatch`,
   `useSelectSync`, and `useSelectAsync`.
+- `@will-be-done/hyperdb/undo`: `undoMiddleware`, `UndoManager`, `withoutUndo`,
+  `isUndoReplay`, `UndoConflictError`, and history types.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
   trace metadata helpers.
 - `@will-be-done/hyperdb/drivers/inmemory`: `BptreeInmemDriver`.
@@ -248,6 +251,51 @@ Use `await asyncDispatch(db, action(...))` for HybridDB and other asynchronous
 drivers. Use `syncDispatch(db, action(...))` only for synchronous drivers.
 `insert` fails on duplicate ids, `upsert` replaces whole rows by id, and
 `deleteRows` deletes by id.
+
+## Undo And Redo
+
+```ts
+import { undoMiddleware, withoutUndo } from "@will-be-done/hyperdb/undo";
+
+const history = undoMiddleware(db, {
+  tables: [tasksTable],
+  maxUndoLevels: 100,
+});
+execSync(history.undo()); // after an edit; throws when empty
+await execAsync(history.redo()); // asynchronous runtime
+
+function* edit() {
+  yield* history.withoutUndo(function* () {
+    yield* upsert(tasksTable, [task]); // skip this manager
+  });
+  yield* withoutUndo(function* () {
+    yield* upsert(tasksTable, [otherTask]); // skip every manager
+  });
+}
+```
+
+One committed transaction is one step. `undo()` / `redo()` manage their own
+transactions: execute them outside actions with `execSync` / `execAsync`.
+Use `history.withoutUndo(scopedDb => ...)` or
+`withoutUndo(db, scopedDb => ...)` outside actions; dispatch through `scopedDb`.
+No global recording flag or stop/resume pairing is needed.
+
+The manager has read-only queues and `store`, levels, `canUndo` / `canRedo`,
+`clearUndo` / `clearRedo`, `subscribe`, `getRevision`, and `dispose`.
+`withGroup(name?, scopedDb => ...)` groups synchronous dispatches;
+`createGroup(name?)` provides synchronous `continue(scopedDb => ...)` blocks
+and `end()`. Groups affect history, not transaction atomicity. An intervening
+recorded transaction closes a manual group; no async group-flow API exists.
+
+Choose domain tables; let hooks rebuild untracked derived tables.
+`isUndoReplay(traits)` identifies replay in mutation hooks. Replay is excluded
+from every manager. Entire-row conflicts throw `UndoConflictError` and roll back
+without moving either queue. Exclusions are per mutation and do not preserve
+individual fields within a row. History is in memory, with optional
+`maxUndoLevels` / `maxRedoLevels`; recorded edits clear redo. Groups clear redo
+only when finalized with effective changes; groups with no net changes preserve
+it. Binary conflicts compare view types as well as bytes. `HybridDB` background
+persistence can fail after the cache commit and history queue movement.
 
 ## HybridDB Setup
 

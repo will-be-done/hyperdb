@@ -3,6 +3,7 @@ import {
   isGetCurrentTraitsCmd,
   isInsertActionCmd,
   isUpsertActionCmd,
+  isRunWithTraitsCmd,
 } from "./action/commands";
 import type { HyperDB } from "../core/contracts";
 import { deepFreeze } from "../deep-freeze";
@@ -432,6 +433,17 @@ export function* runCommandGenerator<TReturn>(
               tableName: cmd.table.tableName,
               ids: cmd.values,
               run: () => scopedDB.delete(cmd.table, cmd.values),
+            },
+          ),
+        );
+      } else if (isRunWithTraitsCmd(cmd)) {
+        result = gen.next(
+          yield* runCommandGenerator(
+            scopedDB.withTraits(...cmd.traits),
+            cmd.body,
+            {
+              ...options,
+              traceContext,
             },
           ),
         );

@@ -276,12 +276,50 @@ that same promise resolves. The hook uses `createCachedSelectorStoreAsync`
 internally, so the same async subscription behavior is available without React.
 `defaultValue` may be a value or a zero-argument function that returns the value.
 
+## Undo and redo
+
+Attach transaction history to a `SubscribableDB`, selecting the domain tables
+that users can undo:
+
+```ts
+import { execSync, execAsync } from "@will-be-done/hyperdb";
+import { undoMiddleware, withoutUndo } from "@will-be-done/hyperdb/undo";
+
+const history = undoMiddleware(db, {
+  tables: [tasksTable],
+  maxUndoLevels: 100,
+});
+
+execSync(history.undo()); // after a recorded edit; throws if no undo is available
+execSync(history.redo());
+// Use await execAsync(history.undo()) with asynchronous runtimes.
+
+function* edit() {
+  yield* history.withoutUndo(function* () {
+    yield* upsert(tasksTable, [task]); // skip this manager only
+  });
+  yield* withoutUndo(function* () {
+    yield* upsert(tasksTable, [otherTask]); // skip every manager
+  });
+}
+```
+
+The manager exposes queues, `canUndo` / `canRedo`, limits, subscriptions,
+`withGroup`, and `createGroup`. Replay runs atomically and reports a conflict
+rather than overwriting rows changed outside history. Track source tables and
+let mutation hooks rebuild derived data. History is in memory.
+Groups with no net changes preserve redo. With `HybridDB`, a background persistence
+failure can occur after the cache commit and history queues have moved.
+See [Undo & Redo](https://hyperdb.will-be-done.app/integrations/undo/) for callback
+exclusions outside actions, grouping rules, hooks, and conflict handling.
+
 ## Entry points
 
 | Import path                              | Contents                                                                                                  |
 | ---------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `PreloadedHybridDB`, `SubscribableDB` |
 | `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                              |
+| `@will-be-done/hyperdb/undo`             | Undo/redo managers, scoped exclusions, grouping, and conflict errors                                      |
 | `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                    |
 | `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                       |
 | `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                             |

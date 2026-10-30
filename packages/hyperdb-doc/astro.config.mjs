@@ -60,6 +60,7 @@ export default defineConfig({
           items: [
             { label: "React", slug: "integrations/react" },
             { label: "Devtools & Tracing", slug: "integrations/devtools" },
+            { label: "Undo & Redo", slug: "integrations/undo" },
           ],
         },
         {
