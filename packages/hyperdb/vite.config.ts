@@ -21,6 +21,7 @@ export default defineConfig({
         index: resolve(__dirname, "src/index.ts"),
         react: resolve(__dirname, "src/react.ts"),
         tracing: resolve(__dirname, "src/hyperdb/tracing/index.ts"),
+        undo: resolve(__dirname, "src/hyperdb/undo/index.ts"),
         "drivers/inmemory": resolve(
           __dirname,
           "src/hyperdb/drivers/inmemory/bptree-inmem-driver.ts",

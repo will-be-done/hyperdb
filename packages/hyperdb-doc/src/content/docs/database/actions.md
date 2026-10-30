@@ -185,6 +185,15 @@ drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` 
 `afterChange` mutation hooks. `SubscribableDB` also exposes `afterScan` for
 successful reads.
 
+## Undo and redo
+
+The optional [undo plugin](/integrations/undo/) records committed transactions
+for selected tables. Its scoped `withoutUndo` helpers exclude individual writes
+inside an action, either for one manager or for every manager. Excluded writes
+still commit atomically with the rest of the action and notify subscribers.
+Run undo/redo outside actions with `execSync(history.undo())` or
+`await execAsync(history.undo())`.
+
 ## Bulk writes
 
 `insert`, `upsert`, and `deleteRows` all take arrays, so batch your writes

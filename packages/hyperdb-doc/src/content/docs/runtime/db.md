@@ -118,6 +118,15 @@ Because mutation hooks run within the transaction, anything they write commits
 atomically with the change that triggered them, and a throw rolls the whole
 thing back. An `afterScan` throw fails the scan that triggered it.
 
+### Undo and redo
+
+Attach `undoMiddleware(db, { tables: [...] })` from
+`@will-be-done/hyperdb/undo` to record committed transactions for selected domain
+tables. Trait views share the recording scope. Replay runs in a new transaction,
+notifies subscribers, and executes mutation hooks normally. Leave derived tables
+out of history and use `isUndoReplay(traits)` in hooks that would otherwise
+repeat recorded domain changes. See [Undo & Redo](/integrations/undo/).
+
 ## `HybridDB`
 
 `HybridDB` combines a primary store with an in-memory B-tree cache. In a browser

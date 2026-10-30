@@ -118,6 +118,11 @@ check the matching docs below and also check the root `README.md`.
   labels, the trace-list `in-mem` badge, per-DB tracers, global default tracers,
   factory trace options, and `skipTrace`.
 
+- `src/content/docs/integrations/undo.md`: Undo/redo plugin guide. Covers
+  transaction history, table selection, sync/async replay, manager APIs,
+  per-manager and global scoped exclusions, grouping, mutation hooks,
+  reactive subscriptions, conflicts, and in-memory history limits.
+
 ## Guides
 
 - `src/content/docs/guides/sync-engine.md`: WIP sync design page. Describes
@@ -134,7 +139,7 @@ check the matching docs below and also check the root `README.md`.
   `database/reading-data.md`, `start/how-it-works.md`, React docs if hooks are
   affected, and the root `README.md`.
 - Action, mutation, transaction, hook, trait, or dispatch changes: check
-  `database/actions.md`, `runtime/db.md`, guides that use hooks/persistence,
+  `database/actions.md`, `runtime/db.md`, `integrations/undo.md`, guides that use hooks/persistence,
   and the root `README.md`.
 - Driver, storage codec, sync/async, `HybridDB`, IndexedDB, or SQLite changes:
   check `runtime/drivers.md`, `runtime/db.md`, `start/introduction.md`,

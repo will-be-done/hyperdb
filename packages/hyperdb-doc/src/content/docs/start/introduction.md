@@ -100,6 +100,7 @@ The core package ships several entry points:
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `@will-be-done/hyperdb`                  | Core: `defineTable`, `v`, `selectFrom`, builders, `DB`, `HybridDB`, `PreloadedHybridDB`, `SubscribableDB`, runtime helpers |
 | `@will-be-done/hyperdb/react`            | React hooks and `DBProvider`                                                                                               |
+| `@will-be-done/hyperdb/undo`             | Undo/redo managers, scoped exclusions, grouping, and conflict errors                                                       |
 | `@will-be-done/hyperdb/tracing`          | Tracing store and tracer configuration                                                                                     |
 | `@will-be-done/hyperdb/drivers/inmemory` | `BptreeInmemDriver`                                                                                                        |
 | `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                                              |

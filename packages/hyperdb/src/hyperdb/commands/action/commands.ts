@@ -1,10 +1,17 @@
-import type { Row } from "../../core/primitives";
+import type { Row, Trait } from "../../core/primitives";
 import type { TableDefinition } from "../../schema/table";
 
 export const insertType = "insert";
 export const upsertType = "upsert";
 export const deleteType = "delete";
 export const getCurrentTraitsType = "getCurrentTraits";
+export const runWithTraitsType = "runWithTraits";
+
+export type RunWithTraitsCmd = {
+  type: typeof runWithTraitsType;
+  traits: Trait[];
+  body: Generator<unknown, unknown, unknown>;
+};
 
 export type InsertActionCmd = {
   type: typeof insertType;
@@ -44,3 +51,6 @@ export const isGetCurrentTraitsCmd = (
   cmd: unknown,
 ): cmd is GetCurrentTraitsCmd =>
   isCmdObject(cmd) && cmd.type === getCurrentTraitsType;
+
+export const isRunWithTraitsCmd = (cmd: unknown): cmd is RunWithTraitsCmd =>
+  isCmdObject(cmd) && cmd.type === runWithTraitsType;

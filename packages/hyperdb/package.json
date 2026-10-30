@@ -41,6 +41,11 @@
       "types": "./dist/hyperdb/drivers/idb/idb-driver.d.ts",
       "import": "./dist/drivers/idb.mjs",
       "require": "./dist/drivers/idb.cjs"
+    },
+    "./undo": {
+      "types": "./dist/hyperdb/undo/index.d.ts",
+      "import": "./dist/undo.mjs",
+      "require": "./dist/undo.cjs"
     }
   },
   "files": [
