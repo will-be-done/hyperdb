@@ -1,5 +1,13 @@
 # @will-be-done/hyperdb
 
+## 0.8.0
+
+### Minor Changes
+
+- cdcc610: Add the optional `@will-be-done/hyperdb/undo` entry point with transaction-based
+  undo/redo, per-manager and global scoped exclusions, synchronous grouping,
+  history subscriptions, and atomic replay with row conflict detection.
+
 ## 0.7.0
 
 ### Minor Changes
