@@ -146,10 +146,16 @@ await asyncDispatch(
 Inside React use [`useSyncDispatch` / `useAsyncDispatch`](/integrations/react/),
 which bind the dispatcher to the database from context.
 
-With `HybridDB`, use the async dispatch path. Writes update the in-memory cache
-first so subscribers and React can respond immediately, then flush to the
-primary store in order. See [`HybridDB`](/runtime/db/#hybriddb) for the
-persistence and crash-handling details.
+`asyncDispatch` returns a promise, but runs cached operations and notifies
+subscribers before returning. Execution suspends when an operation needs I/O
+or a busy transaction lock.
+
+With `HybridDB` or `PreloadedHybridDB`, transactions publish memory changes
+before the primary store saves them. To wait for all transactions committed
+so far to reach storage, await `execAsync(db.waitForPersistence())` on the
+runtime or its `SubscribableDB` wrapper. A rejected persistence wait reports
+`HybridDBCrashedError`. See [runtime persistence](/runtime/db/#write-path)
+for retry and recovery behavior.
 
 ## Selectors can't write
 

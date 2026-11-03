@@ -16,7 +16,7 @@ commands.
 | `SubscribableDB` + sync driver         | Your reactive app can load its working state into memory.                                  | Best interactive path: selectors and actions can stay synchronous with `useSyncSelector`, `useSyncDispatch`, `selectSync`, and `syncDispatch`.                                                                                               |
 | `SubscribableDB` + async driver        | Your reactive app should keep memory low and read directly from IndexedDB or async SQLite. | Uses async selectors/actions. Simpler than `HybridDB`, but every read follows the async driver path.                                                                                                                                         |
 | `SubscribableDB` + `HybridDB`          | Local-first browser apps that want persistent storage plus fast reads for hot data.        | Uses async APIs, but reads check the in-memory cache first. Missing index ranges fall through to the primary store, then get cached for next time. Writes update the cache first for immediate UI response, then flush to the primary store. |
-| `SubscribableDB` + `PreloadedHybridDB` | Index keys fit in memory, but retaining every entity row would be too expensive.           | `loadTables` eagerly reads all tables once to build ID-only indexes. Scans never need persistent index work, but the first access to an entity row is asynchronous. Writes are persisted before the in-memory indexes are published.         |
+| `SubscribableDB` + `PreloadedHybridDB` | Index keys fit in memory, but retaining every entity row would be too expensive.           | `loadTables` eagerly reads all tables once to build ID-only indexes. Scans never need persistent index work, but the first access to an entity row is asynchronous. Writes publish in-memory changes first, then persist in order.           |
 
 ## `DB`
 
@@ -211,6 +211,10 @@ changes to the primary store in a queued background transaction. Persistent
 flushes are serialized so the primary sees committed cache transactions in
 order.
 
+`waitForPersistence()` waits for all transactions committed before the call to
+reach the primary store. `SubscribableDB` forwards this method to its runtime.
+A runtime without background persistence needs no extra wait.
+
 The flush uses `upsert` for inserted and updated rows, so repeated persistence
 attempts can safely write the latest row value. If a background flush fails,
 HybridDB retries it with bounded backoff before giving up. While it is
@@ -317,11 +321,17 @@ checking.
 
 `preloadTables` is unnecessary in this mode because `loadTables` always covers
 all indexes, and tables do not need an extra B-tree full-scan index. Inserts,
-upserts, deletes, and transactions update both the durable primary and the
-ID-only indexes. Unlike `HybridDB`'s optimistic write path, these writes wait for
-the primary operation before publishing the new in-memory index state.
-Transactional hash-index changes use copy-on-write buckets and are published or
-discarded together with the transaction.
+upserts, and deletes update the transaction's ID-only indexes and hydrated rows
+first. Commit publishes these changes atomically, then queues one persistent
+transaction containing the final row values. Cached operations need no primary
+transaction. A read that needs hydration opens a readonly primary transaction
+and waits for pending writes before reading storage.
+
+`PreloadedHybridDB` shares `HybridDB`'s ordered persistence queue, retries, and
+permanent crash behavior. Await `execAsync(db.waitForPersistence())` before
+broadcasting a change to another process or acknowledging a sync revision.
+The wait covers transactions committed before the call, including through a
+`SubscribableDB` wrapper. Memory notifications alone do not prove durability.
 
 Use this runtime when index keys are substantially smaller than complete rows
 and startup can afford one bulk read of each table. Use regular `HybridDB` when

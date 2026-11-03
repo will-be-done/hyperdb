@@ -13,8 +13,9 @@ import {
 } from "../test-utils/sql-js-driver";
 import { defineTable, type TableDefinition } from "../schema/table";
 import { v } from "../schema/values";
-import { execAsync, execSync } from "../core/executor";
+import { execAsync, execMaybeAsync, execSync } from "../core/executor";
 import { unwrap } from "../commands/async";
+import { HybridDBCrashedError } from "./hybrid-db";
 
 const tasksTable = defineTable("preloadedHybridTasks", {
   id: v.string(),
@@ -123,6 +124,178 @@ async function createRuntime(rows: Task[]) {
 }
 
 describe("PreloadedHybridDB", () => {
+  it("publishes memory transactions while persistent commit is pending", async () => {
+    const original = task(1);
+    const updated = { ...original, title: "Completed" };
+    const { db, runtime, primary } = await createRuntime([original]);
+    await db.intervalScan(tasksTable, "byId", [
+      { eq: [{ col: "id", val: original.id }] },
+    ]);
+    const gate = deferred<void>();
+    const begin = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* begin(mode);
+      const commit = tx.commit.bind(tx);
+      tx.commit = function* () {
+        yield* unwrap(gate.promise);
+        yield* commit();
+      };
+      return tx;
+    });
+    const subscribable = new SubscribableDB(runtime);
+    const notifications: Op[][] = [];
+    subscribable.subscribe((ops) => notifications.push(ops));
+    const pending = execMaybeAsync(
+      (function* () {
+        const tx = yield* subscribable.beginTx();
+        yield* tx.upsert(tasksTable, [updated]);
+        yield* tx.commit();
+      })(),
+    );
+    try {
+      expect(pending).not.toBeInstanceOf(Promise);
+      expect(notifications).toHaveLength(1);
+      expect(
+        execMaybeAsync(
+          runtime.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: original.id }] },
+          ]),
+        ),
+      ).toEqual([updated]);
+      expect(
+        execSync(
+          primary.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: original.id }] },
+          ]),
+        ),
+      ).toEqual([original]);
+    } finally {
+      gate.resolve();
+      await pending;
+      await execAsync(runtime.waitForPersistence());
+    }
+  });
+
+  it("keeps writes and deletions cached while persistence is pending", async () => {
+    const original = task(1);
+    const updated = { ...original, title: "Updated" };
+    const { runtime, primary } = await createRuntime([original]);
+    const gate = deferred<void>();
+    const begin = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* begin(mode);
+      const commit = tx.commit.bind(tx);
+      tx.commit = function* () {
+        yield* unwrap(gate.promise);
+        yield* commit();
+      };
+      return tx;
+    });
+    execSync(runtime.upsert(tasksTable, [updated]));
+    execSync(runtime.delete(tasksTable, [original.id]));
+    expect(
+      execMaybeAsync(
+        runtime.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: original.id }] },
+        ]),
+      ),
+    ).toEqual([]);
+    execSync(runtime.insert(tasksTable, [updated]));
+    expect(
+      execMaybeAsync(
+        runtime.intervalScan(tasksTable, "bySlug", [
+          { eq: [{ col: "slug", val: original.slug }] },
+        ]),
+      ),
+    ).toEqual([updated]);
+    const durable = execMaybeAsync(
+      runtime.withTraits({ type: "test" }).waitForPersistence!(),
+    );
+    expect(durable).toBeInstanceOf(Promise);
+    gate.resolve();
+    await durable;
+    expect(
+      execSync(
+        primary.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: original.id }] },
+        ]),
+      ),
+    ).toEqual([updated]);
+  });
+
+  it("opens persistent transactions only when a read needs hydration", async () => {
+    const original = task(1);
+    const { runtime, primary } = await createRuntime([original]);
+    const gate = deferred<void>();
+    const begin = primary.beginTx.bind(primary);
+    const beginSpy = vi
+      .spyOn(primary, "beginTx")
+      .mockImplementation(function* (mode) {
+        const tx = yield* begin(mode);
+        const scan = tx.intervalScan.bind(tx);
+        tx.intervalScan = function* (table, index, clauses, options) {
+          yield* unwrap(gate.promise);
+          return yield* scan(table, index, clauses, options);
+        };
+        return tx;
+      });
+    const tx = execSync(runtime.beginTx());
+    expect(beginSpy).not.toHaveBeenCalled();
+    const reading = execMaybeAsync(
+      tx.intervalScan(tasksTable, "byId", [
+        { eq: [{ col: "id", val: original.id }] },
+      ]),
+    );
+    expect(reading).toBeInstanceOf(Promise);
+    expect(beginSpy).toHaveBeenCalledOnce();
+    gate.resolve();
+    expect(await reading).toEqual([original]);
+    await execAsync(
+      tx.upsert(tasksTable, [{ ...original, title: "Hydrated" }]),
+    );
+    await execAsync(tx.commit());
+    await execAsync(runtime.waitForPersistence());
+    expect(
+      execSync(
+        primary.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: original.id }] },
+        ]),
+      )[0]?.title,
+    ).toBe("Hydrated");
+  });
+
+  it("rejects durability waits and cached reads after persistence retries fail", async () => {
+    const { runtime, primary } = await createRuntime([]);
+    const failure = new Error("storage unavailable");
+    const begin = vi.spyOn(primary, "beginTx").mockImplementation(function* () {
+      throw failure;
+    });
+    vi.useFakeTimers();
+    try {
+      execSync(runtime.insert(tasksTable, [task(1)]));
+      const durable = expect(
+        execAsync(runtime.waitForPersistence()),
+      ).rejects.toMatchObject({
+        name: "HybridDBCrashedError",
+        cause: failure,
+      });
+      await vi.runAllTimersAsync();
+      await durable;
+      expect(begin).toHaveBeenCalledTimes(3);
+      expect(runtime.isCrashed).toBe(true);
+      expect(() =>
+        execSync(
+          runtime.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "001" }] },
+          ]),
+        ),
+      ).toThrow(HybridDBCrashedError);
+      expect(() => execSync(runtime.beginTx())).toThrow(HybridDBCrashedError);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preloads all supplied tables concurrently by default", async () => {
     const primary = new DB(await createSqlJsDriver());
     const tables = [tasksTable, projectsTable, labelsTable];
@@ -495,7 +668,7 @@ describe("PreloadedHybridDB", () => {
         { eq: [{ col: "id", val: inserted.id }] },
       ]),
     ).resolves.toEqual([]);
-    expect(intervalScanSpy).toHaveBeenCalledTimes(1);
+    expect(intervalScanSpy).not.toHaveBeenCalled();
   });
 
   it("publishes committed transaction index changes and discards rollbacks", async () => {

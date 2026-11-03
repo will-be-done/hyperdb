@@ -67,6 +67,7 @@ export interface HyperDB {
   canUseReadonlyTransactionsForSelectors(): boolean;
 
   beginTx(mode?: DBTransactionMode): Generator<DBCmd, HyperDBTx>;
+  waitForPersistence?(): Generator<DBCmd, void>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
   preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(

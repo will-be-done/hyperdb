@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { runCommandGenerator } from "../runner";
-import { execAsync, execSync } from "../../core/executor";
+import { execMaybeAsync, execSync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
+import type { DBCmd } from "../async";
 import type { Trait } from "../../core/primitives";
 import {
   defaultTraceOptions,
@@ -313,10 +314,10 @@ export function syncDispatch<TReturn>(
   }
 }
 
-export async function asyncDispatch<TReturn>(
+function* dispatchAction<TReturn>(
   db: HyperDB,
   action: Generator<unknown, TReturn, unknown>,
-): Promise<TReturn> {
+): Generator<DBCmd, TReturn> {
   const actionDB = withDriverTraceContextTrait(
     db,
     driverTraceContextFromFrameMeta(
@@ -324,21 +325,28 @@ export async function asyncDispatch<TReturn>(
       getDriverTraceContextForDB(db),
     ),
   );
-  const tx = await execAsync(actionDB.beginTx());
+  const tx = yield* actionDB.beginTx();
 
   let isCommitted = false;
   try {
-    const result = await execAsync(
-      runCommandGenerator(tx, action, { allowWrites: true }),
-    );
+    const result = yield* runCommandGenerator(tx, action, {
+      allowWrites: true,
+    });
 
-    await execAsync(tx.commit());
+    yield* tx.commit();
     isCommitted = true;
 
     return result;
   } finally {
     if (!isCommitted) {
-      await execAsync(tx.rollback());
+      yield* tx.rollback();
     }
   }
+}
+
+export async function asyncDispatch<TReturn>(
+  db: HyperDB,
+  action: Generator<unknown, TReturn, unknown>,
+): Promise<TReturn> {
+  return execMaybeAsync(dispatchAction(db, action));
 }

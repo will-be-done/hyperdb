@@ -651,6 +651,11 @@ export class SubscribableDB implements HyperDB {
     return new SubscribableDBTx(this, yield* this.delegateDB().beginTx(mode));
   }
 
+  *waitForPersistence(): Generator<DBCmd, void> {
+    const db = this.delegateDB();
+    if (db.waitForPersistence) yield* db.waitForPersistence();
+  }
+
   canUseReadonlyTransactionsForSelectors(): boolean {
     return this.delegateDB().canUseReadonlyTransactionsForSelectors();
   }

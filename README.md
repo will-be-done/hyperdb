@@ -39,7 +39,11 @@ to strain:
   primary store in order.
 - **Preloaded indexes without preloaded rows.** `PreloadedHybridDB` loads every
   declared index into memory as key-to-id entries at startup, then batch-loads
-  only the entity rows selected by a scan and caches them by id.
+  only the entity rows selected by a scan and caches them by id. Transactions
+  publish memory changes before background persistence. `asyncDispatch` runs
+  cached actions before returning its promise, suspending when an operation
+  needs I/O or a busy lock. Await `execAsync(db.waitForPersistence())` when you
+  need committed changes saved to the primary store.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a

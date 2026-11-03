@@ -396,9 +396,15 @@ greater concurrency raises temporary startup memory. A bounded scan resolves
 IDs from memory and dereferences them
 through the built-in `byId` `uniqhash`. Unresolved `byId` entries are batch-loaded
 from the primary and then reused by reads through every index. Do not add a
-`byIds` B-tree or call `preloadTables` for this runtime. Reads remain async, and
-writes wait for primary persistence before publishing copy-on-write index
-changes.
+`byIds` B-tree or call `preloadTables` for this runtime. Reads hydrate missing
+rows asynchronously. Transactions publish copy-on-write index and row changes
+before queued persistence. Cached `asyncDispatch` work runs before the call
+returns its promise. Execution suspends only for I/O or a busy lock.
+Await `execAsync(db.waitForPersistence())` on either hybrid runtime or its
+`SubscribableDB` wrapper before broadcasting changes or acknowledging sync.
+The wait covers transactions committed before the call. Permanent persistence
+failure rejects the wait and blocks further reads and writes with
+`HybridDBCrashedError`.
 Exact `byId` misses check the primary so rows added by another connected runtime
 can be discovered and incorporated into the preloaded indexes.
 For a changeset already persisted by another runtime sharing the primary, run
