@@ -211,6 +211,14 @@ changes to the primary store in a queued background transaction. Persistent
 flushes are serialized so the primary sees committed cache transactions in
 order.
 
+Both hybrid runtimes allow at most 100 unsettled persistence batches. If the
+queue is full, the transaction rejects before publishing cache changes. Await
+`execAsync(db.waitForPersistence())` and retry the transaction to resume writes.
+Empty transactions do not consume queue capacity.
+HybridDB snapshots inserted and upserted transaction rows when the write runs,
+so later caller mutations do not alter cached or persisted values. A transaction
+can delete a row and reuse its unique index value in another row.
+
 `waitForPersistence()` waits for all transactions committed before the call to
 reach the primary store. `SubscribableDB` forwards this method to its runtime.
 A runtime without background persistence needs no extra wait.
@@ -317,7 +325,10 @@ idempotent upsert because the external writer may already have stored it. The
 committed insert/upsert/delete operations therefore update every preloaded
 index and notify `SubscribableDB` subscribers normally. Use this trait only for
 already-persisted external changesets; ordinary inserts retain duplicate-ID
-checking.
+checking both in memory and when applied to storage. A concurrent duplicate in
+storage causes background persistence to fail and follows the retry and crash
+behavior below. Further writes to the inserted row within the transaction
+preserve this duplicate check.
 
 `preloadTables` is unnecessary in this mode because `loadTables` always covers
 all indexes, and tables do not need an extra B-tree full-scan index. Inserts,

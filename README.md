@@ -42,8 +42,13 @@ to strain:
   only the entity rows selected by a scan and caches them by id. Transactions
   publish memory changes before background persistence. `asyncDispatch` runs
   cached actions before returning its promise, suspending when an operation
-  needs I/O or a busy lock. Await `execAsync(db.waitForPersistence())` when you
-  need committed changes saved to the primary store.
+  needs database I/O, a busy transaction lock, or an unresolved promise yielded
+  by the action. Await `execAsync(db.waitForPersistence())` when you need
+  committed changes saved to the primary store. Both hybrid runtimes reject
+  transactions before publishing memory changes when 100 persistence batches
+  are unsettled; await persistence and retry the transaction. Ordinary
+  `PreloadedHybridDB` inserts preserve duplicate-ID checks during background
+  persistence.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a

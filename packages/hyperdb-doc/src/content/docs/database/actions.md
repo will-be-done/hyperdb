@@ -147,8 +147,8 @@ Inside React use [`useSyncDispatch` / `useAsyncDispatch`](/integrations/react/),
 which bind the dispatcher to the database from context.
 
 `asyncDispatch` returns a promise, but runs cached operations and notifies
-subscribers before returning. Execution suspends when an operation needs I/O
-or a busy transaction lock.
+subscribers before returning. Execution suspends for database I/O, a busy
+transaction lock, or an unresolved promise yielded by the action.
 
 With `HybridDB` or `PreloadedHybridDB`, transactions publish memory changes
 before the primary store saves them. To wait for all transactions committed

@@ -533,6 +533,10 @@ export class PreloadedHybridDB implements HyperDB {
     this.state.persistence.enqueue(primary, writes);
   }
 
+  throwIfPersistenceFull(writes: HybridPendingWrite[]): void {
+    this.state.persistence.throwIfFull(writes);
+  }
+
   commitData(data: PreloadedHybridData): void {
     data.materializeFork();
     this.state.data = data;
@@ -694,12 +698,20 @@ class PreloadedHybridDBTx implements HyperDBTx {
         ids.add(row.id);
       }
     }
-    yield* this.upsert(table, records);
+    yield* this.writeRows(table, records, !usesExternalStorageMerge(this));
   }
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
+  ): Generator<DBCmd, void> {
+    yield* this.writeRows(table, records, false);
+  }
+
+  private *writeRows<TTable extends TableDefinition>(
+    table: TTable,
+    records: ExtractSchema<TTable>[],
+    insertOnly: boolean,
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
@@ -713,6 +725,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
         table,
         id: row.id,
         newValue: row,
+        insertOnly,
         oldValueKnown: false,
       });
     }
@@ -750,6 +763,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
       if (this.state.primaryTx) yield* this.state.primaryTx.commit();
       this.owner.throwIfCrashed();
       if (this.mode === "readwrite") {
+        this.owner.throwIfPersistenceFull(this.state.writes);
         this.owner.commitData(this.data);
         this.owner.enqueuePersistence(
           this.state.writes,

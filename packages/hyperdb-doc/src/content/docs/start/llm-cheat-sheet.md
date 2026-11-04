@@ -399,7 +399,11 @@ from the primary and then reused by reads through every index. Do not add a
 `byIds` B-tree or call `preloadTables` for this runtime. Reads hydrate missing
 rows asynchronously. Transactions publish copy-on-write index and row changes
 before queued persistence. Cached `asyncDispatch` work runs before the call
-returns its promise. Execution suspends only for I/O or a busy lock.
+returns its promise. Execution suspends for database I/O, a busy transaction
+lock, or an unresolved promise yielded by the action.
+Both hybrid runtimes allow at most 100 unsettled persistence batches. At
+capacity, a transaction rejects before publishing memory changes; await
+`waitForPersistence()` and retry the transaction.
 Await `execAsync(db.waitForPersistence())` on either hybrid runtime or its
 `SubscribableDB` wrapper before broadcasting changes or acknowledging sync.
 The wait covers transactions committed before the call. Permanent persistence
@@ -412,6 +416,8 @@ its merge with `externalStorageMergeTrait` and the app's change-tracking
 suppression trait. The merge then updates the preloaded snapshot through normal
 transaction operations, subscribers receive normal invalidations, and an
 external insert is persisted idempotently rather than failing as a duplicate.
+Ordinary inserts retain duplicate-ID checking when applied to storage, including
+rows inserted concurrently by another runtime.
 
 ## React Pattern
 

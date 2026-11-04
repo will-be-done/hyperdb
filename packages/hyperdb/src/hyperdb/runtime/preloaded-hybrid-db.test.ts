@@ -16,6 +16,7 @@ import { v } from "../schema/values";
 import { execAsync, execMaybeAsync, execSync } from "../core/executor";
 import { unwrap } from "../commands/async";
 import { HybridDBCrashedError } from "./hybrid-db";
+import { HybridPersistenceQueue } from "./hybrid-persistence";
 
 const tasksTable = defineTable("preloadedHybridTasks", {
   id: v.string(),
@@ -124,6 +125,80 @@ async function createRuntime(rows: Task[]) {
 }
 
 describe("PreloadedHybridDB", () => {
+  it("frees deleted unique values before persisting replacement rows", async () => {
+    const original = task(1);
+    const replacement = { ...task(2), slug: original.slug };
+    const { runtime, primary } = await createRuntime([original]);
+    const tx = execSync(runtime.beginTx());
+    execSync(tx.delete(tasksTable, [original.id]));
+    execSync(tx.upsert(tasksTable, [replacement]));
+    execSync(tx.commit());
+    await execAsync(runtime.waitForPersistence());
+    expect(execSync(primary.scanAll(tasksTable))).toEqual([replacement]);
+    expect(runtime.isCrashed).toBe(false);
+  });
+
+  it("rejects a concurrent storage duplicate even after an inserted row is updated", async () => {
+    const { runtime, primary } = await createRuntime([]);
+    const local = task(1, "local");
+    const external = task(1, "external");
+    const tx = execSync(runtime.beginTx());
+    execSync(tx.insert(tasksTable, [local]));
+    execSync(tx.upsert(tasksTable, [{ ...local, title: "updated local" }]));
+    execSync(primary.insert(tasksTable, [external]));
+    execSync(tx.commit());
+    await expect(execAsync(runtime.waitForPersistence())).rejects.toThrow(
+      HybridDBCrashedError,
+    );
+    expect(execSync(primary.scanAll(tasksTable))).toEqual([external]);
+  });
+
+  it("persists delete-then-insert of an existing ID as a replacement", async () => {
+    const original = task(1);
+    const replacement = task(1, "replacement");
+    const { runtime, primary } = await createRuntime([original]);
+    const tx = execSync(runtime.beginTx());
+    execSync(tx.delete(tasksTable, [original.id]));
+    execSync(tx.insert(tasksTable, [replacement]));
+    execSync(tx.commit());
+    await execAsync(runtime.waitForPersistence());
+    expect(execSync(primary.scanAll(tasksTable))).toEqual([replacement]);
+  });
+
+  it("rejects full-queue transactions before publishing memory changes and releases the lock", async () => {
+    const { runtime, primary } = await createRuntime([]);
+    const gate = deferred<void>();
+    const begin = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      yield* unwrap(gate.promise);
+      return yield* begin(mode);
+    });
+    for (let i = 0; i < HybridPersistenceQueue.maxPendingBatches; i++) {
+      execSync(runtime.upsert(tasksTable, [task(1, String(i))]));
+    }
+    try {
+      expect(() =>
+        execSync(runtime.upsert(tasksTable, [task(1, "rejected")])),
+      ).toThrow("queue is full");
+      expect(runtime.isCrashed).toBe(false);
+      expect(
+        execSync(
+          runtime.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: task(1).id }] },
+          ]),
+        ),
+      ).toEqual([
+        task(1, String(HybridPersistenceQueue.maxPendingBatches - 1)),
+      ]);
+    } finally {
+      gate.resolve();
+      await execAsync(runtime.waitForPersistence());
+    }
+    execSync(runtime.upsert(tasksTable, [task(1, "retried")]));
+    await execAsync(runtime.waitForPersistence());
+    expect(execSync(primary.scanAll(tasksTable))).toEqual([task(1, "retried")]);
+  });
+
   it("publishes memory transactions while persistent commit is pending", async () => {
     const original = task(1);
     const updated = { ...original, title: "Completed" };
@@ -578,6 +653,7 @@ describe("PreloadedHybridDB", () => {
     expect(intervalScanSpy).not.toHaveBeenCalled();
 
     await externalMergeDB.insert(tasksTable, [external]);
+    await execAsync(runtime.waitForPersistence());
 
     expect(notifications).toEqual([
       {

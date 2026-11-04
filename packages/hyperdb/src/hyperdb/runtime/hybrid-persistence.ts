@@ -28,6 +28,7 @@ export type HybridPendingWrite = {
   id: string;
   oldValue?: Row;
   newValue?: Row;
+  insertOnly?: boolean;
   oldValueKnown: boolean;
 };
 
@@ -76,7 +77,11 @@ export function coalescePersistenceWrites(
       tableWrites = new Map();
       byTable.set(write.table, tableWrites);
     }
-    tableWrites.set(write.id, write);
+    const previous = tableWrites.get(write.id);
+    tableWrites.set(
+      write.id,
+      previous ? { ...write, insertOnly: previous.insertOnly } : write,
+    );
   }
 
   return Array.from(byTable.values()).flatMap((tableWrites) =>
@@ -93,7 +98,7 @@ function* persistWrites(
 
   const tx = yield* primary.beginTx("readwrite");
   try {
-    const upserts = coalescedWrites.filter(
+    const rows = coalescedWrites.filter(
       (write): write is HybridPendingWrite & { newValue: Row } =>
         write.newValue !== undefined,
     );
@@ -102,7 +107,17 @@ function* persistWrites(
     );
 
     for (const [table, tableWrites] of groupByTable(
-      upserts,
+      deletes,
+      (write) => write.table,
+    )) {
+      yield* tx.delete(
+        table,
+        tableWrites.map((write) => write.id),
+      );
+    }
+
+    for (const [table, tableWrites] of groupByTable(
+      rows.filter((write) => !write.insertOnly),
       (write) => write.table,
     )) {
       yield* tx.upsert(
@@ -112,12 +127,12 @@ function* persistWrites(
     }
 
     for (const [table, tableWrites] of groupByTable(
-      deletes,
+      rows.filter((write) => write.insertOnly),
       (write) => write.table,
     )) {
-      yield* tx.delete(
+      yield* tx.insert(
         table,
-        tableWrites.map((write) => write.id),
+        tableWrites.map((write) => write.newValue),
       );
     }
 
@@ -140,6 +155,7 @@ const waitForPersistenceRetry = (delayMs: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, delayMs));
 
 export class HybridPersistenceQueue {
+  static readonly maxPendingBatches = 100;
   readonly pending = new Set<HybridPersistenceBatch>();
   private tail = Promise.resolve();
   private nextBatchId = 1;
@@ -150,25 +166,42 @@ export class HybridPersistenceQueue {
     if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
   }
 
+  // Call before publishing cache changes; enqueue also checks direct callers.
+  throwIfFull(writes: HybridPendingWrite[]): void {
+    this.throwIfCrashed();
+    if (
+      writes.length > 0 &&
+      this.pending.size >= HybridPersistenceQueue.maxPendingBatches
+    ) {
+      throw new Error(
+        "Hybrid persistence queue is full. Await waitForPersistence() before retrying the transaction.",
+      );
+    }
+  }
+
   enqueue(
     primary: HyperDB,
     writes: HybridPendingWrite[],
     onFailure?: (batchId: number, failure: HybridPersistenceFailure) => void,
   ): void {
-    this.throwIfCrashed();
+    this.throwIfFull(writes);
     if (writes.length === 0) return;
     const batchId = this.nextBatchId++;
     const persistWithRetry = (attempt: number): Promise<void> =>
       execAsync(persistWrites(primary, writes)).catch((error) => {
         const willRetry = attempt < hybridPersistenceMaxAttempts;
         const retryDelayMs = persistenceRetryDelayMs(attempt);
-        onFailure?.(batchId, {
-          error,
-          attempt,
-          maxAttempts: hybridPersistenceMaxAttempts,
-          retryDelayMs: willRetry ? retryDelayMs : undefined,
-          willRetry,
-        });
+        try {
+          onFailure?.(batchId, {
+            error,
+            attempt,
+            maxAttempts: hybridPersistenceMaxAttempts,
+            retryDelayMs: willRetry ? retryDelayMs : undefined,
+            willRetry,
+          });
+        } catch {
+          // Observers must not affect retries or the permanent crash state.
+        }
         if (!willRetry) {
           this.isCrashed = true;
           this.crashError = error;

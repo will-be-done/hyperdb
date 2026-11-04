@@ -27,6 +27,8 @@ import type {
 } from "../schema/table";
 import AwaitLock from "../utils/await-lock";
 import { refVar, type RefVar } from "../utils";
+import { cloneDeep } from "../utils/toolkit";
+import { deepFreeze } from "../deep-freeze";
 import {
   createHybridIntervalCache,
   hybridIntervalScan,
@@ -489,6 +491,10 @@ export class HybridDB implements HyperDB {
     this.state.persistence.throwIfCrashed();
   }
 
+  throwIfPersistenceFull(writes: HybridPendingWrite[]): void {
+    this.state.persistence.throwIfFull(writes);
+  }
+
   enqueuePersistence(
     writes: HybridPendingWrite[],
     traceContext: ReturnType<typeof getDriverTraceContextForDB>,
@@ -940,11 +946,13 @@ class HybridDBTx implements HyperDBTx {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
+    const snapshots = cloneDeep(records);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).insert(
       table,
-      records,
+      snapshots,
     );
-    for (const record of records as Row[]) {
+    if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    for (const record of snapshots as Row[]) {
       this.state.pendingWrites.push({
         table,
         id: record.id,
@@ -961,15 +969,17 @@ class HybridDBTx implements HyperDBTx {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
+    const snapshots = cloneDeep(records);
     const previousRecords = yield* this.getCachedRowsById(
       table,
-      records.map((record) => record.id),
+      snapshots.map((record) => record.id),
     );
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).upsert(
       table,
-      records,
+      snapshots,
     );
-    for (const record of records as Row[]) {
+    if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    for (const record of snapshots as Row[]) {
       const oldValue = previousRecords.get(record.id);
       this.state.pendingWrites.push({
         table,
@@ -1014,6 +1024,7 @@ class HybridDBTx implements HyperDBTx {
       // crashed DB must not publish new cache/coverage state or enqueue
       // persistence that can never reach the primary.
       this.hybridDB.throwIfCrashed();
+      this.hybridDB.throwIfPersistenceFull(this.state.pendingWrites);
       yield* this.cacheTx.commit();
       mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
