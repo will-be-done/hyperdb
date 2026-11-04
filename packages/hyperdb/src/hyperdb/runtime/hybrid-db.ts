@@ -27,6 +27,8 @@ import type {
 } from "../schema/table";
 import AwaitLock from "../utils/await-lock";
 import { refVar, type RefVar } from "../utils";
+import { cloneDeep } from "../utils/toolkit";
+import { deepFreeze } from "../deep-freeze";
 import {
   createHybridIntervalCache,
   hybridIntervalScan,
@@ -41,35 +43,19 @@ import {
   type IntervalTarget,
   type NormalizedInterval,
 } from "./hybrid-db-intervals";
-import { execAsync } from "../core/executor";
+import {
+  coalescePersistenceWrites,
+  HybridPersistenceQueue,
+  type HybridPendingWrite,
+  type HybridPersistenceFailure,
+} from "./hybrid-persistence";
+export { HybridDBCrashedError } from "./hybrid-persistence";
 
 type HybridDBState = {
   cachedIntervals: HybridIntervalCache;
   lock: AwaitLock;
-  pendingPersistence: Set<HybridPersistenceBatch>;
-  persistenceTail: Promise<void>;
-  nextPersistenceBatchId: number;
-  isCrashed: boolean;
-  crashError: unknown;
+  persistence: HybridPersistenceQueue;
 };
-
-/**
- * Thrown by every HybridDB read/write once background persistence has
- * permanently failed (all retries exhausted). The HybridDB is considered
- * crashed: its cache and primary may have diverged, so it refuses all further
- * operations rather than serving stale in-memory data. The underlying
- * persistence error is available via `cause`.
- */
-export class HybridDBCrashedError extends Error {
-  constructor(cause: unknown) {
-    super(
-      "HybridDB is in a crashed state after background persistence permanently failed. " +
-        "No further reads or writes are allowed.",
-      { cause },
-    );
-    this.name = "HybridDBCrashedError";
-  }
-}
 
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
@@ -84,28 +70,6 @@ type HybridReadonlyTxState = {
   primaryTx?: HyperDBTx;
   rollbacked: RefVar<boolean>;
   txCounter: RefVar<number>;
-};
-
-type HybridPendingWrite = {
-  table: TableDefinition;
-  id: string;
-  oldValue?: Row;
-  newValue?: Row;
-  oldValueKnown: boolean;
-};
-
-type HybridPersistenceBatch = {
-  id: number;
-  writes: HybridPendingWrite[];
-  promise: Promise<void>;
-};
-
-type HybridPersistenceFailure = {
-  error: unknown;
-  attempt: number;
-  maxAttempts: number;
-  retryDelayMs?: number;
-  willRetry: boolean;
 };
 
 export type HybridDBPendingPersistenceWaitReason = {
@@ -157,18 +121,10 @@ export type HybridDBDebugEvent =
   | HybridDBPersistentScanDebugEvent
   | HybridDBPersistenceFailureDebugEvent;
 
-const hybridPersistenceMaxAttempts = 3;
-const hybridPersistenceInitialRetryDelayMs = 10;
-const hybridPersistenceRetryBackoffFactor = 2;
-
 const createHybridDBState = (): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
   lock: new AwaitLock(),
-  pendingPersistence: new Set(),
-  persistenceTail: Promise.resolve(),
-  nextPersistenceBatchId: 1,
-  isCrashed: false,
-  crashError: undefined,
+  persistence: new HybridPersistenceQueue(),
 });
 
 const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
@@ -216,96 +172,6 @@ function* withHybridLock<T>(
     release();
   }
 }
-
-const groupByTable = <TValue>(
-  values: Iterable<TValue>,
-  getTable: (value: TValue) => TableDefinition,
-): Map<TableDefinition, TValue[]> => {
-  const byTable = new Map<TableDefinition, TValue[]>();
-  for (const value of values) {
-    const table = getTable(value);
-    let tableValues = byTable.get(table);
-    if (!tableValues) {
-      tableValues = [];
-      byTable.set(table, tableValues);
-    }
-    tableValues.push(value);
-  }
-  return byTable;
-};
-
-function coalescePersistenceWrites(
-  writes: HybridPendingWrite[],
-): HybridPendingWrite[] {
-  const byTable = new Map<TableDefinition, Map<string, HybridPendingWrite>>();
-  for (const write of writes) {
-    let tableWrites = byTable.get(write.table);
-    if (!tableWrites) {
-      tableWrites = new Map();
-      byTable.set(write.table, tableWrites);
-    }
-    tableWrites.set(write.id, write);
-  }
-
-  return Array.from(byTable.values()).flatMap((tableWrites) =>
-    Array.from(tableWrites.values()),
-  );
-}
-
-function* persistWrites(
-  primary: HyperDB,
-  writes: HybridPendingWrite[],
-): Generator<DBCmd, void> {
-  const coalescedWrites = coalescePersistenceWrites(writes);
-  if (coalescedWrites.length === 0) return;
-
-  const tx = yield* primary.beginTx("readwrite");
-  try {
-    const upserts = coalescedWrites.filter(
-      (write): write is HybridPendingWrite & { newValue: Row } =>
-        write.newValue !== undefined,
-    );
-    const deletes = coalescedWrites.filter(
-      (write) => write.newValue === undefined,
-    );
-
-    for (const [table, tableWrites] of groupByTable(
-      upserts,
-      (write) => write.table,
-    )) {
-      yield* tx.upsert(
-        table,
-        tableWrites.map((write) => write.newValue),
-      );
-    }
-
-    for (const [table, tableWrites] of groupByTable(
-      deletes,
-      (write) => write.table,
-    )) {
-      yield* tx.delete(
-        table,
-        tableWrites.map((write) => write.id),
-      );
-    }
-
-    yield* tx.commit();
-  } catch (error) {
-    try {
-      yield* tx.rollback();
-    } catch {
-      // Preserve the original persistence error.
-    }
-    throw error;
-  }
-}
-
-const persistenceRetryDelayMs = (attempt: number): number =>
-  hybridPersistenceInitialRetryDelayMs *
-  hybridPersistenceRetryBackoffFactor ** (attempt - 1);
-
-const waitForPersistenceRetry = (delayMs: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, delayMs));
 
 function pendingWriteMatchReason(
   write: HybridPendingWrite,
@@ -618,90 +484,35 @@ export class HybridDB implements HyperDB {
   }
 
   get isCrashed(): boolean {
-    return this.state.isCrashed;
+    return this.state.persistence.isCrashed;
   }
 
   throwIfCrashed(): void {
-    if (this.state.isCrashed) {
-      throw new HybridDBCrashedError(this.state.crashError);
-    }
+    this.state.persistence.throwIfCrashed();
   }
 
-  private markPersistenceCrash(error: unknown): void {
-    if (this.state.isCrashed) return;
-    this.state.isCrashed = true;
-    this.state.crashError = error;
+  throwIfPersistenceFull(writes: HybridPendingWrite[]): void {
+    this.state.persistence.throwIfFull(writes);
   }
 
   enqueuePersistence(
     writes: HybridPendingWrite[],
     traceContext: ReturnType<typeof getDriverTraceContextForDB>,
   ): void {
-    if (writes.length === 0) return;
-
-    const primary = withDriverTraceContextTrait(this.primary, traceContext);
-    const batchId = this.state.nextPersistenceBatchId++;
-    const persistWithRetry = (attempt: number): Promise<void> =>
-      execAsync(persistWrites(primary, writes)).catch((error) => {
-        const willRetry = attempt < hybridPersistenceMaxAttempts;
-        const retryDelayMs = persistenceRetryDelayMs(attempt);
-        this.emitPersistenceFailureDebugEvent(batchId, writes, {
-          error,
-          attempt,
-          maxAttempts: hybridPersistenceMaxAttempts,
-          retryDelayMs: willRetry ? retryDelayMs : undefined,
-          willRetry,
-        });
-
-        if (!willRetry) {
-          this.markPersistenceCrash(error);
-          throw error;
-        }
-
-        return waitForPersistenceRetry(retryDelayMs).then(() =>
-          persistWithRetry(attempt + 1),
-        );
-      });
-    // Chain after the previous batch settles (success OR failure) so a failed
-    // batch never blocks later batches from attempting their own persistence.
-    const promise = this.state.persistenceTail.then(() => {
-      this.throwIfCrashed();
-      return persistWithRetry(1);
-    });
-    const batch: HybridPersistenceBatch = {
-      id: batchId,
+    this.state.persistence.enqueue(
+      withDriverTraceContextTrait(this.primary, traceContext),
       writes,
-      promise,
-    };
-    this.state.pendingPersistence.add(batch);
-    this.state.persistenceTail = promise.catch(() => {
-      // Swallow here only for scheduling; the batch promise keeps the rejection.
-    });
-
-    void promise.then(
-      () => {
-        this.state.pendingPersistence.delete(batch);
-      },
-      () => {
-        // A rejected batch means persistence permanently failed and the DB is
-        // now crashed; drop the batch so waiters fail fast via throwIfCrashed
-        // instead of awaiting a promise that will never resolve.
-        this.state.pendingPersistence.delete(batch);
-      },
+      (batchId, failure) =>
+        this.emitPersistenceFailureDebugEvent(batchId, writes, failure),
     );
   }
 
+  *waitForPersistence(): Generator<DBCmd, void> {
+    yield* this.state.persistence.waitForPersistence();
+  }
+
   *waitForPendingPersistence(): Generator<DBCmd, void> {
-    this.throwIfCrashed();
-    const pending = [...this.state.pendingPersistence].map(
-      (batch) => batch.promise,
-    );
-    if (pending.length > 0) {
-      // allSettled: a rejected batch means a crash, surfaced as
-      // HybridDBCrashedError by throwIfCrashed rather than the raw error.
-      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
-    }
-    this.throwIfCrashed();
+    yield* this.waitForPersistence();
   }
 
   *waitForPendingPersistenceForScan(
@@ -715,7 +526,7 @@ export class HybridDB implements HyperDB {
     const pending: Promise<void>[] = [];
     const reasons: HybridDBPendingPersistenceWaitReason[] = [];
 
-    for (const batch of this.state.pendingPersistence) {
+    for (const batch of this.state.persistence.pending) {
       const batchReasons = batch.writes.flatMap((write) => {
         const reason = pendingWriteMatchReason(write, batch.id, table, target);
         return reason ? [reason] : [];
@@ -1135,11 +946,13 @@ class HybridDBTx implements HyperDBTx {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
+    const snapshots = cloneDeep(records);
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).insert(
       table,
-      records,
+      snapshots,
     );
-    for (const record of records as Row[]) {
+    if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    for (const record of snapshots as Row[]) {
       this.state.pendingWrites.push({
         table,
         id: record.id,
@@ -1156,15 +969,17 @@ class HybridDBTx implements HyperDBTx {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
+    const snapshots = cloneDeep(records);
     const previousRecords = yield* this.getCachedRowsById(
       table,
-      records.map((record) => record.id),
+      snapshots.map((record) => record.id),
     );
     yield* withDriverTraceContextTrait(this.cacheTx, traceContext).upsert(
       table,
-      records,
+      snapshots,
     );
-    for (const record of records as Row[]) {
+    if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    for (const record of snapshots as Row[]) {
       const oldValue = previousRecords.get(record.id);
       this.state.pendingWrites.push({
         table,
@@ -1209,6 +1024,7 @@ class HybridDBTx implements HyperDBTx {
       // crashed DB must not publish new cache/coverage state or enqueue
       // persistence that can never reach the primary.
       this.hybridDB.throwIfCrashed();
+      this.hybridDB.throwIfPersistenceFull(this.state.pendingWrites);
       yield* this.cacheTx.commit();
       mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
@@ -1226,6 +1042,7 @@ class HybridDBTx implements HyperDBTx {
       } catch {
         // Preserve the original commit error.
       }
+      this.state.rollbacked.val = true;
       throw error;
     } finally {
       this.state.releaseLock();
@@ -1233,6 +1050,7 @@ class HybridDBTx implements HyperDBTx {
   }
 
   *rollback(): Generator<DBCmd, void> {
+    if (this.state.rollbacked.val) return;
     this.throwIfDone();
     let rollbackError: unknown;
     try {

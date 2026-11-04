@@ -396,9 +396,20 @@ greater concurrency raises temporary startup memory. A bounded scan resolves
 IDs from memory and dereferences them
 through the built-in `byId` `uniqhash`. Unresolved `byId` entries are batch-loaded
 from the primary and then reused by reads through every index. Do not add a
-`byIds` B-tree or call `preloadTables` for this runtime. Reads remain async, and
-writes wait for primary persistence before publishing copy-on-write index
-changes.
+`byIds` B-tree or call `preloadTables` for this runtime. Reads hydrate missing
+rows asynchronously. Transactions publish copy-on-write index and row changes
+before queued persistence. Cached `asyncDispatch` work runs before the call
+returns its promise. Execution suspends for database I/O, a busy transaction
+lock, or an unresolved promise yielded by the action.
+Both hybrid runtimes allow at most 100 unsettled persistence batches. At
+capacity, a transaction rejects before publishing memory changes; await
+`waitForPersistence()` and retry in a new transaction. A rejected HybridDB commit
+finishes the transaction; further commits throw, and rollback remains safe.
+Await `execAsync(db.waitForPersistence())` on either hybrid runtime or its
+`SubscribableDB` wrapper before broadcasting changes or acknowledging sync.
+The wait covers transactions committed before the call. Permanent persistence
+failure rejects the wait and blocks further reads and writes with
+`HybridDBCrashedError`.
 Exact `byId` misses check the primary so rows added by another connected runtime
 can be discovered and incorporated into the preloaded indexes.
 For a changeset already persisted by another runtime sharing the primary, run
@@ -406,6 +417,8 @@ its merge with `externalStorageMergeTrait` and the app's change-tracking
 suppression trait. The merge then updates the preloaded snapshot through normal
 transaction operations, subscribers receive normal invalidations, and an
 external insert is persisted idempotently rather than failing as a duplicate.
+Ordinary inserts retain duplicate-ID checking when applied to storage, including
+rows inserted concurrently by another runtime.
 
 ## React Pattern
 

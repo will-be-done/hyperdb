@@ -4,6 +4,7 @@ import { DB, execSync } from "../../db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
 import {
   createAction,
+  asyncDispatch,
   deleteRows,
   syncDispatch,
   insert,
@@ -12,6 +13,8 @@ import {
 import { selectFrom } from "../selector/builder";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
+import { SubscribableDB } from "../../runtime/subscribable-db";
+import { unwrap } from "../async";
 
 const action = createAction();
 
@@ -86,6 +89,60 @@ const insertAction = action({
 });
 
 describe("action", () => {
+  it("publishes cached async dispatches before returning", async () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    let published = false;
+    db.subscribe(() => {
+      published = true;
+    });
+
+    const pending = asyncDispatch(db, updateAction({}));
+
+    expect(published).toBe(true);
+    await pending;
+  });
+
+  it("resumes the same action after async work and rolls back failures", async () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    let reject!: (error: Error) => void;
+    const gate = new Promise<void>((_resolve, rejectPromise) => {
+      reject = rejectPromise;
+    });
+    let runs = 0;
+    let published = false;
+    db.subscribe(() => {
+      published = true;
+    });
+    const failing = action({
+      name: "failingAsyncAction",
+      args: {},
+      handler: function* () {
+        runs++;
+        yield* updateAction({});
+        yield* unwrap(gate);
+      },
+    });
+    const pending = asyncDispatch(db, failing({}));
+    const failure = new Error("read failed");
+    const rejected = expect(pending).rejects.toBe(failure);
+    reject(failure);
+    await rejected;
+
+    expect(runs).toBe(1);
+    expect(published).toBe(false);
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
+    await asyncDispatch(db, updateAction({}));
+    expect(published).toBe(true);
+  });
+
   it("dispatches object-form actions with one args object", () => {
     const driver = new BptreeInmemDriver();
     const db = new DB(driver);

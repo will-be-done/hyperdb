@@ -22,6 +22,8 @@ import {
 import { selectFrom } from "../commands/selector/builder";
 import { unwrap } from "../commands/async";
 import { execAsync } from "../core/executor";
+import { HybridPersistenceQueue } from "./hybrid-persistence";
+import { asyncDispatch, upsert } from "../commands/action/builders";
 import {
   hyperDBTraceStore,
   traceRootsRuntimeTable,
@@ -719,6 +721,102 @@ describe("HybridDB", () => {
 
     resumePersistCommit.resolve();
     await expect(slugRead).resolves.toEqual([]);
+  });
+
+  it.each(["insert", "upsert"] as const)(
+    "snapshots %s records before callers can mutate them",
+    async (operation) => {
+      const { db, hybrid, primary, cache } = await createDBs();
+      const snapshotTable = defineTable("snapshotRows", {
+        id: v.string(),
+        payload: v.any(),
+      });
+      await db.loadTables([snapshotTable]);
+      const gate = deferred();
+      const begin = primary.beginTx.bind(primary);
+      vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+        yield* unwrap(gate.promise);
+        return yield* begin(mode);
+      });
+      const row = {
+        id: "original",
+        payload: { title: "original", bytes: new Uint8Array([1, 2]) },
+      };
+      const tx = await db.beginTx();
+      await tx[operation](snapshotTable, [row]);
+      row.id = "mutated";
+      row.payload.title = "mutated";
+      row.payload.bytes[0] = 9;
+      await tx.commit();
+      row.payload.bytes[1] = 9;
+      const expected = [
+        {
+          id: "original",
+          payload: { title: "original", bytes: new Uint8Array([1, 2]) },
+        },
+      ];
+      try {
+        expect(await execAsync(cache.scanAll(snapshotTable))).toEqual(expected);
+      } finally {
+        gate.resolve();
+        await execAsync(hybrid.waitForPersistence());
+      }
+      expect(await execAsync(primary.scanAll(snapshotTable))).toEqual(expected);
+    },
+  );
+
+  it("rejects full-queue transactions before publishing cache changes and releases the lock", async () => {
+    const { db, hybrid, primary } = await createDBs();
+    const gate = deferred();
+    const begin = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      yield* unwrap(gate.promise);
+      return yield* begin(mode);
+    });
+    for (let i = 0; i < HybridPersistenceQueue.maxPendingBatches; i++) {
+      const tx = await db.beginTx();
+      await tx.upsert(tasksTable, [createTask(1, String(i))]);
+      await tx.commit();
+    }
+    const tx = await db.beginTx();
+    await tx.upsert(tasksTable, [createTask(1, "rejected")]);
+    try {
+      await expect(tx.commit()).rejects.toThrow("queue is full");
+      await expect(tx.commit()).rejects.toThrow("rollbacked tx");
+      await expect(tx.rollback()).resolves.toBeUndefined();
+      await expect(tx.rollback()).resolves.toBeUndefined();
+      await expect(tx.commit()).rejects.toThrow("rollbacked tx");
+      const subscribable = new SubscribableDB(hybrid);
+      const notified = vi.fn();
+      subscribable.subscribe(notified);
+      await expect(
+        asyncDispatch(
+          subscribable,
+          (function* () {
+            yield* upsert(tasksTable, [createTask(1, "rejected action")]);
+          })(),
+        ),
+      ).rejects.toThrow("queue is full");
+      expect(notified).not.toHaveBeenCalled();
+      expect(hybrid.isCrashed).toBe(false);
+      await expect(
+        db.intervalScan(tasksTable, "byId", [
+          { eq: [{ col: "id", val: createTask(1).id }] },
+        ]),
+      ).resolves.toEqual([
+        createTask(1, String(HybridPersistenceQueue.maxPendingBatches - 1)),
+      ]);
+    } finally {
+      gate.resolve();
+      await execAsync(hybrid.waitForPersistence());
+    }
+    const retried = await db.beginTx();
+    await retried.upsert(tasksTable, [createTask(1, "retried")]);
+    await retried.commit();
+    await execAsync(hybrid.waitForPersistence());
+    expect(await execAsync(primary.scanAll(tasksTable))).toEqual([
+      createTask(1, "retried"),
+    ]);
   });
 
   it("retries background persistence failures and crashes the DB after exhausting retries", async () => {

@@ -25,7 +25,16 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
-import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
+import {
+  DEFAULT_CODEC_OPTIONS,
+  normalizeRecordsForDriver,
+  type CodecOptions,
+} from "../storage/codec";
+import { deepFreeze } from "../deep-freeze";
+import {
+  HybridPersistenceQueue,
+  type HybridPendingWrite,
+} from "./hybrid-persistence";
 import {
   HashIndex,
   HashIndexTx,
@@ -51,7 +60,7 @@ const usesExternalStorageMerge = (db: HyperDB): boolean =>
 
 type EntityEntry =
   | { id: string; loaded: false }
-  | { id: string; loaded: true; row: Row };
+  | { id: string; loaded: true; row: Row | null };
 
 type EntityHashIndex = HashIndex<EntityEntry> | HashIndexTx<EntityEntry>;
 
@@ -131,11 +140,13 @@ class PreloadedHybridData {
 type PreloadedHybridDBState = {
   data: PreloadedHybridData;
   lock: AwaitLock;
+  persistence: HybridPersistenceQueue;
 };
 
 const createState = (): PreloadedHybridDBState => ({
   data: new PreloadedHybridData(),
   lock: new AwaitLock(),
+  persistence: new HybridPersistenceQueue(),
 });
 
 export type PreloadedHybridDBOptions = {
@@ -229,7 +240,7 @@ function chunks<T>(values: T[], size: number): T[][] {
 
 function* scanPreloaded<TTable extends TableDefinition>(
   owner: HyperDB,
-  primary: HyperDB,
+  getPrimary: () => Generator<DBCmd, HyperDB>,
   data: PreloadedHybridData,
   table: TTable,
   indexName: keyof ExtractIndexes<TTable>,
@@ -270,6 +281,7 @@ function* scanPreloaded<TTable extends TableDefinition>(
   }
 
   if (missingIds.length > 0) {
+    const primary = yield* getPrimary();
     const loadedRows: Row[] = [];
     for (const batch of chunks(missingIds, entityLoadBatchSize)) {
       loadedRows.push(
@@ -293,7 +305,9 @@ function* scanPreloaded<TTable extends TableDefinition>(
 
   const rows = ids.flatMap((id) => {
     const entry = entityById(tableState.byId, id);
-    return entry?.loaded ? [entry.row as ExtractSchema<TTable>] : [];
+    return entry?.loaded && entry.row
+      ? [entry.row as ExtractSchema<TTable>]
+      : [];
   });
   return rows;
 }
@@ -361,6 +375,7 @@ export class PreloadedHybridDB implements HyperDB {
   *loadTables(tables: TableDefinition[]): Generator<DBCmd, void> {
     const release = yield* acquireLock(this.state.lock);
     try {
+      yield* this.waitForPersistence();
       yield* this.delegatePrimary().loadTables(tables);
       const data = this.state.data;
       const concurrency =
@@ -407,6 +422,7 @@ export class PreloadedHybridDB implements HyperDB {
   *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {
+    this.throwIfCrashed();
     for (const spec of specs) this.state.data.get(spec.table);
   }
 
@@ -419,15 +435,13 @@ export class PreloadedHybridDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfCrashed();
     const release = yield* acquireLock(this.state.lock);
     try {
-      const primary = withDriverTraceContextTrait(
-        this.delegatePrimary(),
-        getDriverTraceContextForDB(this),
-      );
+      this.throwIfCrashed();
       return yield* scanPreloaded(
         this,
-        primary,
+        this.primaryForRead.bind(this),
         this.state.data,
         table,
         indexName,
@@ -439,23 +453,25 @@ export class PreloadedHybridDB implements HyperDB {
     }
   }
 
+  private *primaryForRead(): Generator<DBCmd, HyperDB> {
+    yield* this.waitForPersistence();
+    return withDriverTraceContextTrait(
+      this.delegatePrimary(),
+      getDriverTraceContextForDB(this),
+    );
+  }
+
   *insert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    const release = yield* acquireLock(this.state.lock);
+    const tx = yield* this.beginTx();
     try {
-      const primary = this.delegatePrimary();
-      if (usesExternalStorageMerge(this)) {
-        yield* primary.upsert(table, records);
-      } else {
-        yield* primary.insert(table, records);
-      }
-      const state = this.state.data.get(table);
-      state.indexes.upsert(records as Row[]);
-      state.byId.upsert(loadedEntities(records as Row[]));
-    } finally {
-      release();
+      yield* tx.insert(table, records);
+      yield* tx.commit();
+    } catch (error) {
+      yield* tx.rollback();
+      throw error;
     }
   }
 
@@ -463,14 +479,13 @@ export class PreloadedHybridDB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    const release = yield* acquireLock(this.state.lock);
+    const tx = yield* this.beginTx();
     try {
-      yield* this.delegatePrimary().upsert(table, records);
-      const state = this.state.data.get(table);
-      state.indexes.upsert(records as Row[]);
-      state.byId.upsert(loadedEntities(records as Row[]));
-    } finally {
-      release();
+      yield* tx.upsert(table, records);
+      yield* tx.commit();
+    } catch (error) {
+      yield* tx.rollback();
+      throw error;
     }
   }
 
@@ -478,32 +493,48 @@ export class PreloadedHybridDB implements HyperDB {
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void> {
-    const release = yield* acquireLock(this.state.lock);
+    const tx = yield* this.beginTx();
     try {
-      yield* this.delegatePrimary().delete(table, ids);
-      const state = this.state.data.get(table);
-      state.indexes.delete(ids);
-      state.byId.delete(ids);
-    } finally {
-      release();
+      yield* tx.delete(table, ids);
+      yield* tx.commit();
+    } catch (error) {
+      yield* tx.rollback();
+      throw error;
     }
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
+    this.throwIfCrashed();
     const release = yield* acquireLock(this.state.lock);
     try {
-      const primary = withDriverTraceContextTrait(
-        this.delegatePrimary(),
-        getDriverTraceContextForDB(this),
-      );
-      const primaryTx = yield* primary.beginTx(mode);
+      this.throwIfCrashed();
       const data =
         mode === "readonly" ? this.state.data : this.state.data.fork();
-      return new PreloadedHybridDBTx(this, primaryTx, data, mode, release);
+      return new PreloadedHybridDBTx(this, data, mode, release);
     } catch (error) {
       release();
       throw error;
     }
+  }
+
+  get isCrashed(): boolean {
+    return this.state.persistence.isCrashed;
+  }
+
+  throwIfCrashed(): void {
+    this.state.persistence.throwIfCrashed();
+  }
+
+  *waitForPersistence(): Generator<DBCmd, void> {
+    yield* this.state.persistence.waitForPersistence();
+  }
+
+  enqueuePersistence(writes: HybridPendingWrite[], primary: HyperDB): void {
+    this.state.persistence.enqueue(primary, writes);
+  }
+
+  throwIfPersistenceFull(writes: HybridPendingWrite[]): void {
+    this.state.persistence.throwIfFull(writes);
   }
 
   commitData(data: PreloadedHybridData): void {
@@ -517,19 +548,19 @@ type PreloadedHybridTxState = {
   rollbacked: RefVar<boolean>;
   counter: RefVar<number>;
   release: () => void;
+  primaryTx?: HyperDBTx;
+  writes: HybridPendingWrite[];
 };
 
 class PreloadedHybridDBTx implements HyperDBTx {
   private readonly state: PreloadedHybridTxState;
   private readonly owner: PreloadedHybridDB;
-  private readonly primaryTx: HyperDBTx;
   private readonly data: PreloadedHybridData;
   private readonly mode: DBTransactionMode;
   private readonly traits: Trait[];
 
   constructor(
     owner: PreloadedHybridDB,
-    primaryTx: HyperDBTx,
     data: PreloadedHybridData,
     mode: DBTransactionMode,
     release: () => void,
@@ -537,7 +568,6 @@ class PreloadedHybridDBTx implements HyperDBTx {
     state?: PreloadedHybridTxState,
   ) {
     this.owner = owner;
-    this.primaryTx = primaryTx;
     this.data = data;
     this.mode = mode;
     this.traits = traits;
@@ -546,13 +576,13 @@ class PreloadedHybridDBTx implements HyperDBTx {
       rollbacked: refVar(false),
       counter: refVar(1),
       release,
+      writes: [],
     };
   }
 
   withTraits(...traits: Trait[]): HyperDBTx {
     return new PreloadedHybridDBTx(
       this.owner,
-      this.primaryTx,
       this.data,
       this.mode,
       this.state.release,
@@ -585,10 +615,26 @@ class PreloadedHybridDBTx implements HyperDBTx {
     return false;
   }
 
-  private delegatePrimary(): HyperDBTx {
+  private delegatePrimary(): HyperDB {
+    const traits = [...this.owner.traits, ...this.traits];
+    const primary =
+      traits.length > 0
+        ? this.owner.primary.withTraits(...traits)
+        : this.owner.primary;
+    return withDriverTraceContextTrait(
+      primary,
+      getDriverTraceContextForDB(this),
+    );
+  }
+
+  private *primaryForRead(): Generator<DBCmd, HyperDB> {
+    if (!this.state.primaryTx) {
+      yield* this.owner.waitForPersistence();
+      this.state.primaryTx = yield* this.delegatePrimary().beginTx("readonly");
+    }
     return this.traits.length > 0
-      ? (this.primaryTx.withTraits(...this.traits) as HyperDBTx)
-      : this.primaryTx;
+      ? this.state.primaryTx.withTraits(...this.traits)
+      : this.state.primaryTx;
   }
 
   *loadTables(): Generator<DBCmd, void> {
@@ -621,7 +667,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
     this.throwIfDone();
     return yield* scanPreloaded(
       this,
-      this.delegatePrimary(),
+      this.primaryForRead.bind(this),
       this.data,
       table,
       indexName,
@@ -636,27 +682,57 @@ class PreloadedHybridDBTx implements HyperDBTx {
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
-    const primary = this.delegatePrimary();
-    if (usesExternalStorageMerge(this)) {
-      yield* primary.upsert(table, records);
-    } else {
-      yield* primary.insert(table, records);
+    if (!usesExternalStorageMerge(this)) {
+      const state = this.data.get(table);
+      const ids = new Set<string>();
+      for (const row of records) {
+        const entry = entityById(state.byId, row.id);
+        if (
+          ids.has(row.id) ||
+          (entry && (!entry.loaded || entry.row !== null))
+        ) {
+          throw new Error(
+            `Record ${row.id} already exists in ${table.tableName}`,
+          );
+        }
+        ids.add(row.id);
+      }
     }
-    const state = this.data.get(table);
-    state.indexes.upsert(records as Row[]);
-    state.byId.upsert(loadedEntities(records as Row[]));
+    yield* this.writeRows(table, records, !usesExternalStorageMerge(this));
   }
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
+    yield* this.writeRows(table, records, false);
+  }
+
+  private *writeRows<TTable extends TableDefinition>(
+    table: TTable,
+    records: ExtractSchema<TTable>[],
+    insertOnly: boolean,
+  ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
-    yield* this.delegatePrimary().upsert(table, records);
+    const options = this.getOptions();
+    const normalized = normalizeRecordsForDriver(table, records, options);
     const state = this.data.get(table);
-    state.indexes.upsert(records as Row[]);
-    state.byId.upsert(loadedEntities(records as Row[]));
+    state.indexes.upsert(normalized);
+    state.byId.upsert(loadedEntities(normalized));
+    for (const row of normalized) {
+      this.state.writes.push({
+        table,
+        id: row.id,
+        newValue: row,
+        insertOnly,
+        oldValueKnown: false,
+      });
+    }
+    if (options.freezeRows) {
+      deepFreeze(records);
+      deepFreeze(normalized);
+    }
   }
 
   *delete<TTable extends TableDefinition>(
@@ -665,10 +741,17 @@ class PreloadedHybridDBTx implements HyperDBTx {
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
-    yield* this.delegatePrimary().delete(table, ids);
     const state = this.data.get(table);
     state.indexes.delete(ids);
-    state.byId.delete(ids);
+    state.byId.upsert(
+      ids.map((id) => ({
+        key: id,
+        id,
+        value: { id, loaded: true, row: null },
+      })),
+    );
+    for (const id of ids)
+      this.state.writes.push({ table, id, oldValueKnown: false });
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -677,8 +760,16 @@ class PreloadedHybridDBTx implements HyperDBTx {
     if (this.state.counter.val > 0) return;
 
     try {
-      yield* this.delegatePrimary().commit();
-      if (this.mode === "readwrite") this.owner.commitData(this.data);
+      if (this.state.primaryTx) yield* this.state.primaryTx.commit();
+      this.owner.throwIfCrashed();
+      if (this.mode === "readwrite") {
+        this.owner.throwIfPersistenceFull(this.state.writes);
+        this.owner.commitData(this.data);
+        this.owner.enqueuePersistence(
+          this.state.writes,
+          this.delegatePrimary(),
+        );
+      }
       this.state.committed.val = true;
     } catch (error) {
       if (this.mode === "readwrite") this.data.discardFork();
@@ -690,11 +781,13 @@ class PreloadedHybridDBTx implements HyperDBTx {
   }
 
   *rollback(): Generator<DBCmd, void> {
-    this.throwIfDone();
+    if (this.state.rollbacked.val) return;
+    if (this.state.committed.val)
+      throw new Error("Transaction already finished");
     let rollbackFailed = false;
     let rollbackError: unknown;
     try {
-      yield* this.delegatePrimary().rollback();
+      if (this.state.primaryTx) yield* this.state.primaryTx.rollback();
     } catch (error) {
       rollbackFailed = true;
       rollbackError = error;
@@ -707,6 +800,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
   }
 
   private throwIfDone(): void {
+    this.owner.throwIfCrashed();
     if (this.state.committed.val || this.state.rollbacked.val) {
       throw new Error("Transaction already finished");
     }
