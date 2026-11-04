@@ -1042,6 +1042,7 @@ class HybridDBTx implements HyperDBTx {
       } catch {
         // Preserve the original commit error.
       }
+      this.state.rollbacked.val = true;
       throw error;
     } finally {
       this.state.releaseLock();
@@ -1049,6 +1050,7 @@ class HybridDBTx implements HyperDBTx {
   }
 
   *rollback(): Generator<DBCmd, void> {
+    if (this.state.rollbacked.val) return;
     this.throwIfDone();
     let rollbackError: unknown;
     try {

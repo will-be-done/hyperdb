@@ -23,6 +23,7 @@ import { selectFrom } from "../commands/selector/builder";
 import { unwrap } from "../commands/async";
 import { execAsync } from "../core/executor";
 import { HybridPersistenceQueue } from "./hybrid-persistence";
+import { asyncDispatch, upsert } from "../commands/action/builders";
 import {
   hyperDBTraceStore,
   traceRootsRuntimeTable,
@@ -781,6 +782,22 @@ describe("HybridDB", () => {
     await tx.upsert(tasksTable, [createTask(1, "rejected")]);
     try {
       await expect(tx.commit()).rejects.toThrow("queue is full");
+      await expect(tx.commit()).rejects.toThrow("rollbacked tx");
+      await expect(tx.rollback()).resolves.toBeUndefined();
+      await expect(tx.rollback()).resolves.toBeUndefined();
+      await expect(tx.commit()).rejects.toThrow("rollbacked tx");
+      const subscribable = new SubscribableDB(hybrid);
+      const notified = vi.fn();
+      subscribable.subscribe(notified);
+      await expect(
+        asyncDispatch(
+          subscribable,
+          (function* () {
+            yield* upsert(tasksTable, [createTask(1, "rejected action")]);
+          })(),
+        ),
+      ).rejects.toThrow("queue is full");
+      expect(notified).not.toHaveBeenCalled();
       expect(hybrid.isCrashed).toBe(false);
       await expect(
         db.intervalScan(tasksTable, "byId", [

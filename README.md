@@ -46,9 +46,10 @@ to strain:
   by the action. Await `execAsync(db.waitForPersistence())` when you need
   committed changes saved to the primary store. Both hybrid runtimes reject
   transactions before publishing memory changes when 100 persistence batches
-  are unsettled; await persistence and retry the transaction. Ordinary
-  `PreloadedHybridDB` inserts preserve duplicate-ID checks during background
-  persistence.
+  are unsettled; await persistence and retry in a new transaction. Rejected
+  commits finish the transaction, while rollback remains safe for cleanup.
+  Ordinary `PreloadedHybridDB` inserts preserve duplicate-ID checks during
+  background persistence.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
   same schema, selectors, and actions run against a persistent store on the
   server (SQLite today, pg/mongodb in future). The runtime reads only the rows a

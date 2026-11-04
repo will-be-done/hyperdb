@@ -403,7 +403,8 @@ returns its promise. Execution suspends for database I/O, a busy transaction
 lock, or an unresolved promise yielded by the action.
 Both hybrid runtimes allow at most 100 unsettled persistence batches. At
 capacity, a transaction rejects before publishing memory changes; await
-`waitForPersistence()` and retry the transaction.
+`waitForPersistence()` and retry in a new transaction. A rejected HybridDB commit
+finishes the transaction; further commits throw, and rollback remains safe.
 Await `execAsync(db.waitForPersistence())` on either hybrid runtime or its
 `SubscribableDB` wrapper before broadcasting changes or acknowledging sync.
 The wait covers transactions committed before the call. Permanent persistence

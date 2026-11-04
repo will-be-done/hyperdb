@@ -213,7 +213,9 @@ order.
 
 Both hybrid runtimes allow at most 100 unsettled persistence batches. If the
 queue is full, the transaction rejects before publishing cache changes. Await
-`execAsync(db.waitForPersistence())` and retry the transaction to resume writes.
+`execAsync(db.waitForPersistence())` and retry in a new transaction to resume
+writes. A rejected HybridDB commit finishes that transaction: later commits
+throw, while `rollback()` remains safe for cleanup.
 Empty transactions do not consume queue capacity.
 HybridDB snapshots inserted and upserted transaction rows when the write runs,
 so later caller mutations do not alter cached or persisted values. A transaction
