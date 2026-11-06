@@ -4,7 +4,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { HybridDB } from "../runtime/hybrid-db";
 import { PreloadedHybridDB } from "../runtime/preloaded-hybrid-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import { defineTable } from "../schema/table";
+import { defineTable, type ExtractSchema } from "../schema/table";
 import { v } from "../schema/values";
 import { execAsync, execSync } from "../core/executor";
 import {
@@ -616,6 +616,21 @@ describe("undo middleware", () => {
     expect(rows()).toEqual([{ ...latest, done: false }]);
     execSync(history.redo());
     expect(rows()).toEqual([{ ...latest, done: true }]);
+  });
+
+  it("lets replay hooks change ignored fields", () => {
+    const { db, history, rows } = setupTasks(textTasks);
+    syncDispatch(db, insert(textTasks, [{ id: "a", title: "", done: false }]));
+    syncDispatch(db, upsert(textTasks, [{ id: "a", title: "", done: true }]));
+    db.afterUpsert(function* (_tx, table, traits, ops) {
+      if (table.tableName !== textTasks.tableName || !isUndoReplay(traits))
+        return;
+      const task = ops[0].newValue as ExtractSchema<typeof textTasks>;
+      if (task.title !== "hooked")
+        yield* upsert(textTasks, [{ ...task, title: "hooked" }]);
+    });
+    execSync(history.undo());
+    expect(rows()).toEqual([{ id: "a", title: "hooked", done: false }]);
   });
 
   it("rejects excluded writes between recorded writes to the same row", () => {

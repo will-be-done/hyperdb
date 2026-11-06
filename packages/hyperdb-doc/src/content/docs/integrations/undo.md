@@ -214,7 +214,8 @@ mutations can be registered before or after the manager.
 Before replay, the manager checks expected current rows inside its transaction.
 If an excluded write, remote change, or another manager has changed data the
 step depends on, replay throws `UndoConflictError` with `tableName` and `rowId`. It also checks
-that hooks leave replayed rows in their expected final state. Conflicts, hook
+that hooks leave the tracked fields of replayed rows in their expected final
+state; hooks may set ignored fields. Conflicts, hook
 failures, and validation failures roll back the transaction without moving either
 queue. Transaction-storage failures also leave history in place. With `HybridDB`,
 a later background persistence failure can occur after the cache commit and queue

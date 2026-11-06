@@ -421,14 +421,15 @@ function collectFieldAnnotations(
   const variants = isStandaloneSchemaValidator(schemaOrValidator)
     ? (collectObjectSchemaFields(schemaOrValidator) ?? [])
     : [schemaOrValidator];
-  const result: Record<string, Annotation[]> = {};
+  const result = new Map<string, Annotation[]>();
   for (const fields of variants) {
     for (const [field, validator] of Object.entries(fields)) {
       const annotations = columnAnnotations(validator);
-      if (annotations.length) (result[field] ??= []).push(...annotations);
+      if (annotations.length)
+        result.set(field, [...(result.get(field) ?? []), ...annotations]);
     }
   }
-  return result;
+  return Object.fromEntries(result);
 }
 
 function normalizeSchemaInput(

@@ -542,13 +542,15 @@ export class UndoManager {
         yield* applyBatch(tx, steps.slice(start, end));
         start = end;
       }
-      // Hooks may derive untracked data, but must not alter replayed domain rows.
+      // Hooks may derive untracked data or set ignored fields, but must not
+      // alter the tracked fields of replayed rows.
       for (const [tableName, rows] of virtual) {
         const table = plan.find(
           (change) => change.table.tableName === tableName,
         )!.table;
         for (const [id, row] of rows) {
-          if (!equalValues(yield* readRow(tx, { table, id }), row)) {
+          const actual = yield* readRow(tx, { table, id });
+          if (!sameRow(actual, row, this.ignored.get(tableName))) {
             throw new UndoConflictError(tableName, id);
           }
         }

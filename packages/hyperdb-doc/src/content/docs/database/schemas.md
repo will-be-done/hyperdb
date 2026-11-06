@@ -205,7 +205,8 @@ secret.columns(usersTable); // [{ field: "token", value: true }]
 
 `.with()` returns a copy, so a shared validator keeps its own annotations.
 `.index()` keeps a table's annotations, and `.with()` keeps its indexes. An
-optional column carries the annotations of the validator it wraps. In a union
+optional column carries the annotations of the validator it wraps, and
+`v.partial` / `v.required` keep the annotations of the object and its fields. In a union
 table, a column carries the annotations from every variant. When the same
 annotation appears twice, the last value wins. Keys identify annotations, so
 prefix them with the owning package.

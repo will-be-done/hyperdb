@@ -595,7 +595,7 @@ export const v = {
       ]),
     ) as PartialFields<TFields>;
 
-    return v.object(partialFields);
+    return v.object(partialFields).with(...validator.annotations);
   },
 
   required<
@@ -609,13 +609,13 @@ export const v = {
     const newFields = Object.fromEntries(
       Object.entries(validator.fields).map(([key, field]) => {
         if (keySet.has(key) && isOptionalValidator(field)) {
-          return [key, field.inner];
+          return [key, field.inner.with(...field.annotations)];
         }
         return [key, field];
       }),
     ) as RequiredFields<TFields, TKeys>;
 
-    return v.object(newFields);
+    return v.object(newFields).with(...validator.annotations);
   },
 
   lazy<T>(getValidator: () => Validator<T>): LazyValidator<T> {

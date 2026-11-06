@@ -14,11 +14,12 @@ describe("annotations", () => {
       title: shared.with(hidden(), label("first"), label("Title")),
       note: v.optional(v.string().with(hidden())).with(label("Note")),
       plain: shared,
+      constructor: v.number().with(hidden()),
     });
 
     expect(shared.annotations).toEqual([]);
     expect(assertValid(shared.with(hidden()), "ok")).toBe("ok");
-    expect(hidden.fields(table)).toEqual(["title", "note"]);
+    expect(hidden.fields(table)).toEqual(["title", "note", "constructor"]);
     expect(label.columns(table)).toEqual([
       { field: "title", value: { text: "Title" } },
       { field: "note", value: { text: "Note" } },
@@ -43,7 +44,11 @@ describe("annotations", () => {
     const table = defineTable(
       "annotatedUnion",
       v.union(
-        v.object({ id: v.string(), kind: v.literal("a"), body: v.string() }),
+        v.object({
+          id: v.string(),
+          kind: v.literal("a"),
+          body: v.string().with(label("First")),
+        }),
         v.object({
           id: v.string(),
           kind: v.literal("b"),
@@ -53,5 +58,19 @@ describe("annotations", () => {
     );
 
     expect(hidden.fields(table)).toEqual(["body"]);
+    expect(label.fields(table)).toEqual(["body"]);
+  });
+
+  it("keeps annotations through v.partial and v.required", () => {
+    const object = v
+      .object({ id: v.string(), note: v.optional(v.string()).with(hidden()) })
+      .with(label("object"));
+    const required = v.required(object, ["note"]);
+
+    expect(v.partial(object).annotations).toEqual(object.annotations);
+    expect(required.annotations).toEqual(object.annotations);
+    expect(hidden.fields(defineTable("required", required.fields))).toEqual([
+      "note",
+    ]);
   });
 });
