@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.9.0
+
+### Minor Changes
+
+- 3f38453: Add schema annotations: `.with()` on validators and tables, read through `defineAnnotation()`. Undo replays updates field by field, so concurrent edits to other fields no longer conflict. Columns marked `.with(undoIgnore())` are never undone. Add a `skip(traits)` option, `dropUndo()` / `dropRedo()`, and return the replayed event from `undo()` / `redo()`.
+
 ## 0.8.0
 
 ### Minor Changes
