@@ -17,4 +17,5 @@ export * from "./runtime/hybrid-db";
 export * from "./runtime/preloaded-hybrid-db";
 export * from "./schema/table";
 export * from "./schema/values";
+export * from "./schema/annotations";
 export * from "./tracing";

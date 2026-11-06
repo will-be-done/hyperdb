@@ -66,8 +66,9 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/database/schemas.md`: Schema and validator reference.
   Covers `defineTable`, required string `id`, built-in `byId`, `ExtractSchema`,
   validators from `v`, standalone validators and `Infer`, tagged-union tables,
-  index declarations, indexable column rules, the `undefined` storage rule, and
-  type helper references.
+  index declarations, indexable column rules, column and table annotations
+  (`.with()`, `defineAnnotation`), the `undefined` storage rule, and type helper
+  references.
 - `src/content/docs/database/data-types.md`: Storable and indexable value
   reference. Lists supported validators and TypeScript types, composite
   validator helpers, binary data behavior, indexable values, `v.any()` rules,
@@ -121,7 +122,8 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/integrations/undo.md`: Undo/redo plugin guide. Covers
   transaction history, table selection, sync/async replay, manager APIs,
   per-manager and global scoped exclusions, grouping, mutation hooks,
-  reactive subscriptions, conflicts, and in-memory history limits.
+  reactive subscriptions, field-level replay, `undoIgnore` columns, `skip`,
+  dropping steps, conflicts, and in-memory history limits.
 
 ## Guides
 

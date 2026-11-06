@@ -7,6 +7,7 @@ import {
   validObjectKey,
   validRecordKey,
 } from "./validation-utils";
+import type { Annotation } from "./annotations";
 
 export type ValidationPath = readonly (string | number)[];
 
@@ -84,6 +85,9 @@ interface BaseValidator<
   TKind extends ValidatorKind,
 > extends ValidatorOutput<T> {
   readonly kind: TKind;
+  readonly annotations: readonly Annotation[];
+  /** Returns a copy carrying the annotations, for plugins to read. */
+  with(...annotations: Annotation[]): this;
 }
 
 export type PrimitiveValidator<
@@ -275,12 +279,25 @@ function arrayBufferOfView(value: ArrayBufferView): ArrayBuffer {
   return normalized.buffer as ArrayBuffer;
 }
 
+function withAnnotations<
+  TValidator extends { readonly annotations: readonly Annotation[] },
+>(this: TValidator, ...annotations: Annotation[]): TValidator {
+  return { ...this, annotations: [...this.annotations, ...annotations] };
+}
+
+function annotatable<TValidator extends BaseValidator<any, ValidatorKind>>(
+  validator: Omit<TValidator, "annotations" | "with">,
+): TValidator {
+  const annotated = { ...validator, annotations: [], with: withAnnotations };
+  return annotated as unknown as TValidator;
+}
+
 function primitive<T, TKind extends PrimitiveValidatorKind>(
   kind: TKind,
   guard: (value: unknown) => value is T,
   expected: string,
 ): PrimitiveValidator<T, TKind> {
-  return {
+  return annotatable({
     kind,
     normalize(value, path = []) {
       if (value === undefined) {
@@ -291,7 +308,7 @@ function primitive<T, TKind extends PrimitiveValidatorKind>(
       }
       return success(value);
     },
-  };
+  });
 }
 
 export function assertValid<T>(validator: Validator<T>, value: unknown): T {
@@ -374,7 +391,7 @@ export const v = {
   },
 
   arrayBuffer(): ArrayBufferValidator {
-    return {
+    return annotatable({
       kind: "arrayBuffer",
       normalize(value, path = []) {
         if (value === undefined) {
@@ -388,11 +405,11 @@ export const v = {
         }
         return fail("expected ArrayBuffer", path);
       },
-    };
+    });
   },
 
   array<T>(item: Validator<T>): ArrayValidator<T> {
-    return {
+    return annotatable({
       kind: "array",
       item,
       normalize(value, path = []) {
@@ -414,7 +431,7 @@ export const v = {
         }
         return success(normalized);
       },
-    };
+    });
   },
 
   object<TFields extends Record<string, Validator<any>>>(
@@ -426,7 +443,7 @@ export const v = {
       ([key]) => !validObjectKey(key),
     )?.[0];
 
-    return {
+    return annotatable({
       kind: "object",
       fields: objectFields,
       normalize(value, path = []) {
@@ -469,14 +486,14 @@ export const v = {
 
         return success(normalized as InferObject<TFields>);
       },
-    };
+    });
   },
 
   record<TKey extends string, TValue>(
     keyValidator: Validator<TKey>,
     valueValidator: Validator<TValue>,
   ): RecordValidator<TKey, TValue> {
-    return {
+    return annotatable({
       kind: "record",
       keyValidator,
       valueValidator,
@@ -513,13 +530,13 @@ export const v = {
 
         return success(normalized as Record<TKey, TValue>);
       },
-    };
+    });
   },
 
   union<TValidators extends readonly Validator<any>[]>(
     ...validators: TValidators
   ): UnionValidator<TValidators> {
-    return {
+    return annotatable({
       kind: "union",
       validators,
       normalize(value, path = []) {
@@ -536,13 +553,13 @@ export const v = {
           path,
         );
       },
-    };
+    });
   },
 
   literal<T extends string | number | bigint | boolean | null>(
     literalValue: T,
   ): LiteralValidator<T> {
-    return {
+    return annotatable({
       kind: "literal",
       literalValue,
       normalize(value, path = []) {
@@ -551,11 +568,11 @@ export const v = {
         }
         return fail(`expected literal ${String(literalValue)}`, path);
       },
-    };
+    });
   },
 
   optional<T>(inner: Validator<T>): OptionalValidator<T> {
-    return {
+    return annotatable({
       kind: "optional",
       isOptional: true,
       inner,
@@ -565,7 +582,7 @@ export const v = {
         }
         return inner.normalize(value, path);
       },
-    };
+    });
   },
 
   partial<TFields extends Record<string, Validator<any>>>(
@@ -578,7 +595,7 @@ export const v = {
       ]),
     ) as PartialFields<TFields>;
 
-    return v.object(partialFields);
+    return v.object(partialFields).with(...validator.annotations);
   },
 
   required<
@@ -592,38 +609,38 @@ export const v = {
     const newFields = Object.fromEntries(
       Object.entries(validator.fields).map(([key, field]) => {
         if (keySet.has(key) && isOptionalValidator(field)) {
-          return [key, field.inner];
+          return [key, field.inner.with(...field.annotations)];
         }
         return [key, field];
       }),
     ) as RequiredFields<TFields, TKeys>;
 
-    return v.object(newFields);
+    return v.object(newFields).with(...validator.annotations);
   },
 
   lazy<T>(getValidator: () => Validator<T>): LazyValidator<T> {
-    return {
+    return annotatable({
       kind: "lazy",
       getValidator,
       normalize(value, path = []) {
         return getValidator().normalize(value, path);
       },
-    };
+    });
   },
 
   pass<T>(): Validator<T> {
-    return {
+    return annotatable({
       kind: "pass",
       normalize(value) {
         return success(value as T);
       },
-    };
+    });
   },
 
   any(): Validator<any> {
-    return {
+    return annotatable({
       kind: "any",
       normalize: normalizeAny,
-    };
+    });
   },
 };

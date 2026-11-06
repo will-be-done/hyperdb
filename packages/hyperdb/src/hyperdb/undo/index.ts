@@ -1,4 +1,9 @@
-export { undoMiddleware, UndoManager, UndoConflictError } from "./manager";
+export {
+  undoMiddleware,
+  undoIgnore,
+  UndoManager,
+  UndoConflictError,
+} from "./manager";
 export type {
   UndoOptions,
   UndoEvent,

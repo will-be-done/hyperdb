@@ -5,8 +5,10 @@ import {
   type ObjectValidator,
   type Validator,
   isIndexableValueValidator,
+  isOptionalValidator,
   v,
 } from "./values";
+import type { Annotation } from "./annotations";
 
 export type Keys<T> = keyof T;
 export type Values<T> = T[keyof T];
@@ -78,6 +80,12 @@ export interface TableDefinition<
   schemaFields?: ValidatorSchema;
   indexes: I;
   idIndexName: string;
+  /** Table annotations added with `.with()`. */
+  readonly annotations: readonly Annotation[];
+  /** Column annotations by field name; columns without any are absent. */
+  readonly fieldAnnotations: Readonly<Record<string, readonly Annotation[]>>;
+  /** Returns a copy carrying the annotations, for plugins to read. */
+  with(...annotations: Annotation[]): TableDefinition<T, I, TSchema>;
   v(): TSchema extends ValidatorSchema
     ? ObjectValidator<TSchema>
     : Validator<T>;
@@ -257,10 +265,16 @@ export function validateIndexes(
 }
 
 function addIndexMethod<T, I extends AnyIndexDefinitions, TSchema = undefined>(
-  tableDef: Omit<TableDefinition<T, I, TSchema>, "index" | "v">,
+  tableDef: Omit<TableDefinition<T, I, TSchema>, "index" | "v" | "with">,
 ): TableDefinition<T, I, TSchema> {
   return {
     ...tableDef,
+    with(...annotations: Annotation[]) {
+      return addIndexMethod({
+        ...tableDef,
+        annotations: [...tableDef.annotations, ...annotations],
+      });
+    },
     v() {
       if (!tableDef.schemaValidator) {
         throw new Error(
@@ -390,6 +404,34 @@ function isStandaloneSchemaValidator(
   );
 }
 
+// An optional column carries its inner validator's annotations too.
+function columnAnnotations(validator: Validator<unknown>): Annotation[] {
+  return [
+    ...(isOptionalValidator(validator)
+      ? columnAnnotations(validator.inner)
+      : []),
+    ...validator.annotations,
+  ];
+}
+
+// A column shared by union variants carries the annotations of every variant.
+function collectFieldAnnotations(
+  schemaOrValidator: ValidatorSchemaWithId | Validator<{ id: string }>,
+): Record<string, Annotation[]> {
+  const variants = isStandaloneSchemaValidator(schemaOrValidator)
+    ? (collectObjectSchemaFields(schemaOrValidator) ?? [])
+    : [schemaOrValidator];
+  const result = new Map<string, Annotation[]>();
+  for (const fields of variants) {
+    for (const [field, validator] of Object.entries(fields)) {
+      const annotations = columnAnnotations(validator);
+      if (annotations.length)
+        result.set(field, [...(result.get(field) ?? []), ...annotations]);
+    }
+  }
+  return Object.fromEntries(result);
+}
+
 function normalizeSchemaInput(
   tableName: string,
   schemaOrValidator: ValidatorSchemaWithId | Validator<{ id: string }>,
@@ -470,5 +512,7 @@ export function defineTable(
     schemaFields,
     indexes,
     idIndexName: "byId",
+    annotations: [],
+    fieldAnnotations: collectFieldAnnotations(schemaOrValidator),
   });
 }

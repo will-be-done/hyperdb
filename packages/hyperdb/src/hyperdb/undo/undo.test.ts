@@ -4,7 +4,7 @@ import { SubscribableDB } from "../runtime/subscribable-db";
 import { HybridDB } from "../runtime/hybrid-db";
 import { PreloadedHybridDB } from "../runtime/preloaded-hybrid-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
-import { defineTable } from "../schema/table";
+import { defineTable, type ExtractSchema } from "../schema/table";
 import { v } from "../schema/values";
 import { execAsync, execSync } from "../core/executor";
 import {
@@ -20,6 +20,7 @@ import { isUnwrapCmd, noop, unwrap } from "../commands/async";
 import { createDriverFactories } from "../test-utils/driver-factories";
 import {
   undoMiddleware,
+  undoIgnore,
   withoutUndo,
   isUndoReplay,
   UndoConflictError,
@@ -46,6 +47,18 @@ const binary = defineTable(
     data: v.any(),
   }),
 ).index("all", ["id"]);
+const taskSchema = {
+  id: v.string(),
+  title: v.string(),
+  done: v.boolean(),
+  doc: v.optional(v.string()),
+};
+const tasks = defineTable("undoTasks", taskSchema).index("all", ["id"]);
+const textTasks = defineTable("undoTextTasks", {
+  ...taskSchema,
+  title: v.string().with(undoIgnore()),
+  doc: v.optional(v.string().with(undoIgnore())),
+}).index("all", ["id"]);
 
 function setup() {
   const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
@@ -53,6 +66,18 @@ function setup() {
   const history = undoMiddleware(db, { tables: [items] });
   const rows = () => execSync(db.intervalScan(items, "all", [{}]));
   return { db, history, rows };
+}
+
+function setupTasks(table: typeof tasks = tasks) {
+  const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+  execSync(db.loadTables([table]));
+  const history = undoMiddleware(db, {
+    tables: [table],
+    skip: (traits) => traits.some((trait) => trait.type === "remote"),
+  });
+  const remote = db.withTraits({ type: "remote" });
+  const rows = () => execSync(db.intervalScan(table, "all", [{}]));
+  return { db, history, remote, rows };
 }
 
 describe("undo middleware", () => {
@@ -531,6 +556,81 @@ describe("undo middleware", () => {
     expect(rows()).toEqual(before);
     expect(history.undoLevels).toBe(1);
     expect(history.redoLevels).toBe(0);
+    history.dropUndo();
+    expect(history.canUndo).toBe(false);
+    expect(rows()).toEqual(before);
+  });
+
+  it("restores only the fields an update wrote and conflicts only on them", () => {
+    const { db, history, remote, rows } = setupTasks();
+    syncDispatch(
+      db,
+      insert(tasks, [{ id: "a", title: "A", done: false, doc: "d" }]),
+    );
+    syncDispatch(db, upsert(tasks, [{ id: "a", title: "A", done: true }]));
+    syncDispatch(
+      remote,
+      upsert(tasks, [{ id: "a", title: "Remote", done: true }]),
+    );
+    expect(history.undoLevels).toBe(2);
+    const event = execSync(history.undo());
+    expect(event.changes.map((change) => change.before)).toEqual([
+      { id: "a", title: "A", done: false, doc: "d" },
+    ]);
+    expect(rows()).toEqual([
+      { id: "a", title: "Remote", done: false, doc: "d" },
+    ]);
+    syncDispatch(
+      remote,
+      upsert(tasks, [{ id: "a", title: "Remote", done: true, doc: "d" }]),
+    );
+    expect(() => execSync(history.redo())).toThrow(UndoConflictError);
+    history.dropRedo();
+    expect(history.canRedo).toBe(false);
+    expect(history.undoLevels).toBe(1);
+  });
+
+  it("leaves ignored fields alone and re-inserts their latest values", () => {
+    const { db, history, rows } = setupTasks(textTasks);
+    syncDispatch(db, insert(textTasks, [{ id: "a", title: "", done: false }]));
+    syncDispatch(
+      db,
+      upsert(textTasks, [{ id: "a", title: "Typed", done: false, doc: "d1" }]),
+    );
+    expect(history.undoLevels).toBe(1);
+    syncDispatch(
+      db,
+      upsert(textTasks, [{ id: "a", title: "Typed", done: true, doc: "d1" }]),
+    );
+    expect(history.undoQueue.at(-1)!.changes[0].after).toEqual({
+      id: "a",
+      done: true,
+    });
+    const latest = { id: "a", title: "Typed again", doc: "d2" };
+    syncDispatch(db, upsert(textTasks, [{ ...latest, done: true }]));
+    execSync(history.undo());
+    expect(rows()).toEqual([{ ...latest, done: false }]);
+    execSync(history.undo());
+    expect(rows()).toEqual([]);
+    execSync(history.redo());
+    expect(rows()).toEqual([{ ...latest, done: false }]);
+    execSync(history.redo());
+    expect(rows()).toEqual([{ ...latest, done: true }]);
+  });
+
+  it("lets replay hooks change ignored fields", () => {
+    const { db, history, rows } = setupTasks(textTasks);
+    syncDispatch(db, insert(textTasks, [{ id: "a", title: "", done: false }]));
+    syncDispatch(db, upsert(textTasks, [{ id: "a", title: "", done: true }]));
+    db.afterUpsert(function* (_tx, table, traits, ops) {
+      if (table.tableName !== textTasks.tableName || !isUndoReplay(traits))
+        return;
+      const task = ops[0].newValue as ExtractSchema<typeof textTasks>;
+      if (task.title !== "hooked")
+        yield* upsert(textTasks, [{ ...task, title: "hooked" }]);
+    });
+    execSync(history.undo());
+    expect(rows()).toEqual([{ id: "a", title: "hooked", done: false }]);
   });
 
   it("rejects excluded writes between recorded writes to the same row", () => {

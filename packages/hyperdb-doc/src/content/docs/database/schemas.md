@@ -177,6 +177,40 @@ For composite B-tree indexes, put equality columns first and the ordered or
 range column last. A selector over `["projectId", "orderToken"]` can read one
 project in order without scanning every task.
 
+## Annotations
+
+`.with()` attaches annotations to a column validator or a table. HyperDB
+stores them but never acts on them. Plugins and app code read them to know
+which columns or tables to treat specially. Annotations do not change the
+stored schema or validation.
+
+```ts
+import { defineAnnotation, defineTable, v } from "@will-be-done/hyperdb";
+
+const secret = defineAnnotation("app.secret");
+const syncable = defineAnnotation("app.syncable", (type: string) => ({ type }));
+
+const usersTable = defineTable("users", {
+  id: v.string(),
+  email: v.string(),
+  token: v.optional(v.string()).with(secret()),
+})
+  .index("byEmail", ["email"], { type: "uniqhash" })
+  .with(syncable("user"));
+
+syncable.of(usersTable); // { type: "user" }
+secret.fields(usersTable); // ["token"]
+secret.columns(usersTable); // [{ field: "token", value: true }]
+```
+
+`.with()` returns a copy, so a shared validator keeps its own annotations.
+`.index()` keeps a table's annotations, and `.with()` keeps its indexes. An
+optional column carries the annotations of the validator it wraps, and
+`v.partial` / `v.required` keep the annotations of the object and its fields. In a union
+table, a column carries the annotations from every variant. When the same
+annotation appears twice, the last value wins. Keys identify annotations, so
+prefix them with the owning package.
+
 ## Runtime validation
 
 Validators give you TypeScript types and normalize values before they reach
