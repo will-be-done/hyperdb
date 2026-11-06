@@ -52,7 +52,10 @@ cache-first commit and background persistence behavior.
   mutation `type`, `table`, `id`, `before`, and `after`; `undefined` means the
   row was absent. Returned row values are copied so callers cannot alter history.
 - `undoLevels`, `redoLevels`, `canUndo`, `canRedo`: history availability.
-- `undo()`, `redo()`: transaction generators; throw when their queue is empty.
+- `undo()`, `redo()`: transaction generators that return the replayed event;
+  throw when their queue is empty.
+- `dropUndo()`, `dropRedo()`: discard the next step of one queue without
+  replaying it, such as after a conflict.
 - `clearUndo()`, `clearRedo()`: clear one queue.
 - `withoutUndo(...)`: exclude a scope from this manager.
 - `withGroup(...)`, `createGroup(name?)`: combine transactions into one step.
@@ -62,7 +65,9 @@ cache-first commit and background persistence behavior.
 - `dispose()`: detach recording and clear subscribers. Disposing twice is safe;
   later manager operations throw. Existing queue snapshots remain readable.
 
-`tables` is required. Limits are optional and unlimited by default; each must
+`tables` is required. `skip(traits)` is optional and leaves a
+write out of history when it returns `true`, like `withoutUndo`. It suits
+writes your app already marks with a trait, such as sync merges. Limits are optional and unlimited by default; each must
 be a non-negative safe integer. Zero disables retention in that queue. A new
 recorded edit clears redo. Excluded edits do not clear redo, but can cause a
 conflict when replayed later. A group clears redo only when it ends with effective
@@ -99,9 +104,32 @@ combine. Recording resumes after the block, and errors roll back the dispatch
 normally. The scope stays local to that execution, including during asynchronous
 driver work. Excluded writes still validate, persist, and notify subscribers.
 
-History restores complete rows. Exclusion is not field-level selective undo:
-mixing excluded and recorded updates to the same row can make that step
-conflict. Prefer separate rows or tables for state that should not be undone.
+Exclusion applies to whole writes. An excluded write to a field that a
+recorded update also wrote makes that step conflict. For columns that should
+never be undone, use [ignored fields](#ignored-fields) instead.
+
+## Ignored fields
+
+Some fields should never be undone, such as a CRDT document that only merges
+forward or text an editor already undoes on its own. Mark those columns with
+the `undoIgnore` [annotation](/database/schemas/#annotations):
+
+```ts
+import { undoIgnore } from "@will-be-done/hyperdb/undo";
+
+const tasksTable = defineTable("tasks", {
+  id: v.string(),
+  title: v.string().with(undoIgnore()),
+  titleDoc: v.optional(v.string()).with(undoIgnore()),
+  done: v.boolean(),
+});
+```
+
+An update that changes only ignored fields creates no step. Other updates leave
+ignored fields untouched on undo and redo, and their recorded `before` and
+`after` omit them. Creates and deletes still capture whole rows: undoing a
+create deletes the row even if its ignored fields changed since, and the row
+it re-inserts on redo carries the ignored values it had when it was removed.
 
 ## Exclude writes outside actions
 
@@ -184,15 +212,19 @@ mutations can be registered before or after the manager.
 ## Conflicts
 
 Before replay, the manager checks expected current rows inside its transaction.
-If an excluded write, remote change, or another manager has changed a row,
-replay throws `UndoConflictError` with `tableName` and `rowId`. It also checks
+If an excluded write, remote change, or another manager has changed data the
+step depends on, replay throws `UndoConflictError` with `tableName` and `rowId`. It also checks
 that hooks leave replayed rows in their expected final state. Conflicts, hook
 failures, and validation failures roll back the transaction without moving either
 queue. Transaction-storage failures also leave history in place. With `HybridDB`,
 a later background persistence failure can occur after the cache commit and queue
 movement; it does not roll back the completed replay.
 
-Conflict checks compare entire rows, including nested values, bigint, and binary
-view types and contents. They do not merge concurrent edits. Resolve the conflict
-or clear the affected queue before continuing. History is kept only in memory; persisted
+An update conflicts only when a field it wrote has changed since, and its replay
+restores only those fields, so concurrent edits to other fields survive. Undoing
+a create and redoing a delete conflict when any tracked field of the row has
+changed; restoring a removed row conflicts when the ID exists again. Comparisons
+cover nested values, bigint, and binary view types and contents; a nested object
+is one field. Resolve the conflict, or drop the step with `dropUndo()` /
+`dropRedo()`, before continuing. History is kept only in memory; persisted
 history and attached cursor/selection state are not supported yet.

@@ -315,8 +315,10 @@ function* edit() {
 ```
 
 The manager exposes queues, `canUndo` / `canRedo`, limits, subscriptions,
-`withGroup`, and `createGroup`. Replay runs atomically and reports a conflict
-rather than overwriting rows changed outside history. Track source tables and
+`withGroup`, `createGroup`, and `dropUndo` / `dropRedo`. Replay runs atomically
+and restores only the fields each update wrote; it reports a conflict rather than
+overwriting fields changed outside history. Columns annotated with `.with(undoIgnore())` are never
+undone, and `skip(traits)` leaves writes out of history by trait. Track source tables and
 let mutation hooks rebuild derived data. History is in memory.
 Groups with no net changes preserve redo. With `HybridDB`, a background persistence
 failure can occur after the cache commit and history queues have moved.

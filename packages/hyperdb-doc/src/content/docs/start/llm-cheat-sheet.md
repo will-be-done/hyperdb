@@ -40,7 +40,7 @@ and views that should re-run only when the exact index ranges they read change.
   `useSyncSelector`, `useAsyncSelector`, `useSyncDispatch`, `useAsyncDispatch`,
   `useSelectSync`, and `useSelectAsync`.
 - `@will-be-done/hyperdb/undo`: `undoMiddleware`, `UndoManager`, `withoutUndo`,
-  `isUndoReplay`, `UndoConflictError`, and history types.
+  `undoIgnore`, `isUndoReplay`, `UndoConflictError`, and history types.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
   trace metadata helpers.
 - `@will-be-done/hyperdb/drivers/inmemory`: `BptreeInmemDriver`.
@@ -120,6 +120,12 @@ Useful validators: `v.string()`, `v.number()`, `v.bigint()`, `v.boolean()`,
 
 Stored rows cannot contain `undefined` except where optional object fields are
 omitted. Arrays and records cannot contain `undefined`.
+
+`.with(...)` attaches inert annotations to a column validator or a table for
+plugins to read; it returns a copy. Define one with
+`defineAnnotation(key, create?)`, then read it with `annotation.of(table)`
+(table value), `annotation.fields(table)`, or `annotation.columns(table)`.
+Optional columns carry their inner validator's annotations.
 
 ## Selectors And Reads
 
@@ -258,10 +264,11 @@ drivers. Use `syncDispatch(db, action(...))` only for synchronous drivers.
 import { undoMiddleware, withoutUndo } from "@will-be-done/hyperdb/undo";
 
 const history = undoMiddleware(db, {
-  tables: [tasksTable],
+  tables: [tasksTable], // columns marked with .with(undoIgnore()) are never undone
+  skip: (traits) => traits.some((t) => t.type === "remote-merge"),
   maxUndoLevels: 100,
 });
-execSync(history.undo()); // after an edit; throws when empty
+const event = execSync(history.undo()); // replayed step; throws when empty
 await execAsync(history.redo()); // asynchronous runtime
 
 function* edit() {
@@ -281,7 +288,7 @@ Use `history.withoutUndo(scopedDb => ...)` or
 No global recording flag or stop/resume pairing is needed.
 
 The manager has read-only queues and `store`, levels, `canUndo` / `canRedo`,
-`clearUndo` / `clearRedo`, `subscribe`, `getRevision`, and `dispose`.
+`dropUndo` / `dropRedo` (discard the next step), `clearUndo` / `clearRedo`, `subscribe`, `getRevision`, and `dispose`.
 `withGroup(name?, scopedDb => ...)` groups synchronous dispatches;
 `createGroup(name?)` provides synchronous `continue(scopedDb => ...)` blocks
 and `end()`. Groups affect history, not transaction atomicity. An intervening
@@ -289,9 +296,11 @@ recorded transaction closes a manual group; no async group-flow API exists.
 
 Choose domain tables; let hooks rebuild untracked derived tables.
 `isUndoReplay(traits)` identifies replay in mutation hooks. Replay is excluded
-from every manager. Entire-row conflicts throw `UndoConflictError` and roll back
-without moving either queue. Exclusions are per mutation and do not preserve
-individual fields within a row. History is in memory, with optional
+from every manager. Updates replay field by field: they restore and check only
+the fields they wrote. Creates and deletes compare whole rows. Conflicts throw
+`UndoConflictError` and roll back without moving either queue. Columns annotated
+with `undoIgnore()` are never recorded, restored, or checked. `skip(traits)` excludes writes by
+trait. History is in memory, with optional
 `maxUndoLevels` / `maxRedoLevels`; recorded edits clear redo. Groups clear redo
 only when finalized with effective changes; groups with no net changes preserve
 it. Binary conflicts compare view types as well as bytes. `HybridDB` background

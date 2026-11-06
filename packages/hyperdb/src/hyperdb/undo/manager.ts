@@ -4,6 +4,7 @@ import type { Row, Trait } from "../core/primitives";
 import { deepFreeze } from "../deep-freeze";
 import type { Op } from "../runtime/ops";
 import type { SubscribableDB } from "../runtime/subscribable-db";
+import { defineAnnotation } from "../schema/annotations";
 import type { AnyTableDefinition, TableDefinition } from "../schema/table";
 import { normalizeRecordForDriver } from "../storage/codec";
 import {
@@ -15,6 +16,9 @@ import {
   type UndoTrait,
 } from "./scope";
 import { copyRow, equalValues } from "./values";
+
+/** Marks a column that history never records, restores, or checks for conflicts. */
+export const undoIgnore = defineAnnotation("hyperdb.undo.ignore");
 
 export type UndoRowChange = {
   readonly type: Op["type"];
@@ -37,6 +41,8 @@ export type UndoStore = {
 export type UndoOptions = {
   /** Domain tables to restore. Leave hook-maintained derived tables out. */
   tables: readonly AnyTableDefinition[];
+  /** Return true to leave a write out of history, like withoutUndo(). */
+  skip?: (traits: readonly Trait[]) => boolean;
   maxUndoLevels?: number;
   maxRedoLevels?: number;
 };
@@ -98,27 +104,57 @@ function snapshotEvent(event: UndoEvent): UndoEvent {
   });
 }
 
+type IgnoredFields = ReadonlyMap<string, ReadonlySet<string>>;
+
+function omitFields(row: Row, fields: ReadonlySet<string>): Row {
+  return Object.fromEntries(
+    Object.entries(row).filter(([key]) => !fields.has(key)),
+  ) as Row;
+}
+
+function sameRow(
+  a: Row | undefined,
+  b: Row | undefined,
+  ignored: ReadonlySet<string> | undefined,
+): boolean {
+  if (!ignored || a === undefined || b === undefined) return equalValues(a, b);
+  return equalValues(omitFields(a, ignored), omitFields(b, ignored));
+}
+
+// The fields an update wrote: the only ones its replay checks and restores.
+function changedFields(before: Row, after: Row): string[] {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys].filter((key) => !equalValues(before[key], after[key]));
+}
+
 // Keep operation order for replay (including intermediate unique-index values),
 // but don't create a history entry for a transaction whose net effect is empty.
-function hasChanges(changes: readonly UndoRowChange[]): boolean {
+function hasChanges(
+  changes: readonly UndoRowChange[],
+  ignored: IgnoredFields,
+): boolean {
   const rows = new Map<
     string,
     Map<string, { before: Row | undefined; after: Row | undefined }>
   >();
   for (const change of changes) {
+    const fields = ignored.get(change.table.tableName);
     let table = rows.get(change.table.tableName);
     if (!table) rows.set(change.table.tableName, (table = new Map()));
     const previous = table.get(change.id);
     // A skipped write between recorded writes breaks continuity. Keep the
     // entry so replay reports a conflict rather than erasing excluded data.
-    if (previous && !equalValues(previous.after, change.before)) return true;
+    if (previous && !sameRow(previous.after, change.before, fields))
+      return true;
     table.set(change.id, {
       before: previous ? previous.before : change.before,
       after: change.after,
     });
   }
-  return [...rows.values()].some((table) =>
-    [...table.values()].some((row) => !equalValues(row.before, row.after)),
+  return [...rows].some(([tableName, table]) =>
+    [...table.values()].some(
+      (row) => !sameRow(row.before, row.after, ignored.get(tableName)),
+    ),
   );
 }
 
@@ -127,7 +163,9 @@ export class UndoManager {
   readonly store: UndoStore;
   private readonly db: SubscribableDB;
   private readonly id = {};
-  private readonly tables: Set<string>;
+  private readonly tables = new Set<string>();
+  private readonly ignored = new Map<string, ReadonlySet<string>>();
+  private readonly skip?: (traits: readonly Trait[]) => boolean;
   private readonly maxUndo: number;
   private readonly maxRedo: number;
   private readonly captured = new WeakMap<Op, CapturedChange>();
@@ -144,7 +182,16 @@ export class UndoManager {
 
   constructor(db: SubscribableDB, options: UndoOptions) {
     this.db = db;
-    this.tables = new Set(options.tables.map((table) => table.tableName));
+    for (const table of options.tables) {
+      const ignoreFields = undoIgnore.fields(table);
+      if (ignoreFields.includes("id")) {
+        throw new Error("Undo history cannot ignore the id field");
+      }
+      this.tables.add(table.tableName);
+      if (ignoreFields.length)
+        this.ignored.set(table.tableName, new Set(ignoreFields));
+    }
+    this.skip = options.skip;
     this.maxUndo = levelLimit(options.maxUndoLevels);
     this.maxRedo = levelLimit(options.maxRedoLevels);
     const getUndo = () => this.undoQueue;
@@ -200,11 +247,29 @@ export class UndoManager {
     };
   }
 
-  *undo(): Generator<DBCmd, void> {
-    yield* this.replay("undo");
+  /** Returns the replayed step. */
+  *undo(): Generator<DBCmd, UndoEvent> {
+    return yield* this.replay("undo");
   }
-  *redo(): Generator<DBCmd, void> {
-    yield* this.replay("redo");
+  /** Returns the replayed step. */
+  *redo(): Generator<DBCmd, UndoEvent> {
+    return yield* this.replay("redo");
+  }
+
+  /** Discard the next undo step without replaying it, e.g. after a conflict. */
+  dropUndo(): void {
+    this.assertIdle();
+    if (this.undoStack.length === 0) return;
+    this.undoStack.pop();
+    this.notify();
+  }
+
+  /** Discard the next redo step without replaying it, e.g. after a conflict. */
+  dropRedo(): void {
+    this.assertIdle();
+    if (this.redoStack.length === 0) return;
+    this.redoStack.pop();
+    this.notify();
   }
 
   clearUndo(): void {
@@ -285,7 +350,12 @@ export class UndoManager {
     traits: Trait[],
     ops: Op[],
   ): void {
-    if (!this.tables.has(table.tableName) || isUndoReplay(traits)) return;
+    if (
+      !this.tables.has(table.tableName) ||
+      isUndoReplay(traits) ||
+      this.skip?.(traits)
+    )
+      return;
     const scopes = traits as UndoTrait[];
     if (
       scopes.some(
@@ -303,10 +373,18 @@ export class UndoManager {
       row === undefined
         ? undefined
         : copyRow(normalizeRecordForDriver(table, row, options));
+    const ignored = this.ignored.get(table.tableName);
     const batch = {};
     for (const op of ops) {
-      const before = snapshot(op.type === "insert" ? undefined : op.oldValue);
-      const after = snapshot(op.type === "delete" ? undefined : op.newValue);
+      let before = snapshot(op.type === "insert" ? undefined : op.oldValue);
+      let after = snapshot(op.type === "delete" ? undefined : op.newValue);
+      // Updates restore only tracked fields; creates and deletes keep whole
+      // rows so a removed row comes back with its ignored fields.
+      if (ignored && before && after) {
+        before = omitFields(before, ignored);
+        after = omitFields(after, ignored);
+        if (equalValues(before, after)) continue;
+      }
       this.captured.set(op, {
         change: {
           batch,
@@ -328,7 +406,7 @@ export class UndoManager {
       return entry ? [entry] : [];
     });
     const changes = captured.map((entry) => entry.change);
-    if (!hasChanges(changes)) return;
+    if (!hasChanges(changes, this.ignored)) return;
     this.editRevision++;
 
     const group = this.openGroup;
@@ -377,7 +455,7 @@ export class UndoManager {
   private finishGroup(group: GroupState): void {
     group.closed = true;
     this.openGroup = undefined;
-    if (hasChanges(group.changes)) {
+    if (hasChanges(group.changes, this.ignored)) {
       this.redoStack = [];
       this.push(
         this.undoStack,
@@ -388,12 +466,13 @@ export class UndoManager {
     this.notify();
   }
 
-  private *replay(direction: "undo" | "redo"): Generator<DBCmd, void> {
+  private *replay(direction: "undo" | "redo"): Generator<DBCmd, UndoEvent> {
     this.assertIdle();
     this.busy = true;
     let tx: HyperDBTx | undefined;
     let committed = false;
     let failed = false;
+    let replayed: HistoryEvent;
     try {
       tx = yield* this.db
         .withTraits({
@@ -402,37 +481,65 @@ export class UndoManager {
           direction,
         } as UndoTrait)
         .beginTx();
-      const source = direction === "undo" ? this.undoStack : this.redoStack;
-      const target = direction === "undo" ? this.redoStack : this.undoStack;
+      const undoing = direction === "undo";
+      const source = undoing ? this.undoStack : this.redoStack;
+      const target = undoing ? this.redoStack : this.undoStack;
       const entry = source.at(-1);
       if (!entry) throw new Error(`Nothing to ${direction}`);
       const editRevision = this.editRevision;
-      const plan =
-        direction === "undo" ? [...entry.changes].reverse() : entry.changes;
-      const expected = (change: UndoRowChange) =>
-        direction === "undo" ? change.after : change.before;
-      const desired = (change: UndoRowChange) =>
-        direction === "undo" ? change.before : change.after;
+      const plan = undoing ? [...entry.changes].reverse() : entry.changes;
 
       // Validate the whole plan before writing, simulating repeated row writes.
       const virtual = new Map<string, Map<string, Row | undefined>>();
+      const steps: ReplayStep[] = [];
+      const rebased = new Map<RecordedChange, RecordedChange>();
       for (const change of plan) {
-        let table = virtual.get(change.table.tableName);
-        if (!table) virtual.set(change.table.tableName, (table = new Map()));
+        const tableName = change.table.tableName;
+        let table = virtual.get(tableName);
+        if (!table) virtual.set(tableName, (table = new Map()));
         const current = table.has(change.id)
           ? table.get(change.id)
           : yield* readRow(tx, change);
-        if (!equalValues(current, expected(change))) {
-          throw new UndoConflictError(change.table.tableName, change.id);
+        const from = undoing ? change.after : change.before;
+        const to = undoing ? change.before : change.after;
+        const conflict = () => new UndoConflictError(tableName, change.id);
+        let row: Row | undefined;
+        if (from === undefined) {
+          if (current !== undefined) throw conflict();
+          row = copyRow(to);
+        } else if (to === undefined) {
+          if (!sameRow(current, from, this.ignored.get(tableName)))
+            throw conflict();
+          // Re-inserting this row later restores the ignored fields it had
+          // when replay removed it, not the ones it had when first recorded.
+          rebased.set(change, {
+            ...change,
+            [undoing ? "after" : "before"]: copyRow(current),
+          });
+        } else {
+          if (current === undefined) throw conflict();
+          const fields = changedFields(from, to);
+          if (fields.some((field) => !equalValues(current[field], from[field])))
+            throw conflict();
+          row = { ...current };
+          for (const field of fields) {
+            if (Object.hasOwn(to, field))
+              row[field] = structuredClone(to[field]);
+            else delete row[field];
+          }
         }
-        table.set(change.id, desired(change));
+        table.set(change.id, row);
+        steps.push({ change, row });
       }
 
-      for (let start = 0; start < plan.length; ) {
+      for (let start = 0; start < steps.length; ) {
         let end = start + 1;
-        while (end < plan.length && plan[end].batch === plan[start].batch)
+        while (
+          end < steps.length &&
+          steps[end].change.batch === steps[start].change.batch
+        )
           end++;
-        yield* applyBatch(tx, plan.slice(start, end), direction);
+        yield* applyBatch(tx, steps.slice(start, end));
         start = end;
       }
       // Hooks may derive untracked data, but must not alter replayed domain rows.
@@ -448,16 +555,20 @@ export class UndoManager {
       }
       yield* tx.commit();
       committed = true;
+      replayed = rebased.size
+        ? {
+            ...entry,
+            changes: entry.changes.map(
+              (change) => rebased.get(change) ?? change,
+            ),
+          }
+        : entry;
       const index = source.indexOf(entry);
       if (index !== -1) source.splice(index, 1);
       // A reentrant subscriber may have made a new edit after the replay commit.
       // Preserve that branch rather than adding stale redo history.
       if (this.editRevision === editRevision) {
-        this.push(
-          target,
-          entry,
-          direction === "undo" ? this.maxRedo : this.maxUndo,
-        );
+        this.push(target, replayed, undoing ? this.maxRedo : this.maxUndo);
       }
     } catch (error) {
       failed = true;
@@ -480,6 +591,7 @@ export class UndoManager {
       }
     }
     this.notify();
+    return snapshotEvent(replayed);
   }
 
   private push(
@@ -522,54 +634,24 @@ function* readRow(
   ]))[0];
 }
 
+// A row to write, or undefined to remove the change's row.
+type ReplayStep = { change: RecordedChange; row: Row | undefined };
+
 function* applyBatch(
   tx: HyperDBTx,
-  changes: RecordedChange[],
-  direction: "undo" | "redo",
+  steps: ReplayStep[],
 ): Generator<DBCmd, void> {
-  const { table, type } = changes[0];
-  if (direction === "redo") {
-    if (type === "delete")
-      yield* tx.delete(
-        table,
-        changes.map((change) => change.id),
-      );
-    else if (type === "insert")
-      yield* tx.insert(
-        table,
-        changes.map((change) => copyRow(change.after)!),
-      );
-    else
-      yield* tx.upsert(
-        table,
-        changes.map((change) => copyRow(change.after)!),
-      );
-  } else if (type === "insert") {
-    yield* tx.delete(
-      table,
-      changes.map((change) => change.id),
-    );
-  } else if (type === "delete") {
-    yield* tx.insert(
-      table,
-      changes.map((change) => copyRow(change.before)!),
-    );
-  } else {
-    // Preserve upsert batches: restoring swapped unique keys one row at a time
-    // would fail even though the original batch was valid.
-    const inserted = changes.filter((change) => change.before === undefined);
-    const replaced = changes.filter((change) => change.before !== undefined);
-    if (inserted.length)
-      yield* tx.delete(
-        table,
-        inserted.map((change) => change.id),
-      );
-    if (replaced.length)
-      yield* tx.upsert(
-        table,
-        replaced.map((change) => copyRow(change.before)!),
-      );
-  }
+  const { table, type } = steps[0].change;
+  const removed = steps.flatMap((step) => (step.row ? [] : [step.change.id]));
+  const written = steps.flatMap((step) => (step.row ? [step.row] : []));
+  // Remove first to free unique keys, then write the rest as one batch:
+  // restoring swapped unique keys one row at a time would fail even though
+  // the original batch was valid.
+  if (removed.length) yield* tx.delete(table, removed);
+  if (written.length)
+    yield* type === "upsert"
+      ? tx.upsert(table, written)
+      : tx.insert(table, written);
 }
 
 function isGenerator<T>(
