@@ -4,6 +4,7 @@ import {
   runWithTraitsType,
   type RunWithTraitsCmd,
 } from "../commands/action/commands";
+import { commandBrand } from "../commands/brand";
 
 export const skipUndoType = "hyperdb.undo.skip";
 export const replayUndoType = "hyperdb.undo.replay";
@@ -25,6 +26,7 @@ export function* runInUndoScope<T>(
   trait: UndoTrait,
 ): Generator<unknown, T, unknown> {
   return (yield {
+    [commandBrand]: true,
     type: runWithTraitsType,
     traits: [trait],
     body: body(),

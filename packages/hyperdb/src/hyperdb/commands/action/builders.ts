@@ -32,6 +32,7 @@ import {
   type InsertActionCmd,
   type UpsertActionCmd,
 } from "./commands";
+import { commandBrand } from "../brand";
 
 export type ActionArgsSchema = Record<string, Validator<any>>;
 export type ActionTraceSkip =
@@ -250,6 +251,7 @@ export function* insert<TTable extends TableDefinition<any, any>>(
   values: ExtractSchema<TTable>[],
 ): Generator<unknown> {
   yield {
+    [commandBrand]: true,
     type: insertType,
     table,
     values,
@@ -261,6 +263,7 @@ export function* upsert<TTable extends TableDefinition<any, any>>(
   values: ExtractSchema<TTable>[],
 ): Generator<unknown> {
   yield {
+    [commandBrand]: true,
     type: upsertType,
     table,
     values,
@@ -272,6 +275,7 @@ export function* deleteRows<TTable extends TableDefinition<any, any>>(
   values: string[],
 ): Generator<unknown> {
   yield {
+    [commandBrand]: true,
     type: deleteType,
     table,
     values,
@@ -280,6 +284,7 @@ export function* deleteRows<TTable extends TableDefinition<any, any>>(
 
 export function* getCurrentTraits(): Generator<unknown, Trait[], unknown> {
   return (yield {
+    [commandBrand]: true,
     type: getCurrentTraitsType,
   } satisfies GetCurrentTraitsCmd) as Trait[];
 }

@@ -29,10 +29,12 @@ import {
   type CommandRunnerOptions,
 } from "../runner";
 import {
+  runSelectorType,
   type RunSelectorCmd,
   type SelectRangeCmd,
   type SelectorMemoization,
 } from "./commands";
+import { commandBrand } from "../brand";
 import {
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
@@ -340,7 +342,8 @@ export function createSelector(
         : args;
       const body = (function* () {
         return (yield {
-          type: "runSelector",
+          [commandBrand]: true,
+          type: runSelectorType,
           selector: wrapped,
           args: normalizedArgs,
           makeBody: () => definition.handler(normalizedArgs),

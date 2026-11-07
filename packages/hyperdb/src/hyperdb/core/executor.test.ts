@@ -24,10 +24,18 @@ describe("executor", () => {
     rejection.catch(() => undefined);
 
     function* command(): Generator<DBCmd, void> {
-      yield { type: "unwrap", data: rejection } as DBCmd;
+      yield* unwrap(rejection);
     }
 
     expect(() => execSync(command())).toThrow("Cannot execute async commands");
+  });
+
+  it("rejects look-alike commands without the brand", () => {
+    function* command(): Generator<DBCmd, void> {
+      yield { type: "noop" } as unknown as DBCmd;
+    }
+
+    expect(() => execSync(command())).toThrow(/Unexpected DBCmd yielded/);
   });
 
   it("throws async commands back into generators in execSync so cleanup runs", () => {

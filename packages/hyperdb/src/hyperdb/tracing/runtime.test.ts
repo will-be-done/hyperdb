@@ -327,6 +327,31 @@ describe("devtool runtime tracing", () => {
     expect(trace.commandEvents[0]?.bounds.length).toBeGreaterThan(0);
   });
 
+  it("does not blame a select for an error the handler throws after it", () => {
+    const db = createDB();
+    execSync(db.insert(tasksTable, [task()]));
+    const failAfterRead = action({
+      name: "failAfterRead",
+      args: {},
+      handler: function* failAfterRead() {
+        yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+        throw new Error("handler failed");
+      },
+    });
+
+    expect(() => syncDispatch(db, failAfterRead({}))).toThrow("handler failed");
+    hyperDBTraceStore.flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
+
+    expect(trace.status).toBe("error");
+    expect(trace.commandEvents[0]).toMatchObject({
+      resultCount: 1,
+      status: "success",
+    });
+  });
+
   it("records traces before the devtool opens when selector trace is enabled", async () => {
     deactivateTraceStore?.();
     deactivateTraceStore = undefined;

@@ -7,12 +7,14 @@ import type {
 } from "../../schema/table";
 import type { Value } from "../../core/primitives";
 import { convertWhereToBound } from "../../core/query/bounds";
-import type {
-  QueryOrder,
-  QueryWhereClause,
-  SelectQuery,
-  SelectRangeCmd,
+import {
+  selectRangeType,
+  type QueryOrder,
+  type QueryWhereClause,
+  type SelectQuery,
+  type SelectRangeCmd,
 } from "./commands";
+import { commandBrand } from "../brand";
 import { HyperDBError } from "../../core/errors";
 
 export type ExtractIndexName<TTable> = Extract<
@@ -55,7 +57,8 @@ const createSelectRangeCmd = <QType extends SelectQuery>(
   }
 
   return {
-    type: "selectRange",
+    [commandBrand]: true,
+    type: selectRangeType,
     table,
     index: indexName as string,
     selectQuery: query,

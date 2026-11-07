@@ -1,9 +1,11 @@
 import { describe, expect, test } from "vitest";
+import { commandBrand } from "../brand";
 import { isRunSelectorCmd, isSelectRangeCmd } from "./commands";
 
 describe("isRunSelectorCmd", () => {
   test("accepts a well-formed runSelector marker", () => {
     const marker = {
+      [commandBrand]: true,
       type: "runSelector",
       selector: {},
       args: { id: "1" },
@@ -24,8 +26,15 @@ describe("isRunSelectorCmd", () => {
     expect(isRunSelectorCmd(42)).toBe(false);
   });
 
+  test("rejects look-alike objects without the command brand", () => {
+    expect(
+      isRunSelectorCmd({ type: "runSelector", selector: {}, args: {} }),
+    ).toBe(false);
+    expect(isSelectRangeCmd({ type: "selectRange" })).toBe(false);
+  });
+
   test("does not confuse a select-range cmd with a run-selector cmd", () => {
-    const selectRange = { type: "selectRange" };
+    const selectRange = { [commandBrand]: true, type: "selectRange" };
 
     expect(isSelectRangeCmd(selectRange)).toBe(true);
     expect(isRunSelectorCmd(selectRange)).toBe(false);
