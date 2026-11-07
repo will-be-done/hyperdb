@@ -92,7 +92,7 @@ check the matching docs below and also check the root `README.md`.
   `syncDispatch`/`asyncDispatch`/`dispatchMaybeAsync`, why selectors cannot
   write (typed yields and the runtime guard), typing reusable helpers with
   `SelectorGenerator`/`ActionGenerator`, the `HyperDBError` codes table and
-  `isHyperDBError`, transaction
+  `isHyperDBError`, catching failed commands with `try`/`catch`, transaction
   behavior and rollback, and bulk write guidance.
 
 ## Runtime

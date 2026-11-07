@@ -269,6 +269,13 @@ replaces whole rows by id, and `deleteRows` deletes by id.
 
 ## Errors And Closing
 
+A failed read or write raises its error at the handler's `yield*`, so
+`try` / `catch` / `finally` work in actions and selectors; uncaught errors roll
+the transaction back. Failed writes leave no partial effect, so catching (for
+example a `DuplicateIdError`, then `upsert`) and continuing is safe, except on a
+bare IndexedDB driver, where a failed request aborts the whole transaction and
+the dispatch rejects anyway.
+
 HyperDB errors extend `HyperDBError` with a stable `code`; match on the code,
 not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
 across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),

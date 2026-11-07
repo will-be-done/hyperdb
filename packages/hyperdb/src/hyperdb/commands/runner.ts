@@ -344,15 +344,23 @@ function* runSelector(
     ? wrapGeneratorWithExistingTracePath(cmd.makeBody(), selectorPath)
     : cmd.makeBody();
 
-  const value = yield* runCommandGenerator(db, body, {
-    ...options,
-    selectRangeCmds: childRanges,
-    childMemo: scopedMemo,
-    visited: scopedVisited,
-    traceContext,
-    skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
-    skipChildTrace: options.skipChildTrace || cmd.skipTrace?.childTrace,
-  });
+  let value: unknown;
+  try {
+    value = yield* runCommandGenerator(db, body, {
+      ...options,
+      selectRangeCmds: childRanges,
+      childMemo: scopedMemo,
+      visited: scopedVisited,
+      traceContext,
+      skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
+      skipChildTrace: options.skipChildTrace || cmd.skipTrace?.childTrace,
+    });
+  } catch (error) {
+    // A parent may catch this failure and return a fallback, which still
+    // depends on what the child read, so keep those ranges subscribed.
+    options.selectRangeCmds?.push(...childRanges);
+    throw error;
+  }
 
   if (argsKey != null) {
     // Drop descendants not referenced by this body run (conditional
@@ -510,15 +518,23 @@ export function* runCommandGenerator<TReturn>(
             options.skipChildTrace ? undefined : getCommandFramePath(cmd),
           )
         : undefined;
-      const run = resolveCommandHandler(cmd);
-      const value = yield* run({
-        db,
-        scopedDB,
-        options,
-        tracer,
-        traceContext,
-        traceFrame,
-      });
+      let value: unknown;
+      try {
+        const run = resolveCommandHandler(cmd);
+        value = yield* run({
+          db,
+          scopedDB,
+          options,
+          tracer,
+          traceContext,
+          traceFrame,
+        });
+      } catch (error) {
+        // Raise the failure at the handler's `yield*`, so its try/catch and
+        // finally blocks see it. An uncaught error still propagates below.
+        result = gen.throw(error);
+        continue;
+      }
       result = gen.next(value);
     }
 

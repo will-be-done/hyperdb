@@ -31,6 +31,8 @@ import {
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
   sqliteSchemaMetadataMatches,
+  sqliteWriteNeedsSavepoint,
+  SQLITE_WRITE_SAVEPOINT,
   toSqliteSchemaMetadataReadError,
   type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
@@ -172,6 +174,36 @@ function rollbackQuietly(db: SQLiteDB): void {
   }
 }
 
+function inWriteSavepoint(db: SQLiteDB, run: () => void): void {
+  db.exec(`SAVEPOINT ${SQLITE_WRITE_SAVEPOINT}`);
+  try {
+    run();
+  } catch (error) {
+    try {
+      db.exec(`ROLLBACK TO ${SQLITE_WRITE_SAVEPOINT}`);
+      db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+    } catch {
+      // Keep the write error; the transaction itself still rolls back later.
+    }
+    throw error;
+  }
+  db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+}
+
+function performTxWrite(
+  db: SQLiteDB,
+  kind: "insert" | "upsert" | "delete",
+  tableDef: TableDefinition,
+  count: number,
+  run: () => void,
+): void {
+  if (sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
+    inWriteSavepoint(db, run);
+  } else {
+    run();
+  }
+}
+
 class SqlDriverTx implements DBDriverTX {
   private db: SQLiteDB;
   private tableDefinitions: Map<string, TableDefinition>;
@@ -227,7 +259,9 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performInsertOperation(this.db, tableDef, values as Row[]);
+    performTxWrite(this.db, "insert", tableDef, values.length, () =>
+      performInsertOperation(this.db, tableDef, values as Row[]),
+    );
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
@@ -240,7 +274,9 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performUpsertOperation(this.db, tableDef, values);
+    performTxWrite(this.db, "upsert", tableDef, values.length, () =>
+      performUpsertOperation(this.db, tableDef, values),
+    );
   }
 
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
@@ -253,7 +289,9 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performDeleteOperation(this.db, tableDef, values);
+    performTxWrite(this.db, "delete", tableDef, values.length, () =>
+      performDeleteOperation(this.db, tableDef, values),
+    );
   }
 
   *intervalScan(

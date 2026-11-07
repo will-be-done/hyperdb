@@ -273,6 +273,35 @@ export const moveTask = action({
 });
 ```
 
+### Handling failed commands
+
+When a read or write fails, its error is raised at the handler's `yield*`, so
+ordinary `try` / `catch` / `finally` works inside actions and selectors. An
+error the handler does not catch rolls the transaction back.
+
+```ts
+import { DuplicateIdError, insert, upsert, v } from "@will-be-done/hyperdb";
+
+export const ensureTask = action({
+  name: "ensureTask",
+  args: { task: v.pass<Task>() },
+  handler: function* ({ task }) {
+    try {
+      yield* insert(tasksTable, [task]);
+    } catch (error) {
+      if (!(error instanceof DuplicateIdError)) throw error;
+      yield* upsert(tasksTable, [task]); // already exists: update instead
+    }
+  },
+});
+```
+
+A failed write has no partial effect, so the action can continue after catching
+it. The exception is IndexedDB: a failed IndexedDB request aborts the whole
+browser transaction, so the dispatch still rejects even if the handler caught
+the error, and nothing is committed. With `HybridDB`, writes are checked against
+the in-memory cache first, so duplicates and constraint errors can be handled.
+
 When you dispatch against a [`SubscribableDB`](/runtime/db/), the commit bumps a
 revision and notifies subscribers with the exact rows that changed. This is what
 drives reactive selectors and the `afterInsert` / `afterUpsert` / `afterDelete` /

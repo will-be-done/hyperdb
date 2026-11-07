@@ -48,7 +48,7 @@ import {
   hashScanValues,
   PreloadedTableIndexes,
 } from "./preloaded-hybrid-db-indexes";
-import { HyperDBError } from "../core/errors";
+import { DuplicateIdError, HyperDBError } from "../core/errors";
 
 const entityLoadBatchSize = 500;
 
@@ -704,9 +704,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
           ids.has(row.id) ||
           (entry && (!entry.loaded || entry.row !== null))
         ) {
-          throw new Error(
-            `Record ${row.id} already exists in ${table.tableName}`,
-          );
+          throw new DuplicateIdError(row.id);
         }
         ids.add(row.id);
       }

@@ -217,11 +217,16 @@ function readAllWithCursor<T>(source: IDBObjectStore): Promise<T[]> {
 }
 
 function txDone(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const done = new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onabort = () => reject(tx.error ?? new Error("IDB transaction aborted"));
     tx.onerror = () => reject(tx.error ?? new Error("IDB transaction failed"));
   });
+  // commit()/rollback() await this later. A handler that catches a failed
+  // request keeps running while the transaction aborts, so the rejection can
+  // land before anyone awaits it; don't report that as unhandled.
+  done.catch(() => {});
+  return done;
 }
 
 function abortQuietly(tx: IDBTransaction): void {

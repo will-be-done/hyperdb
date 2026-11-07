@@ -33,6 +33,8 @@ import {
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
   sqliteSchemaMetadataMatches,
+  sqliteWriteNeedsSavepoint,
+  SQLITE_WRITE_SAVEPOINT,
   toSqliteSchemaMetadataReadError,
   type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
@@ -194,6 +196,50 @@ async function rollbackAsyncQuietly(
     console.warn("Failed to rollback SQLite transaction", rollbackError);
     // Best effort cleanup after a failed statement.
   }
+}
+
+function* performAsyncTxWrite(
+  db: AsyncSQLiteDB,
+  kind: "insert" | "upsert" | "delete",
+  tableDef: TableDefinition,
+  count: number,
+  run: () => Generator<DBCmd, void>,
+  debug?: AsyncSqlDriverDebug,
+): Generator<DBCmd, void> {
+  if (!sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
+    yield* run();
+    return;
+  }
+
+  yield* unwrapCb(() =>
+    runAsyncSQL(db, `SAVEPOINT ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
+  );
+  try {
+    yield* run();
+  } catch (error) {
+    yield* unwrapCb(async () => {
+      try {
+        await runAsyncSQL(
+          db,
+          `ROLLBACK TO ${SQLITE_WRITE_SAVEPOINT}`,
+          undefined,
+          debug,
+        );
+        await runAsyncSQL(
+          db,
+          `RELEASE ${SQLITE_WRITE_SAVEPOINT}`,
+          undefined,
+          debug,
+        );
+      } catch {
+        // Keep the write error; the transaction itself still rolls back later.
+      }
+    });
+    throw error;
+  }
+  yield* unwrapCb(() =>
+    runAsyncSQL(db, `RELEASE ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
+  );
 }
 
 function* performAsyncInsertOperation(
@@ -466,10 +512,18 @@ class AsyncSqlDriverTx implements DBDriverTX {
           "TABLE_NOT_FOUND",
           `Table ${tableName} not found`,
         );
-      yield* performAsyncInsertOperation(
+      yield* performAsyncTxWrite(
         this.db,
+        "insert",
         tableDef,
-        values as Row[],
+        values.length,
+        () =>
+          performAsyncInsertOperation(
+            this.db,
+            tableDef,
+            values as Row[],
+            this.debug,
+          ),
         this.debug,
       );
     } finally {
@@ -495,7 +549,15 @@ class AsyncSqlDriverTx implements DBDriverTX {
           "TABLE_NOT_FOUND",
           `Table ${tableName} not found`,
         );
-      yield* performAsyncUpsertOperation(this.db, tableDef, values, this.debug);
+      yield* performAsyncTxWrite(
+        this.db,
+        "upsert",
+        tableDef,
+        values.length,
+        () =>
+          performAsyncUpsertOperation(this.db, tableDef, values, this.debug),
+        this.debug,
+      );
     } finally {
       this.queryLock.release();
     }
@@ -519,7 +581,15 @@ class AsyncSqlDriverTx implements DBDriverTX {
           "TABLE_NOT_FOUND",
           `Table ${tableName} not found`,
         );
-      yield* performAsyncDeleteOperation(this.db, tableDef, values, this.debug);
+      yield* performAsyncTxWrite(
+        this.db,
+        "delete",
+        tableDef,
+        values.length,
+        () =>
+          performAsyncDeleteOperation(this.db, tableDef, values, this.debug),
+        this.debug,
+      );
     } finally {
       this.queryLock.release();
     }
