@@ -1,4 +1,5 @@
 import type { DBCmd } from "../commands/async";
+import { HyperDBError } from "../core/errors";
 import type { HyperDB, HyperDBTx } from "../core/contracts";
 import type { Row, Trait } from "../core/primitives";
 import { deepFreeze } from "../deep-freeze";
@@ -67,12 +68,15 @@ type CapturedChange = {
 type RecordedChange = UndoRowChange & { batch: object };
 type HistoryEvent = { name?: string; changes: RecordedChange[] };
 
-export class UndoConflictError extends Error {
+export class UndoConflictError extends HyperDBError {
   readonly tableName: string;
   readonly rowId: string;
 
   constructor(tableName: string, rowId: string) {
-    super(`Undo/redo conflict in table "${tableName}" for row "${rowId}"`);
+    super(
+      "UNDO_CONFLICT",
+      `Undo/redo conflict in table "${tableName}" for row "${rowId}"`,
+    );
     this.name = "UndoConflictError";
     this.tableName = tableName;
     this.rowId = rowId;

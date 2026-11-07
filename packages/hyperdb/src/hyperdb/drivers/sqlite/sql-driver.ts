@@ -38,6 +38,7 @@ import {
   type SqlValue,
   type BindParams,
 } from "./sqlite-common";
+import { HyperDBError } from "../../core/errors";
 
 export interface SQLStatement {
   values(values: SqlValue[]): SqlValue[][];
@@ -109,7 +110,7 @@ function performScanOperation(
 ): unknown[] {
   const tableDef = tableDefinitions.get(table);
   if (!tableDef) {
-    throw new Error(`Table ${table} not found`);
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${table} not found`);
   }
 
   const { where, params } = buildSortKeyWhereClause(
@@ -182,7 +183,10 @@ class SqlDriverTx implements DBDriverTX {
 
   *commit(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     this.db.exec("COMMIT");
     this.committed = true;
@@ -191,7 +195,10 @@ class SqlDriverTx implements DBDriverTX {
 
   *rollback(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     this.db.exec("ROLLBACK");
     this.rolledback = true;
@@ -203,28 +210,40 @@ class SqlDriverTx implements DBDriverTX {
     values: Record<string, unknown>[],
   ): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     performInsertOperation(this.db, tableDef, values as Row[]);
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     performUpsertOperation(this.db, tableDef, values);
   }
 
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     performDeleteOperation(this.db, tableDef, values);
   }
 
@@ -235,7 +254,10 @@ class SqlDriverTx implements DBDriverTX {
     selectOptions: SelectOptions,
   ): Generator<DBCmd, unknown[]> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
     return performScanOperation(
@@ -287,7 +309,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performInsertOperation(this.db, tableDef, values as Row[]);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -305,7 +331,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performUpsertOperation(this.db, tableDef, values);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -323,7 +353,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performDeleteOperation(this.db, tableDef, values);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -357,7 +391,7 @@ export class SqlDriver implements DBDriver {
       throw new Error("can't run while transaction is in progress");
     }
     if (!this.tableDefinitions.has(tableName)) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
     return performScanAllOperation(this.db, tableName);
   }

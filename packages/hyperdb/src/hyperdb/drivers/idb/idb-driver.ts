@@ -29,6 +29,7 @@ import {
   getSqliteIndexSortKeyValue,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
+import { HyperDBError, DuplicateIdError } from "../../core/errors";
 
 type NativeStoredRecord = {
   id: string;
@@ -284,7 +285,7 @@ function validateBatchIds(values: Row[]): void {
       throw new Error("Inserted records must have a string id");
     }
     if (seen.has(value.id)) {
-      throw new Error(`Record with duplicate id already exists: ${value.id}`);
+      throw new DuplicateIdError(value.id);
     }
     seen.add(value.id);
   }
@@ -348,7 +349,8 @@ function createSortKeyRanges(
   clauses: WhereClause[],
 ): MaybeKeyRange[] {
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const filterColumns = indexDef.cols.map(String);
   const sortColumns =
@@ -877,7 +879,8 @@ async function performScan(
   debug?: IdbDriverDebug,
 ): Promise<Row[]> {
   const tableDef = tableDefinitions.get(tableName);
-  if (!tableDef) throw new Error(`Table ${tableName} not found`);
+  if (!tableDef)
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
 
   const startedAt = debug ? nowMs() : 0;
   if (selectOptions.limit !== undefined && selectOptions.limit <= 0) {
@@ -1179,13 +1182,17 @@ class IdbDriverTx implements DBDriverTX {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 
   private throwIfDone(): void {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
   }
 
@@ -1244,15 +1251,24 @@ class IdbDriverReadonlyTx implements DBDriverTX {
   }
 
   *insert(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *upsert(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *delete(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *intervalScan(
@@ -1307,7 +1323,10 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     traceContext: DBDriverTraceContext | undefined,
   ): Promise<ActiveReadonlyTransaction> {
     if (this.closed) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     if (this.active && !this.active.finished) {
       return this.active;
@@ -1823,7 +1842,8 @@ export class IdbDriver implements DBDriver {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 

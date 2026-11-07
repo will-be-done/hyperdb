@@ -344,9 +344,21 @@ function* dispatchAction<TReturn>(
   }
 }
 
+/**
+ * Dispatches an action and returns its result synchronously when no step
+ * needed to wait (for example a HybridDB write served by the in-memory cache),
+ * or a promise otherwise. Use it to avoid a microtask hop on sync fast paths.
+ */
+export function dispatchMaybeAsync<TReturn>(
+  db: HyperDB,
+  action: Generator<unknown, TReturn, unknown>,
+): TReturn | Promise<TReturn> {
+  return execMaybeAsync(dispatchAction(db, action));
+}
+
 export async function asyncDispatch<TReturn>(
   db: HyperDB,
   action: Generator<unknown, TReturn, unknown>,
 ): Promise<TReturn> {
-  return execMaybeAsync(dispatchAction(db, action));
+  return dispatchMaybeAsync(db, action);
 }

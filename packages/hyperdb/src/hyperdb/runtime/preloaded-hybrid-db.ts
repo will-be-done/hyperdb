@@ -48,6 +48,7 @@ import {
   hashScanValues,
   PreloadedTableIndexes,
 } from "./preloaded-hybrid-db-indexes";
+import { HyperDBError } from "../core/errors";
 
 const entityLoadBatchSize = 500;
 
@@ -107,7 +108,11 @@ class PreloadedHybridData {
 
   get(table: TableDefinition): PreloadedTableState {
     const state = this.tables.get(table.tableName);
-    if (!state) throw new Error(`Table ${table.tableName} not found`);
+    if (!state)
+      throw new HyperDBError(
+        "TABLE_NOT_FOUND",
+        `Table ${table.tableName} not found`,
+      );
     return state;
   }
 
@@ -529,6 +534,14 @@ export class PreloadedHybridDB implements HyperDB {
     yield* this.state.persistence.waitForPersistence();
   }
 
+  *close(): Generator<DBCmd, void> {
+    const { persistence } = this.state;
+    if (persistence.isClosed) return;
+    yield* persistence.settle();
+    persistence.isClosed = true;
+    yield* this.primary.close();
+  }
+
   enqueuePersistence(writes: HybridPendingWrite[], primary: HyperDB): void {
     this.state.persistence.enqueue(primary, writes);
   }
@@ -783,7 +796,10 @@ class PreloadedHybridDBTx implements HyperDBTx {
   *rollback(): Generator<DBCmd, void> {
     if (this.state.rollbacked.val) return;
     if (this.state.committed.val)
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     let rollbackFailed = false;
     let rollbackError: unknown;
     try {
@@ -802,13 +818,19 @@ class PreloadedHybridDBTx implements HyperDBTx {
   private throwIfDone(): void {
     this.owner.throwIfCrashed();
     if (this.state.committed.val || this.state.rollbacked.val) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
   }
 
   private throwIfReadonly(): void {
     if (this.mode === "readonly") {
-      throw new Error("Cannot write through a readonly transaction");
+      throw new HyperDBError(
+        "READONLY_TRANSACTION",
+        "Cannot write through a readonly transaction",
+      );
     }
   }
 }

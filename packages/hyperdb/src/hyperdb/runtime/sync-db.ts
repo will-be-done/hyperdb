@@ -75,6 +75,10 @@ export class SyncDB {
     return execSync(this.db.loadTables(tables));
   }
 
+  close(): void {
+    if (this.db.close) execSync(this.db.close());
+  }
+
   preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): void {

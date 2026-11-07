@@ -35,6 +35,7 @@ import {
   getGeneratorTraceMeta,
   wrapGeneratorWithExistingTracePath,
 } from "../tracing/metadata";
+import { HyperDBError } from "../core/errors";
 
 export type ChildMemoEntry = {
   selectRangeCmds: SelectRangeCmd[];
@@ -381,7 +382,10 @@ export function* runCommandGenerator<TReturn>(
         }
       } else if (isInsertActionCmd(cmd)) {
         if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: insert");
+          throw new HyperDBError(
+            "WRITES_DISALLOWED",
+            "Writes are disallowed for command: insert",
+          );
         }
 
         result = gen.next(
@@ -400,7 +404,10 @@ export function* runCommandGenerator<TReturn>(
         );
       } else if (isUpsertActionCmd(cmd)) {
         if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: upsert");
+          throw new HyperDBError(
+            "WRITES_DISALLOWED",
+            "Writes are disallowed for command: upsert",
+          );
         }
 
         result = gen.next(
@@ -419,7 +426,10 @@ export function* runCommandGenerator<TReturn>(
         );
       } else if (isDeleteActionCmd(cmd)) {
         if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: delete");
+          throw new HyperDBError(
+            "WRITES_DISALLOWED",
+            "Writes are disallowed for command: delete",
+          );
         }
 
         result = gen.next(
@@ -452,7 +462,8 @@ export function* runCommandGenerator<TReturn>(
       } else if (isDBCmd(cmd)) {
         result = gen.next(yield cmd);
       } else {
-        throw new Error(
+        throw new HyperDBError(
+          "UNSUPPORTED_COMMAND",
           `Unsupported command: ${describeUnsupportedCommand(cmd)}`,
         );
       }
@@ -467,8 +478,6 @@ export function* runCommandGenerator<TReturn>(
     if (ownsTraceContext) {
       tracer?.endTraceError(traceContext, error);
     }
-
-    console.error(error);
 
     throw error;
   }

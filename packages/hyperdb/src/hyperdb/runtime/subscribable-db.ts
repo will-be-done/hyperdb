@@ -29,6 +29,7 @@ import {
 } from "../core/tracer";
 import { wrapGeneratorWithExistingTracePath } from "../tracing/metadata";
 import { refVar, type RefVar } from "../utils";
+import { HyperDBError } from "../core/errors";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
@@ -571,11 +572,17 @@ export class SubscribableDBTx implements HyperDBTx {
 
   throwIfDone() {
     if (this.state.committed.val) {
-      throw new Error("Cannot modify a committed tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a committed tx",
+      );
     }
 
     if (this.state.rollbacked.val) {
-      throw new Error("Cannot modify a rollbacked tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a rollbacked tx",
+      );
     }
   }
 }
@@ -654,6 +661,17 @@ export class SubscribableDB implements HyperDB {
   *waitForPersistence(): Generator<DBCmd, void> {
     const db = this.delegateDB();
     if (db.waitForPersistence) yield* db.waitForPersistence();
+  }
+
+  *close(): Generator<DBCmd, void> {
+    if (this.db.close) yield* this.db.close();
+    const { state } = this;
+    state.subscribers.length = 0;
+    state.afterInsertSubscribers.length = 0;
+    state.afterUpsertSubscribers.length = 0;
+    state.afterDeleteSubscribers.length = 0;
+    state.afterChangeSubscribers.length = 0;
+    state.afterScanSubscribers.length = 0;
   }
 
   canUseReadonlyTransactionsForSelectors(): boolean {

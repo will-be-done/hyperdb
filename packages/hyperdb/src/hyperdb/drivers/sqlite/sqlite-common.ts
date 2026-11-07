@@ -20,6 +20,7 @@ import {
   encodeSqliteSortKeyTuple,
   getSqliteSortKeyTuple,
 } from "./sqlite-sort-key";
+import { HyperDBError } from "../../core/errors";
 
 export type SqlValue = number | string | Uint8Array | null;
 export type BindParams = SqlValue[] | null;
@@ -160,7 +161,8 @@ export function getSqliteIndexSortKeyValue(
   row: Row,
 ): Uint8Array | null {
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const physicalIndex =
     getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
@@ -290,11 +292,12 @@ export function buildSortKeyWhereClause(
 ): { where: string; params: any[] } {
   const tableDef = tableDefinitions.get(tableName);
   if (!tableDef) {
-    throw new Error(`Table ${tableName} not found`);
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
   }
 
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
   const filterColumns = indexDef.cols.map(String);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 

@@ -32,6 +32,7 @@ import type {
   TableDefinition,
 } from "../schema/table";
 import { refVar, type RefVar } from "../utils";
+import { HyperDBError } from "../core/errors";
 
 type OriginalDB = {
   options: CodecOptions;
@@ -60,7 +61,8 @@ function* performScan(
 
   const indexConfig = table.indexes[indexName as string];
   if (!indexConfig) {
-    throw new Error(
+    throw new HyperDBError(
+      "INDEX_NOT_FOUND",
       `Index not found: ${indexName as string} for table: ${table.tableName}`,
     );
   }
@@ -193,7 +195,7 @@ export class DBTx implements HyperDBTx {
     _mode: DBTransactionMode = "readwrite",
   ): Generator<DBCmd, HyperDBTx> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     this.txCounter.val++;
@@ -203,7 +205,7 @@ export class DBTx implements HyperDBTx {
 
   *commit(): Generator<DBCmd> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     this.txCounter.val--;
@@ -215,7 +217,7 @@ export class DBTx implements HyperDBTx {
 
   *rollback(): Generator<DBCmd> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
     this.isFinished.val = true;
     yield* this.driver.rollback();
@@ -231,7 +233,7 @@ export class DBTx implements HyperDBTx {
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     return yield* performScan(
@@ -252,7 +254,7 @@ export class DBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     yield* performInsert(this.driver, table, records as Row[], this.options, {
@@ -265,7 +267,7 @@ export class DBTx implements HyperDBTx {
     records: ExtractSchema<TTable>[],
   ): Generator<DBCmd> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     yield* performUpsert(this.driver, table, records as Row[], this.options, {
@@ -278,7 +280,7 @@ export class DBTx implements HyperDBTx {
     ids: string[],
   ): Generator<DBCmd> {
     if (this.isFinished.val) {
-      throw new Error("Transaction is finished");
+      throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
     }
 
     yield* performDelete(this.driver, table, ids, {

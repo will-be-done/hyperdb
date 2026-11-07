@@ -41,6 +41,7 @@ import {
   type SqlValue,
 } from "./sqlite-common";
 import AwaitLock from "../../utils/await-lock";
+import { HyperDBError } from "../../core/errors";
 
 export interface AsyncSQLStatement {
   values(values: SqlValue[]): Promise<SqlValue[][]>;
@@ -405,7 +406,10 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
   *commit(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
     yield* unwrapCb(async () => {
@@ -418,7 +422,10 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
   *rollback(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
     yield* unwrapCb(async () => {
@@ -439,10 +446,17 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       yield* performAsyncInsertOperation(
         this.db,
         tableDef,
@@ -461,10 +475,17 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       yield* performAsyncUpsertOperation(this.db, tableDef, values, this.debug);
     } finally {
       this.queryLock.release();
@@ -478,10 +499,17 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       yield* performAsyncDeleteOperation(this.db, tableDef, values, this.debug);
     } finally {
       this.queryLock.release();
@@ -500,7 +528,10 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
 
       return yield* performAsyncScanOperation(
@@ -1201,7 +1232,8 @@ export class AsyncSqlDriver implements DBDriver {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 }

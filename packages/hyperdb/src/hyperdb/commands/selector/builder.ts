@@ -13,6 +13,7 @@ import type {
   SelectQuery,
   SelectRangeCmd,
 } from "./commands";
+import { HyperDBError } from "../../core/errors";
 
 export type ExtractIndexName<TTable> = Extract<
   keyof ExtractIndexes<TTable>,
@@ -47,7 +48,8 @@ const createSelectRangeCmd = <QType extends SelectQuery>(
   const indexName = query.index;
   const indexDef = table.indexes[indexName];
   if (!indexDef) {
-    throw new Error(
+    throw new HyperDBError(
+      "INDEX_NOT_FOUND",
       `Index not found: ${indexName as string} for table: ${table.tableName}`,
     );
   }

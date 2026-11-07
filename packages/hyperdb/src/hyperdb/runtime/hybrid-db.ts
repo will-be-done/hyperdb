@@ -49,6 +49,7 @@ import {
   type HybridPendingWrite,
   type HybridPersistenceFailure,
 } from "./hybrid-persistence";
+import { HyperDBError } from "../core/errors";
 export { HybridDBCrashedError } from "./hybrid-persistence";
 
 type HybridDBState = {
@@ -316,7 +317,8 @@ export class HybridDB implements HyperDB {
         const scanIndex = String(spec.scanIndex);
         const scanIndexConfig = table.indexes[scanIndex];
         if (!scanIndexConfig) {
-          throw new Error(
+          throw new HyperDBError(
+            "INDEX_NOT_FOUND",
             `Index not found: ${scanIndex} for table: ${table.tableName}`,
           );
         }
@@ -509,6 +511,15 @@ export class HybridDB implements HyperDB {
 
   *waitForPersistence(): Generator<DBCmd, void> {
     yield* this.state.persistence.waitForPersistence();
+  }
+
+  *close(): Generator<DBCmd, void> {
+    const { persistence } = this.state;
+    if (persistence.isClosed) return;
+    yield* persistence.settle();
+    persistence.isClosed = true;
+    if (this.primary.close) yield* this.primary.close();
+    if (this.cache.close) yield* this.cache.close();
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {
@@ -770,21 +781,30 @@ class HybridDBReadonlyTx implements HyperDBTx {
     _table: TTable,
     _records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *upsert<TTable extends TableDefinition>(
     _table: TTable,
     _records: ExtractSchema<TTable>[],
   ): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *delete<TTable extends TableDefinition>(
     _table: TTable,
     _ids: string[],
   ): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *commit(): Generator<DBCmd, void> {
@@ -804,7 +824,10 @@ class HybridDBReadonlyTx implements HyperDBTx {
 
   private throwIfDone(): void {
     if (this.state.rollbacked.val) {
-      throw new Error("Cannot modify a rollbacked tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a rollbacked tx",
+      );
     }
   }
 }
@@ -1070,11 +1093,17 @@ class HybridDBTx implements HyperDBTx {
 
   private throwIfDone() {
     if (this.state.committed.val) {
-      throw new Error("Cannot modify a committed tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a committed tx",
+      );
     }
 
     if (this.state.rollbacked.val) {
-      throw new Error("Cannot modify a rollbacked tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a rollbacked tx",
+      );
     }
   }
 

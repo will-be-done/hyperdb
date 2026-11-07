@@ -4,6 +4,7 @@ import type { HyperDB } from "../core/contracts";
 import { execAsync } from "../core/executor";
 import type { Row } from "../core/primitives";
 import type { TableDefinition } from "../schema/table";
+import { HyperDBError } from "../core/errors";
 
 /**
  * Thrown by every HybridDB read/write once background persistence has
@@ -12,9 +13,10 @@ import type { TableDefinition } from "../schema/table";
  * operations rather than serving stale in-memory data. The underlying
  * persistence error is available via `cause`.
  */
-export class HybridDBCrashedError extends Error {
+export class HybridDBCrashedError extends HyperDBError {
   constructor(cause: unknown) {
     super(
+      "HYBRID_DB_CRASHED",
       "HybridDB is in a crashed state after background persistence permanently failed. " +
         "No further reads or writes are allowed.",
       { cause },
@@ -160,10 +162,19 @@ export class HybridPersistenceQueue {
   private tail = Promise.resolve();
   private nextBatchId = 1;
   isCrashed = false;
+  isClosed = false;
   private crashError: unknown;
 
   throwIfCrashed(): void {
+    if (this.isClosed) throw new HyperDBError("DB_CLOSED", "DB is closed");
     if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
+  }
+
+  /** Waits for pending batches, ignoring a crash; the owner is shutting down. */
+  *settle(): Generator<DBCmd, void> {
+    const pending = [...this.pending].map((batch) => batch.promise);
+    if (pending.length > 0)
+      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
   }
 
   // Call before publishing cache changes; enqueue also checks direct callers.
@@ -173,7 +184,8 @@ export class HybridPersistenceQueue {
       writes.length > 0 &&
       this.pending.size >= HybridPersistenceQueue.maxPendingBatches
     ) {
-      throw new Error(
+      throw new HyperDBError(
+        "PERSISTENCE_QUEUE_FULL",
         "Hybrid persistence queue is full. Await waitForPersistence() before retrying the transaction.",
       );
     }

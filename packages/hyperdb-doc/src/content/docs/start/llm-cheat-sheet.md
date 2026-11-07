@@ -68,11 +68,15 @@ import {
   createCachedSelectorStoreSync,
   defineTable,
   deleteRows,
+  dispatchMaybeAsync,
+  DuplicateIdError,
   execAsync,
   execMaybeAsync,
   execSync,
   getCurrentTraits,
+  HyperDBError,
   insert,
+  isHyperDBError,
   or,
   preloadSelectorAsync,
   selectAsync,
@@ -82,8 +86,10 @@ import {
   syncDispatch,
   upsert,
   v,
+  ValidationError,
   type ExtractSchema,
   type HyperDB,
+  type HyperDBErrorCode,
 } from "@will-be-done/hyperdb";
 ```
 
@@ -255,8 +261,25 @@ await asyncDispatch(
 
 Use `await asyncDispatch(db, action(...))` for HybridDB and other asynchronous
 drivers. Use `syncDispatch(db, action(...))` only for synchronous drivers.
-`insert` fails on duplicate ids, `upsert` replaces whole rows by id, and
-`deleteRows` deletes by id.
+`dispatchMaybeAsync(db, action(...))` returns the result directly when nothing
+had to wait and a promise otherwise. `insert` fails on duplicate ids, `upsert`
+replaces whole rows by id, and `deleteRows` deletes by id.
+
+## Errors And Closing
+
+HyperDB errors extend `HyperDBError` with a stable `code`; match on the code,
+not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
+across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),
+`ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
+`WRITES_DISALLOWED`, `TRANSACTION_FINISHED`, `READONLY_TRANSACTION`,
+`TABLE_NOT_FOUND`, `INDEX_NOT_FOUND`, `ASYNC_IN_SYNC_EXECUTION`,
+`UNSUPPORTED_COMMAND`, `PERSISTENCE_QUEUE_FULL`, and `DB_CLOSED`. HyperDB does
+not log errors it throws.
+
+`await execAsync(db.close())` (or `execSync` for sync runtimes) flushes hybrid
+persistence, closes wrapped databases and driver-owned resources, clears
+`SubscribableDB` subscribers, and unregisters the DB from devtools. Caller-owned
+SQLite handles stay open. Later operations throw `DB_CLOSED`.
 
 ## Undo And Redo
 

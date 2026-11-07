@@ -57,6 +57,8 @@ export interface DBDriver extends BaseDBDriverOperations {
     options?: DBDriverOperationOptions,
   ): Generator<DBCmd, DBDriverTX>;
   canUseReadonlyTransactionsForSelectors(): boolean;
+  /** Releases resources the driver owns. Handles passed in by the caller stay open. */
+  close?(): void;
 }
 
 export interface DBDriverTX extends BaseDBDriverOperations {

@@ -1,4 +1,5 @@
 export * from "./db";
+export * from "./core/errors";
 export * from "./commands/action/builders";
 export * from "./commands/selector/builder";
 export * from "./commands/selector/selector";

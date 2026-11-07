@@ -8,6 +8,7 @@ import {
   validRecordKey,
 } from "./validation-utils";
 import type { Annotation } from "./annotations";
+import { ValidationError } from "../core/errors";
 
 export type ValidationPath = readonly (string | number)[];
 
@@ -314,10 +315,12 @@ function primitive<T, TKind extends PrimitiveValidatorKind>(
 export function assertValid<T>(validator: Validator<T>, value: unknown): T {
   const result = validator.normalize(value);
   if (isNormalizeFailure(result)) {
-    throw new Error(`${result.message} at ${formatPath(result.path)}`);
+    throw new ValidationError(
+      `${result.message} at ${formatPath(result.path)}`,
+    );
   }
   if (isNormalizeOmitted(result)) {
-    throw new Error(`value was omitted at ${formatPath([])}`);
+    throw new ValidationError(`value was omitted at ${formatPath([])}`);
   }
   return result.value;
 }

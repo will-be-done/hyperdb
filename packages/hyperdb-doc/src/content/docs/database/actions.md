@@ -150,6 +150,18 @@ which bind the dispatcher to the database from context.
 subscribers before returning. Execution suspends for database I/O, a busy
 transaction lock, or an unresolved promise yielded by the action.
 
+`dispatchMaybeAsync` runs the same transaction but returns the result directly
+when nothing had to wait, and a promise only when a step suspended. Use it when
+an integration wants to keep a synchronous fast path, for example a `HybridDB`
+write served entirely by the in-memory cache:
+
+```ts
+import { dispatchMaybeAsync } from "@will-be-done/hyperdb";
+
+const result = dispatchMaybeAsync(db, createTask(args));
+const value = result instanceof Promise ? await result : result;
+```
+
 With `HybridDB` or `PreloadedHybridDB`, transactions publish memory changes
 before the primary store saves them. To wait for all transactions committed
 so far to reach storage, await `execAsync(db.waitForPersistence())` on the
@@ -160,9 +172,50 @@ for retry and recovery behavior.
 ## Selectors can't write
 
 The command runner only permits mutations while dispatching an action. If a
-selector emits `insert`, `upsert`, or `deleteRows`, the runtime throws
-(`Writes are disallowed for command: insert`). This keeps reads pure and is what
+selector emits `insert`, `upsert`, or `deleteRows`, the runtime throws a
+`HyperDBError` with code `WRITES_DISALLOWED`. This keeps reads pure and is what
 makes selector caching safe.
+
+## Errors
+
+HyperDB errors extend `HyperDBError` and carry a stable `code`. Match on the code
+rather than the message text. `isHyperDBError(error, code)` narrows the error
+and also recognizes errors raised by another copy of the package in the same
+bundle.
+
+```ts
+import { DuplicateIdError, isHyperDBError } from "@will-be-done/hyperdb";
+
+try {
+  await asyncDispatch(db, createTask(args));
+} catch (error) {
+  if (error instanceof DuplicateIdError) console.warn("exists:", error.id);
+  else if (isHyperDBError(error, "VALIDATION")) showFormError(error.message);
+  else throw error;
+}
+```
+
+| Code                      | Raised when                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `DUPLICATE_ID`            | `insert` hits an existing id (`DuplicateIdError`, with `id`)                 |
+| `VALIDATION`              | Args or rows fail their validators (`ValidationError`)                       |
+| `WRITES_DISALLOWED`       | A selector tries to write                                                    |
+| `TRANSACTION_FINISHED`    | A transaction is used after commit or rollback                               |
+| `READONLY_TRANSACTION`    | A write goes through a readonly transaction                                  |
+| `TABLE_NOT_FOUND`         | A table was not passed to `loadTables`                                       |
+| `INDEX_NOT_FOUND`         | A query names an index the table does not declare                            |
+| `ASYNC_IN_SYNC_EXECUTION` | A sync helper (`execSync`, `syncDispatch`, `selectSync`) meets async storage |
+| `UNSUPPORTED_COMMAND`     | A handler yields something that is not a HyperDB command                     |
+| `PERSISTENCE_QUEUE_FULL`  | Hybrid persistence is at capacity; await `waitForPersistence()` and retry    |
+| `HYBRID_DB_CRASHED`       | Background persistence failed permanently (`HybridDBCrashedError`)           |
+| `UNDO_CONFLICT`           | Undo/redo would overwrite a newer change (`UndoConflictError`)               |
+| `DB_CLOSED`               | The runtime was closed with `close()`                                        |
+
+HyperDB does not log errors it throws; they reach the caller of the dispatch or
+select helper, or the `error` state of async selector stores and
+`useAsyncSelector`.
+SQLite engine errors (for example a `UNIQUE` constraint on a plain `SqlDriver`)
+are passed through unchanged.
 
 ## Transactions
 
