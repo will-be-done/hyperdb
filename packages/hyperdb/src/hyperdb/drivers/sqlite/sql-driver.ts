@@ -30,7 +30,9 @@ import {
   selectSqliteSchemaMetadataSQL,
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
-  isMissingSqliteSchemaMetadataError,
+  sqliteSchemaMetadataMatches,
+  toSqliteSchemaMetadataReadError,
+  type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
@@ -39,6 +41,13 @@ import {
   type BindParams,
 } from "./sqlite-common";
 import { HyperDBError } from "../../core/errors";
+import {
+  err,
+  fromThrowable,
+  ok,
+  unwrapOrThrow,
+  type Result,
+} from "../../utils/result";
 
 export interface SQLStatement {
   values(values: SqlValue[]): SqlValue[][];
@@ -443,50 +452,42 @@ export class SqlDriver implements DBDriver {
   private schemaMetadataMatches(
     tableDefinitions: TableDefinition<any>[],
   ): boolean {
-    const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
-    let statement: SQLStatement | undefined;
+    return unwrapOrThrow(
+      this.readSchemaMetadata(tableDefinitions)
+        .map((rows) => sqliteSchemaMetadataMatches(tableDefinitions, rows))
+        .orElse((error) => this.recoverSchemaMetadataRead(error)),
+    );
+  }
 
-    try {
-      statement = this.db.prepare(sql);
-      const rows = statement.values(
-        tableDefinitions.map((tableDef) => tableDef.tableName),
+  private readSchemaMetadata(
+    tableDefinitions: TableDefinition<any>[],
+  ): Result<SqlValue[][], SqliteSchemaMetadataReadError> {
+    return fromThrowable(() => {
+      const statement = this.db.prepare(
+        selectSqliteSchemaMetadataSQL(tableDefinitions.length),
       );
-      const schemaVersion = Number(rows[0]?.[3]);
-      if (!Number.isInteger(schemaVersion)) return false;
-
-      const metadataByTable = new Map(
-        rows
-          .filter((row) => typeof row[0] === "string")
-          .map((row) => [
-            String(row[0]),
-            {
-              signature: String(row[1]),
-              verifiedSchemaVersion: Number(row[2]),
-            },
-          ]),
-      );
-
-      return tableDefinitions.every((tableDef) => {
-        const metadata = metadataByTable.get(tableDef.tableName);
-        return (
-          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
-          metadata.verifiedSchemaVersion === schemaVersion
-        );
-      });
-    } catch (error) {
-      if (isMissingSqliteSchemaMetadataError(error)) return false;
-      statement?.finalize();
-      statement = undefined;
       try {
-        if (!this.schemaMetadataTableExists()) return false;
-      } catch {
-        // Preserve the original metadata-read error when even the fallback
-        // schema inspection cannot run.
+        return statement.values(
+          tableDefinitions.map((tableDef) => tableDef.tableName),
+        );
+      } finally {
+        statement.finalize();
       }
-      throw error;
-    } finally {
-      statement?.finalize();
-    }
+    }, toSqliteSchemaMetadataReadError)();
+  }
+
+  // A metadata table that does not exist yet means the schema must be
+  // reconciled. Any other read failure is rethrown.
+  private recoverSchemaMetadataRead(
+    error: SqliteSchemaMetadataReadError,
+  ): Result<boolean, unknown> {
+    if (error.kind === "missing") return ok(false);
+    // Preserve the original metadata-read error when even the fallback
+    // schema inspection cannot run.
+    const exists = fromThrowable(() =>
+      this.schemaMetadataTableExists(),
+    )().unwrapOr(true);
+    return exists ? err(error.cause) : ok(false);
   }
 
   private schemaMetadataTableExists(): boolean {

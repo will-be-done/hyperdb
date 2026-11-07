@@ -141,6 +141,29 @@ describe("SQLite driver edge case regressions", () => {
     expect(execLog[0]).toContain(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`);
   });
 
+  it("keeps the metadata-read error when the fallback inspection also fails", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let failReads = false;
+    const { driver } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforePrepare(sql) {
+        if (!failReads) return;
+        if (sql.includes(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`)) {
+          throw new Error("metadata read failed");
+        }
+        if (sql.includes("FROM sqlite_schema")) {
+          throw new Error("inspection failed");
+        }
+      },
+    });
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+
+    failReads = true;
+    expect(() => db.loadTables([noSideTablesTable])).toThrow(
+      "metadata read failed",
+    );
+  });
+
   it("refreshes per-table metadata after another table changes the schema", async () => {
     const { driver, execLog } = await createInspectableSqlDriver();
     const db = new SyncDB(new DB(driver));

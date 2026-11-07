@@ -52,6 +52,42 @@ export default tseslint.config([
           argsIgnorePattern: "^_",
         },
       ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "neverthrow",
+              message:
+                "Import from utils/result so Results stay internal and generator helpers stay unused.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "MemberExpression[property.name='safeUnwrap']",
+          message: "Don't use neverthrow generators.",
+        },
+      ],
+    },
+  },
+  {
+    files: ["src/hyperdb/utils/result.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "neverthrow",
+              importNames: ["safeTry"],
+              message: "Don't use neverthrow generators.",
+            },
+          ],
+        },
+      ],
     },
   },
 ]);

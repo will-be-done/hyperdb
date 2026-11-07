@@ -163,6 +163,31 @@ describe("db", async () => {
     ).toBe(true);
   });
 
+  it("keeps the async metadata-read error when the fallback inspection also fails", async () => {
+    let failReads = false;
+    const { driver } = await createInspectableSqlAsyncDriver(
+      {},
+      {
+        beforePrepare(sql) {
+          if (!failReads) return;
+          if (sql.includes(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`)) {
+            throw new Error("metadata read failed");
+          }
+          if (sql.includes("FROM sqlite_schema")) {
+            throw new Error("inspection failed");
+          }
+        },
+      },
+    );
+    const db = new DB(driver);
+    await execAsync(db.loadTables([tasksTable]));
+
+    failReads = true;
+    await expect(execAsync(db.loadTables([tasksTable]))).rejects.toThrow(
+      "metadata read failed",
+    );
+  });
+
   it("uses the schema metadata fast path with Turso WASM", async () => {
     const debug = vi.fn();
     const db = new DB(await createTursoWasmDriver({ debug }));

@@ -32,7 +32,9 @@ import {
   selectSqliteSchemaMetadataSQL,
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
-  isMissingSqliteSchemaMetadataError,
+  sqliteSchemaMetadataMatches,
+  toSqliteSchemaMetadataReadError,
+  type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
@@ -42,6 +44,13 @@ import {
 } from "./sqlite-common";
 import AwaitLock from "../../utils/await-lock";
 import { HyperDBError } from "../../core/errors";
+import {
+  err,
+  ok,
+  okAsync,
+  ResultAsync,
+  unwrapOrThrow,
+} from "../../utils/result";
 
 export interface AsyncSQLStatement {
   values(values: SqlValue[]): Promise<SqlValue[][]>;
@@ -841,53 +850,56 @@ export class AsyncSqlDriver implements DBDriver {
   ): Promise<boolean> {
     const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
     const startedAt = this.debug ? nowMs() : 0;
-    let statement: AsyncSQLStatement | undefined;
+    const result = await ResultAsync.fromPromise(
+      this.readSchemaMetadata(sql, tableDefinitions),
+      toSqliteSchemaMetadataReadError,
+    )
+      .map((rows) => {
+        emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
+          rowCount: rows.length,
+        }));
+        return sqliteSchemaMetadataMatches(tableDefinitions, rows);
+      })
+      .orElse((error) => this.recoverSchemaMetadataRead(error));
 
+    if (result.isErr()) {
+      emitAsyncSqlDebug(
+        this.debug,
+        "scan",
+        sql,
+        startedAt,
+        () => ({}),
+        result.error,
+      );
+    }
+    return unwrapOrThrow(result);
+  }
+
+  private async readSchemaMetadata(
+    sql: string,
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<SqlValue[][]> {
+    const statement = await this.db.prepare(sql);
     try {
-      statement = await this.db.prepare(sql);
-      const rows = await statement.values(
+      return await statement.values(
         tableDefinitions.map((tableDef) => tableDef.tableName),
       );
-      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
-        rowCount: rows.length,
-      }));
-
-      const schemaVersion = Number(rows[0]?.[3]);
-      if (!Number.isInteger(schemaVersion)) return false;
-      const metadataByTable = new Map(
-        rows
-          .filter((row) => typeof row[0] === "string")
-          .map((row) => [
-            String(row[0]),
-            {
-              signature: String(row[1]),
-              verifiedSchemaVersion: Number(row[2]),
-            },
-          ]),
-      );
-
-      return tableDefinitions.every((tableDef) => {
-        const metadata = metadataByTable.get(tableDef.tableName);
-        return (
-          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
-          metadata.verifiedSchemaVersion === schemaVersion
-        );
-      });
-    } catch (error) {
-      if (isMissingSqliteSchemaMetadataError(error)) return false;
-      await statement?.finalize();
-      statement = undefined;
-      try {
-        if (!(await this.schemaMetadataTableExists())) return false;
-      } catch {
-        // Preserve the original metadata-read error when even the fallback
-        // schema inspection cannot run.
-      }
-      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({}), error);
-      throw error;
     } finally {
-      await statement?.finalize();
+      await statement.finalize();
     }
+  }
+
+  // A metadata table that does not exist yet means the schema must be
+  // reconciled. Any other read failure is rethrown.
+  private recoverSchemaMetadataRead(
+    error: SqliteSchemaMetadataReadError,
+  ): ResultAsync<boolean, unknown> {
+    if (error.kind === "missing") return okAsync(false);
+    // Preserve the original metadata-read error when even the fallback
+    // schema inspection cannot run.
+    return ResultAsync.fromSafePromise(
+      this.schemaMetadataTableExists().catch(() => true),
+    ).andThen((exists) => (exists ? err(error.cause) : ok(false)));
   }
 
   private async schemaMetadataTableExists(): Promise<boolean> {

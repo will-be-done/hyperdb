@@ -40,7 +40,7 @@ export default defineConfig({
         `${entryName}.${format === "es" ? "mjs" : "cjs"}`,
     },
     rollupOptions: {
-      external: ["react", "react-dom"],
+      external: ["react", "react-dom", "neverthrow"],
     },
   },
   plugins: shouldAnalyze

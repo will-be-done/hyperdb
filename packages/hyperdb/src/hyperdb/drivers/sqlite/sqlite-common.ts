@@ -128,6 +128,52 @@ export function isMissingSqliteSchemaMetadataError(error: unknown): boolean {
   );
 }
 
+/** Why the schema metadata could not be read. */
+export type SqliteSchemaMetadataReadError =
+  | { kind: "missing" }
+  | { kind: "failed"; cause: unknown };
+
+export function toSqliteSchemaMetadataReadError(
+  cause: unknown,
+): SqliteSchemaMetadataReadError {
+  return isMissingSqliteSchemaMetadataError(cause)
+    ? { kind: "missing" }
+    : { kind: "failed", cause };
+}
+
+/**
+ * True when stored metadata rows (`table_name, signature,
+ * verified_schema_version, schema_version`) prove every table is current, so
+ * schema reconciliation can be skipped.
+ */
+export function sqliteSchemaMetadataMatches(
+  tableDefinitions: TableDefinition[],
+  rows: SqlValue[][],
+): boolean {
+  const schemaVersion = Number(rows[0]?.[3]);
+  if (!Number.isInteger(schemaVersion)) return false;
+
+  const metadataByTable = new Map(
+    rows
+      .filter((row) => typeof row[0] === "string")
+      .map((row) => [
+        String(row[0]),
+        {
+          signature: String(row[1]),
+          verifiedSchemaVersion: Number(row[2]),
+        },
+      ]),
+  );
+
+  return tableDefinitions.every((tableDef) => {
+    const metadata = metadataByTable.get(tableDef.tableName);
+    return (
+      metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
+      metadata.verifiedSchemaVersion === schemaVersion
+    );
+  });
+}
+
 export function sqliteIndexSortKeyColumn(indexName: string): string {
   assertSafeIdentifier("Index name", indexName);
   const columnName = `idx_${indexName}${SQLITE_SORT_KEY_SUFFIX}`;
