@@ -347,6 +347,49 @@ describe("failures after a write is applied", () => {
 });
 
 describe("SQLite savepoint cleanup failures", () => {
+  it.each([
+    ["sync", createInspectableSqlDriver],
+    ["async", createInspectableSqlAsyncDriver],
+  ] as const)(
+    "rolls back a single-statement insert when a trigger raises FAIL (%s)",
+    async (_name, make) => {
+      const { driver, sqldb } = await make();
+      const db = new DB(driver, { register: false });
+      await execAsync(db.loadTables([usersTable]));
+      sqldb.exec(`
+        CREATE TRIGGER fail_insert BEFORE INSERT ON handlerErrorUsers
+        WHEN NEW.id = 'bad'
+        BEGIN SELECT RAISE(FAIL, 'trigger rejected insert'); END
+      `);
+      const recover = action({
+        name: "recoverTriggerFailure",
+        args: {},
+        handler: function* () {
+          try {
+            yield* insert(usersTable, [
+              { id: "first", email: "first@x" },
+              { id: "bad", email: "bad@x" },
+            ]);
+          } catch {
+            yield* insert(usersTable, [
+              { id: "fallback", email: "fallback@x" },
+            ]);
+            return "caught";
+          }
+          return "written";
+        },
+      });
+
+      await expect(asyncDispatch(db, recover({}))).resolves.toBe("caught");
+      expect(await readUser(db, "first")).toBeUndefined();
+      expect(await readUser(db, "bad")).toBeUndefined();
+      expect(await readUser(db, "fallback")).toEqual({
+        id: "fallback",
+        email: "fallback@x",
+      });
+    },
+  );
+
   const seedAndSwallow = action({
     name: "swallowReleaseFailure",
     args: {},

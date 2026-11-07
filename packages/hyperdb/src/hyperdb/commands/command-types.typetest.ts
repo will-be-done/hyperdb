@@ -14,8 +14,18 @@ import {
   type ActionGenerator,
   type HyperDB,
   type SelectorGenerator,
+  type SubscribableDB,
 } from "../index";
 import { withoutUndo, type UndoManager } from "../undo";
+
+export function subscriberOperationsAreReadonly(db: SubscribableDB): void {
+  db.subscribe((ops) => {
+    // @ts-expect-error Commit notifications cannot be changed in place.
+    ops.pop();
+    const copy = [...ops];
+    copy.pop();
+  });
+}
 
 const rows = defineTable("typetestRows", {
   id: v.string(),

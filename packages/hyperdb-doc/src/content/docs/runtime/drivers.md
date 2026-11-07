@@ -37,6 +37,10 @@ All built-in drivers support the bulk table read used by
 `PreloadedHybridDB.loadTables`. This path does not require a user-declared
 full-scan index.
 
+SQLite inserts are all-or-nothing, including when a trigger fails partway
+through a batch and an action catches the error. Earlier rows from the failed
+insert are rolled back before the action continues.
+
 Drivers may implement an optional synchronous `close()` to release resources
 they own. A runtime's [`close()`](/runtime/db/#closing-a-runtime) calls it after
 pending persistence has settled. A custom driver that wraps a caller-owned

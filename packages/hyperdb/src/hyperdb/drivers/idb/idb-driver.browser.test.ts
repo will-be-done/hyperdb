@@ -834,7 +834,7 @@ describe("IdbDriver", () => {
           {},
         ),
       ),
-    ).rejects.toThrow("Primary-key index byId requires string IDs");
+    ).rejects.toThrow("Column 'title' not found in index");
     await expect(
       execAsync(
         db.intervalScan(tasksTable, "byId", [{ eq: [{ col: "id", val: 1 }] }]),
@@ -858,7 +858,17 @@ describe("IdbDriver", () => {
           {},
         ),
       ),
-    ).rejects.toThrow("Hash index should have equality conditions");
+    ).rejects.toThrow("Conflicting conditions for column 'id'");
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [{ gt: [{ col: "id", val: "task-1" }] }],
+          {},
+        ),
+      ),
+    ).rejects.toThrow("Hash index doesn't support range conditions");
     // Matching inclusive bounds are an exact lookup.
     await expect(
       execAsync(

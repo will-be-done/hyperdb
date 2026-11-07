@@ -31,12 +31,22 @@ const cachedSelectors = (count: number): SelectRangeCmd[][] =>
   ]);
 
 const commitOps = (count: number): Op[] =>
-  Array.from({ length: count }, (_, i) => ({
-    type: "upsert",
-    table: tasks,
-    oldValue: { id: `task-${i}`, projectId: "project-hot", order: `a${i}` },
-    newValue: { id: `task-${i}`, projectId: "project-hot", order: `b${i}` },
-  }));
+  Array.from({ length: count }, (_, i) =>
+    Object.freeze({
+      type: "upsert",
+      table: tasks,
+      oldValue: Object.freeze({
+        id: `task-${i}`,
+        projectId: "project-hot",
+        order: `a${i}`,
+      }),
+      newValue: Object.freeze({
+        id: `task-${i}`,
+        projectId: "project-hot",
+        order: `b${i}`,
+      }),
+    }),
+  );
 
 let _rerunSink = 0;
 
@@ -52,8 +62,9 @@ describe("isNeedToRerunRange on a commit no selector reads", () => {
     bench(
       `${selectorCount} selectors x ${opCount} ops`,
       () => {
-        // Each subscriber sees the same ops array, as on a real commit.
+        // Each subscriber sees the same frozen ops array, as on a real commit.
         const ops = commitOps(opCount);
+        Object.freeze(ops);
         let reruns = 0;
         for (const cmds of selectors) {
           if (isNeedToRerunRange(cmds, ops)) reruns++;

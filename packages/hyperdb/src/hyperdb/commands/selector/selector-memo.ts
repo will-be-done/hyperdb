@@ -9,9 +9,7 @@ type IndexCols = readonly PropertyKey[];
 // built the first time a selector reading that index checks the op.
 type PreparedOp = { rows: Row[]; tuples: Map<IndexCols, Tuple[]> };
 
-type OpsByTable = { length: number; byTable: Map<string, PreparedOp[]> };
-
-const opsByTableCache = new WeakMap<Op[], OpsByTable>();
+const opsByTableCache = new WeakMap<readonly Op[], Map<string, PreparedOp[]>>();
 
 const rowsOf = (op: Op): Row[] => {
   switch (op.type) {
@@ -28,12 +26,13 @@ const rowsOf = (op: Op): Row[] => {
 
 // Every subscriber of a commit receives the same ops array, so grouping it
 // once lets each selector skip ops on tables it never read, and lets all of
-// them share the row tuples. HyperDB never changes the array after notifying,
-// but a subscriber could, so a different length forces a regroup. Groups are
-// keyed by table name so equivalent table definitions invalidate each other.
-const groupOpsByTable = (ops: Op[]): Map<string, PreparedOp[]> => {
+// them share the row tuples. Cache only immutable operations with immutable
+// scalar rows: freezing the array alone leaves its payloads mutable. Binary
+// and object values are conservatively regrouped. Groups use table names so
+// equivalent table definitions invalidate each other.
+const groupOpsByTable = (ops: readonly Op[]): Map<string, PreparedOp[]> => {
   const cached = opsByTableCache.get(ops);
-  if (cached && cached.length === ops.length) return cached.byTable;
+  if (cached) return cached;
 
   const byTable = new Map<string, PreparedOp[]>();
   for (const op of ops) {
@@ -44,7 +43,22 @@ const groupOpsByTable = (ops: Op[]): Map<string, PreparedOp[]> => {
     }
     tableOps.push({ rows: rowsOf(op), tuples: new Map() });
   }
-  opsByTableCache.set(ops, { length: ops.length, byTable });
+  if (
+    Object.isFrozen(ops) &&
+    ops.every(
+      (op) =>
+        Object.isFrozen(op) &&
+        rowsOf(op).every(
+          (row) =>
+            Object.isFrozen(row) &&
+            Object.values(row).every(
+              (value) => value === null || typeof value !== "object",
+            ),
+        ),
+    )
+  ) {
+    opsByTableCache.set(ops, byTable);
+  }
   return byTable;
 };
 
@@ -80,7 +94,7 @@ const normalizedBound = (
 // TODO: maybe range tree instead?
 export const isNeedToRerunRange = (
   cmds: SelectRangeCmd[],
-  ops: Op[],
+  ops: readonly Op[],
 ): boolean => {
   if (cmds.length === 0 || ops.length === 0) return false;
   const opsByTable = groupOpsByTable(ops);

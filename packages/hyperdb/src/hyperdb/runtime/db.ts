@@ -38,6 +38,7 @@ import type {
 import { registerHyperDB, unregisterHyperDB } from "../tracing/registry";
 import { DBTx } from "./db-tx";
 import { HyperDBError } from "../core/errors";
+import { dbClosedError } from "../utils";
 
 export type DBOptions = Partial<CodecOptions> & {
   dbName?: string;
@@ -225,7 +226,7 @@ export class DB implements HyperDB {
 
   private throwIfClosed(): void {
     if (this.state.closed) {
-      throw new HyperDBError("DB_CLOSED", "DB is closed");
+      throw dbClosedError();
     }
   }
 

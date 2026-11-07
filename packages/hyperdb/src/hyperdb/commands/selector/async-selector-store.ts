@@ -590,7 +590,7 @@ const createAsyncSelectorStoreInternal = <
   const ensureDBSubscription = () => {
     if (dbUnsubscribe || !canAutoFetch || destroyed) return;
 
-    dbUnsubscribe = db.subscribe((ops: Op[]) => {
+    dbUnsubscribe = db.subscribe((ops: readonly Op[]) => {
       if (isRunning) {
         rerunRequested = true;
         return;

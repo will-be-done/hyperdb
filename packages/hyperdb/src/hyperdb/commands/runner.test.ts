@@ -15,6 +15,7 @@ import {
 } from "./runner";
 import type { Op } from "../runtime/ops";
 import { createSelector } from "./selector/selector";
+import { unwrap } from "./async";
 
 const selector = createSelector();
 
@@ -134,6 +135,46 @@ const runTree = <T>(
 };
 
 describe("runCommandGenerator nested selector memo", () => {
+  test("does not memoize a child fallback from an aborted sync run", () => {
+    const db = makeDb();
+    const rewrapping = selector({
+      name: "runnerMemoRewrapping",
+      args: {},
+      handler: function* () {
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          throw new Error("replaced");
+        }
+        return "done";
+      },
+    });
+    const child = selector({
+      name: "runnerMemoFallbackChild",
+      args: {},
+      memoization: { selfChild: true },
+      handler: function* () {
+        try {
+          return yield* rewrapping({});
+        } catch {
+          return "fallback";
+        }
+      },
+    });
+    const childMemo: ChildMemo = new Map();
+
+    expect(() =>
+      runTree(
+        db,
+        function* () {
+          return yield* child({});
+        },
+        { childMemo },
+      ),
+    ).toThrow(expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }));
+    expect(childMemo.size).toBe(0);
+  });
+
   test("skips runSelector arg serialization unless selfChild memoization is enabled", () => {
     const db = makeDb();
     let getterReads = 0;

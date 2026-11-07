@@ -216,9 +216,12 @@ export class DBTx implements HyperDBTx {
     try {
       yield* this.driver.commit();
     } catch (error) {
-      // The driver transaction is still open; let rollback() close it
+      // The driver transaction may still be open; let rollback() close it
       // instead of failing with TRANSACTION_FINISHED and masking `error`.
+      // Restore the counter too, so a second commit() asks the driver again
+      // instead of returning as if it had committed.
       this.isFinished.val = false;
+      this.txCounter.val++;
       throw error;
     }
   }

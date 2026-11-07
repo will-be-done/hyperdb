@@ -1,6 +1,42 @@
 import { isNoopCmd, isUnwrapCmd, type DBCmd } from "../commands/async";
 import { HyperDBError } from "./errors";
 
+const syncErrorHandler = Symbol("syncErrorHandler");
+type ObservedCommand = DBCmd & {
+  [syncErrorHandler]?: (error: HyperDBError) => void;
+};
+
+/** @internal Observe executor aborts before a driver can catch them. */
+export function* observeSyncExecution<T>(
+  cmd: Generator<DBCmd, T, unknown>,
+  onError: (error: HyperDBError) => void,
+): Generator<DBCmd, T, unknown> {
+  const observe = (
+    result: IteratorResult<DBCmd, T>,
+  ): IteratorResult<DBCmd, T> => {
+    if (result.done || !isUnwrapCmd(result.value)) return result;
+    const previous = (result.value as ObservedCommand)[syncErrorHandler];
+    const value: ObservedCommand = {
+      ...result.value,
+      [syncErrorHandler]: (error) => {
+        previous?.(error);
+        onError(error);
+      },
+    };
+    return { done: false, value };
+  };
+  // Delegate all three iterator methods so abandonment still runs cleanup.
+  return yield* {
+    [Symbol.iterator]() {
+      return {
+        next: (value?: unknown) => observe(cmd.next(value)),
+        throw: (error: unknown) => observe(cmd.throw(error)),
+        return: (value: T) => observe(cmd.return(value)),
+      };
+    },
+  };
+}
+
 function unexpectedCmdError(cmd: unknown): Error {
   return new HyperDBError(
     "UNSUPPORTED_COMMAND",
@@ -21,6 +57,7 @@ const isPromiseLike = <T>(value: unknown): value is PromiseLike<T> => {
 
 export function execSync<T>(cmd: Generator<DBCmd, T>): T {
   let result = cmd.next();
+  let asyncError: HyperDBError | undefined;
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
@@ -30,18 +67,27 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
       if (isPromiseLike(data)) data.then(undefined, () => {});
       // Throw into the generator so its finally blocks (such as a transaction
       // rollback) still run before the error reaches the caller.
-      result = cmd.throw(
-        new HyperDBError(
-          "ASYNC_IN_SYNC_EXECUTION",
-          "Cannot execute async commands",
-        ),
+      asyncError ??= new HyperDBError(
+        "ASYNC_IN_SYNC_EXECUTION",
+        "Cannot execute async commands",
       );
+      (result.value as ObservedCommand)[syncErrorHandler]?.(asyncError);
+      try {
+        result = cmd.throw(asyncError);
+      } catch {
+        // A replacement thrown during cleanup cannot hide the sync abort.
+        throw asyncError;
+      }
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {
       throw unexpectedCmdError(result.value);
     }
   }
+
+  // A generator that catches the error must not turn the aborted run into a
+  // normal result.
+  if (asyncError) throw asyncError;
 
   return result.value as T;
 }

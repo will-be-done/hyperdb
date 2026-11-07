@@ -360,7 +360,7 @@ export class UndoManager {
     tx: HyperDB,
     table: TableDefinition,
     traits: Trait[],
-    ops: Op[],
+    ops: readonly Op[],
   ): void {
     if (
       !this.tables.has(table.tableName) ||
@@ -411,7 +411,7 @@ export class UndoManager {
     }
   }
 
-  private record(ops: Op[]): void {
+  private record(ops: readonly Op[]): void {
     const captured = ops.flatMap((op) => {
       const entry = this.captured.get(op);
       this.captured.delete(op);

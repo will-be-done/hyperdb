@@ -1,3 +1,4 @@
+import type { TupleScanOptions } from "../core/primitives";
 import type { TableDefinition } from "../schema/table";
 
 export type PersistentSortKeyMode = "scan" | "stored";
@@ -112,4 +113,63 @@ export function getPersistentIndexPlan(
   const plan = { physicalIndexes, byLogicalName };
   persistentIndexPlanCache.set(tableDef, plan);
   return plan;
+}
+
+/** Throws unless every bound is an exact match on all hash-index columns. */
+export function validateHashBounds(
+  indexName: string,
+  indexColumns: string[],
+  bounds: TupleScanOptions[],
+): void {
+  const indexColumn = indexColumns.join(", ");
+
+  if (bounds.length === 0) {
+    throw new Error(
+      `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
+    );
+  }
+
+  for (const bound of bounds) {
+    if (
+      (bound.gt !== undefined && bound.gt.length > 0) ||
+      (bound.lt !== undefined && bound.lt.length > 0)
+    ) {
+      throw new Error(
+        `Hash index doesn't support range conditions for column '${indexColumn}'`,
+      );
+    }
+
+    if (
+      !bound.lte ||
+      !bound.gte ||
+      bound.lte.length !== indexColumns.length ||
+      bound.gte.length !== indexColumns.length
+    ) {
+      throw new Error(
+        `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bound)}`,
+      );
+    }
+
+    if (
+      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
+    ) {
+      throw new Error(
+        `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
+      );
+    }
+  }
+}
+
+/** Returns the ids of validated primary-key hash bounds. */
+export function primaryKeyIdsFromBounds(
+  indexName: string,
+  bounds: TupleScanOptions[],
+): string[] {
+  return bounds.map((bound) => {
+    const id = bound.gte?.[0];
+    if (typeof id !== "string") {
+      throw new Error(`Primary-key index ${indexName} requires string IDs`);
+    }
+    return id;
+  });
 }

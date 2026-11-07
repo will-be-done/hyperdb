@@ -48,7 +48,7 @@ const createUncachedSelectorStoreSync = <TSelector extends AnyObjectSelector>(
   });
   let currentRevision = db.getRevision();
 
-  const rerun = (ops?: Op[]) => {
+  const rerun = (ops?: readonly Op[]) => {
     currentResult = runSelectorGeneratorSync(db, gen, selectRangeCmds, {
       ops,
       childMemo,

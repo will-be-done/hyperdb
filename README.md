@@ -47,7 +47,9 @@ to strain:
   committed changes saved to the primary store. Both hybrid runtimes reject
   transactions before publishing memory changes when 100 persistence batches
   are unsettled; await persistence and retry in a new transaction. Rejected
-  commits finish the transaction, while rollback remains safe for cleanup.
+  commits finish the transaction, while rollback remains safe for cleanup. On
+  any runtime, a failed `commit()` did not commit: roll back and retry in a new
+  transaction.
   Ordinary `PreloadedHybridDB` inserts preserve duplicate-ID checks during
   background persistence.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the
@@ -360,7 +362,14 @@ engine's own error passes through unchanged, for SQLite a
 Use `dispatchMaybeAsync(db, action(args))` when you want a synchronous result
 whenever no step had to wait. Close a runtime with `await execAsync(db.close())`:
 it flushes hybrid persistence, releases driver-owned resources, clears
-subscribers, and unregisters the DB from devtools.
+subscribers, and unregisters the DB from devtools. Concurrent `close()` calls
+share one close. `HybridDB` also waits for direct writes already updating the
+primary and cache, without waiting for open, uncommitted transactions. SQLite
+inserts remain all-or-nothing when a handler catches a trigger failure.
+Hybrid shutdown continues if its caller abandons the command. A failed
+`SubscribableDB.close()` still rejects new operations while allowing cleanup
+retries. Subscriber callbacks receive `readonly Op[]`; leave shared operations
+and rows unchanged, and copy the values you need to edit.
 
 ## Entry points
 

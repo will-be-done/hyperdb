@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { defineTable } from "../../schema/table";
 import { DB, execSync } from "../../db";
 import { BptreeInmemDriver } from "../../drivers/inmemory/bptree-inmem-driver";
@@ -11,6 +11,7 @@ import {
   upsert,
 } from "./builders";
 import { selectFrom } from "../selector/builder";
+import { createSelector, selectSync } from "../selector/selector";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
 import { SubscribableDB } from "../../runtime/subscribable-db";
@@ -167,6 +168,195 @@ describe("action", () => {
     ).toEqual([]);
     // The transaction was released: the next dispatch runs normally.
     syncDispatch(db, updateAction({}));
+  });
+
+  it("does not commit a sync dispatch whose handler catches the async step", () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    const swallowingStep = action({
+      name: "swallowingAsyncStepAction",
+      args: {},
+      handler: function* () {
+        yield* updateAction({});
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          return "fallback";
+        }
+        return "done";
+      },
+    });
+
+    expect(() => syncDispatch(db, swallowingStep({}))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rolls back before notifying when a driver swallows the sync abort", () => {
+    const driver = new BptreeInmemDriver();
+    const db = new SubscribableDB(new DB(driver));
+    execSync(db.loadTables([tasksTables]));
+    const begin = driver.beginTx.bind(driver);
+    vi.spyOn(driver, "beginTx").mockImplementationOnce(function* () {
+      const tx = yield* begin();
+      tx.intervalScan = function* () {
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          return [];
+        }
+        return [];
+      };
+      return tx;
+    });
+    const writeThenRead = action({
+      name: "driverSwallowsSyncAbort",
+      args: {},
+      handler: function* () {
+        yield* updateAction({});
+        yield* selectFrom(tasksTables, "byId").where((q) =>
+          q.eq("id", "task-1"),
+        );
+      },
+    });
+    const notified = vi.fn();
+    db.subscribe(notified);
+
+    expect(() => syncDispatch(db, writeThenRead({}))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(notified).not.toHaveBeenCalled();
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("commits fallback writes when an async run catches a separate sync failure", async () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    const asyncSelector = createSelector()({
+      name: "separateAsyncSelector",
+      args: {},
+      handler: function* () {
+        yield* unwrap(Promise.resolve());
+      },
+    });
+    const recover = action({
+      name: "recoverSeparateSyncFailure",
+      args: {},
+      handler: function* () {
+        try {
+          yield* unwrap(
+            Promise.resolve().then(() =>
+              selectSync(db, { selector: asyncSelector, args: {} }),
+            ),
+          );
+        } catch {
+          yield* updateAction({});
+          return "fallback";
+        }
+        return "done";
+      },
+    });
+    const notified = vi.fn();
+    db.subscribe(notified);
+
+    await expect(asyncDispatch(db, recover({}))).resolves.toBe("fallback");
+    expect(notified).toHaveBeenCalledOnce();
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("preserves the sync abort when a handler throws a replacement", () => {
+    const db = new DB(new BptreeInmemDriver());
+    execSync(db.loadTables([tasksTables]));
+    const replaceError = function* () {
+      try {
+        yield* unwrap(Promise.resolve());
+      } catch {
+        throw new Error("replacement");
+      }
+    };
+    const read = createSelector()({
+      name: "replaceSelectorError",
+      args: {},
+      handler: replaceError,
+    });
+    const write = action({
+      name: "replaceActionError",
+      args: {},
+      handler: replaceError,
+    });
+    for (const run of [
+      () => selectSync(db, { selector: read, args: {} }),
+      () => syncDispatch(db, write({})),
+    ]) {
+      expect(run).toThrow(
+        expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+      );
+    }
+  });
+
+  it("does not commit a sync dispatch when a nested selector replaces the async error", () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    const rewrapping = createSelector()({
+      name: "rewrappingAsyncSelector",
+      args: {},
+      handler: function* () {
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          throw new Error("replaced");
+        }
+        return "done";
+      },
+    });
+    const swallowingStep = action({
+      name: "swallowingNestedAsyncAction",
+      args: {},
+      handler: function* () {
+        yield* updateAction({});
+        try {
+          yield* rewrapping({});
+        } catch {
+          return "fallback";
+        }
+        return "done";
+      },
+    });
+    let notified = false;
+    db.subscribe(() => {
+      notified = true;
+    });
+
+    expect(() => syncDispatch(db, swallowingStep({}))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(notified).toBe(false);
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
   });
 
   it("dispatches object-form actions with one args object", () => {

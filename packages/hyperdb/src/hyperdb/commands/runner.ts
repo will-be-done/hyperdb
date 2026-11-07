@@ -43,6 +43,7 @@ import {
   wrapGeneratorWithExistingTracePath,
 } from "../tracing/metadata";
 import { HyperDBError } from "../core/errors";
+import { observeSyncExecution } from "../core/executor";
 
 export type ChildMemoEntry = {
   selectRangeCmds: SelectRangeCmd[];
@@ -67,13 +68,17 @@ export type CommandRunnerOptions = {
   skipChildTrace?: boolean;
   // Ops that triggered this rerun. Undefined/empty on a first run, which forces
   // every nested selector to recompute.
-  ops?: Op[];
+  ops?: readonly Op[];
   // Cross-rerun memo for nested selectors. Created once per root cache entry.
   childMemo?: ChildMemo;
   // Selectors referenced during the current run. Used to drop memo entries that
   // were not referenced this run (e.g. a child behind a conditional branch),
   // whose data could change unobserved while it is out of the subscription.
   visited?: ChildVisited;
+  // Shared by a run and every nested run (child selectors, withTraits bodies).
+  // Records a sync run that reached async storage, so a nested handler that
+  // catches or replaces that error cannot hide it from the outer run.
+  asyncInSync?: { error?: unknown };
 };
 
 const argsKeyOf = (args: unknown): string | undefined => {
@@ -165,10 +170,7 @@ const recordsMutationTraceEvents = (db: HyperDB): boolean =>
   (db as MutationTraceRecorder).recordsMutationTraceEvents?.() === true;
 
 function* runMutationCommand(
-  db: HyperDB,
-  tracer: HyperDBTracer | undefined,
-  traceContext: TraceContext | undefined,
-  traceFrame: TraceFrame | undefined,
+  { scopedDB: db, options, tracer, traceContext, traceFrame }: CommandContext,
   input:
     | {
         kind: "insert" | "upsert";
@@ -183,6 +185,12 @@ function* runMutationCommand(
         run: () => Generator<DBCmd, void, unknown>;
       },
 ): Generator<DBCmd, void, unknown> {
+  if (!options.allowWrites) {
+    throw new HyperDBError(
+      "WRITES_DISALLOWED",
+      `Writes are disallowed for command: ${input.kind}`,
+    );
+  }
   const shouldRecordInRunner =
     traceContext !== undefined &&
     traceFrame !== undefined &&
@@ -384,68 +392,29 @@ function* runSelector(
   return value;
 }
 
-const assertWritesAllowed = (
-  kind: "insert" | "upsert" | "delete",
-  { options }: CommandContext,
-) => {
-  if (!options.allowWrites) {
-    throw new HyperDBError(
-      "WRITES_DISALLOWED",
-      `Writes are disallowed for command: ${kind}`,
-    );
-  }
-};
+const runInsert: CommandHandler<InsertActionCmd> = (cmd, ctx) =>
+  runMutationCommand(ctx, {
+    kind: "insert",
+    tableName: cmd.table.tableName,
+    rows: cmd.values,
+    run: () => ctx.scopedDB.insert(cmd.table, cmd.values),
+  });
 
-const runInsert: CommandHandler<InsertActionCmd> = (cmd, ctx) => {
-  assertWritesAllowed("insert", ctx);
-  const { scopedDB } = ctx;
-  return runMutationCommand(
-    scopedDB,
-    ctx.tracer,
-    ctx.traceContext,
-    ctx.traceFrame,
-    {
-      kind: "insert",
-      tableName: cmd.table.tableName,
-      rows: cmd.values,
-      run: () => scopedDB.insert(cmd.table, cmd.values),
-    },
-  );
-};
+const runUpsert: CommandHandler<UpsertActionCmd> = (cmd, ctx) =>
+  runMutationCommand(ctx, {
+    kind: "upsert",
+    tableName: cmd.table.tableName,
+    rows: cmd.values,
+    run: () => ctx.scopedDB.upsert(cmd.table, cmd.values),
+  });
 
-const runUpsert: CommandHandler<UpsertActionCmd> = (cmd, ctx) => {
-  assertWritesAllowed("upsert", ctx);
-  const { scopedDB } = ctx;
-  return runMutationCommand(
-    scopedDB,
-    ctx.tracer,
-    ctx.traceContext,
-    ctx.traceFrame,
-    {
-      kind: "upsert",
-      tableName: cmd.table.tableName,
-      rows: cmd.values,
-      run: () => scopedDB.upsert(cmd.table, cmd.values),
-    },
-  );
-};
-
-const runDelete: CommandHandler<DeleteActionCmd> = (cmd, ctx) => {
-  assertWritesAllowed("delete", ctx);
-  const { scopedDB } = ctx;
-  return runMutationCommand(
-    scopedDB,
-    ctx.tracer,
-    ctx.traceContext,
-    ctx.traceFrame,
-    {
-      kind: "delete",
-      tableName: cmd.table.tableName,
-      ids: cmd.values,
-      run: () => scopedDB.delete(cmd.table, cmd.values),
-    },
-  );
-};
+const runDelete: CommandHandler<DeleteActionCmd> = (cmd, ctx) =>
+  runMutationCommand(ctx, {
+    kind: "delete",
+    tableName: cmd.table.tableName,
+    ids: cmd.values,
+    run: () => ctx.scopedDB.delete(cmd.table, cmd.values),
+  });
 
 const runWithTraits: CommandHandler<RunWithTraitsCmd> = (
   cmd,
@@ -468,17 +437,15 @@ function* forwardToExecutor(cmd: DBCmd): Generator<DBCmd, unknown, unknown> {
   return yield cmd;
 }
 
-const resolveCommandHandler = (
-  cmd: unknown,
-): ((ctx: CommandContext) => Generator<DBCmd, unknown, unknown>) => {
-  if (isSelectRangeCmd(cmd)) return (ctx) => runSelectRange(cmd, ctx);
-  if (isRunSelectorCmd(cmd)) return (ctx) => runSelector(cmd, ctx);
-  if (isInsertActionCmd(cmd)) return (ctx) => runInsert(cmd, ctx);
-  if (isUpsertActionCmd(cmd)) return (ctx) => runUpsert(cmd, ctx);
-  if (isDeleteActionCmd(cmd)) return (ctx) => runDelete(cmd, ctx);
-  if (isRunWithTraitsCmd(cmd)) return (ctx) => runWithTraits(cmd, ctx);
-  if (isGetCurrentTraitsCmd(cmd)) return (ctx) => getCurrentTraits(cmd, ctx);
-  if (isDBCmd(cmd)) return () => forwardToExecutor(cmd);
+const runCommand: CommandHandler<unknown> = (cmd, ctx) => {
+  if (isSelectRangeCmd(cmd)) return runSelectRange(cmd, ctx);
+  if (isRunSelectorCmd(cmd)) return runSelector(cmd, ctx);
+  if (isInsertActionCmd(cmd)) return runInsert(cmd, ctx);
+  if (isUpsertActionCmd(cmd)) return runUpsert(cmd, ctx);
+  if (isDeleteActionCmd(cmd)) return runDelete(cmd, ctx);
+  if (isRunWithTraitsCmd(cmd)) return runWithTraits(cmd, ctx);
+  if (isGetCurrentTraitsCmd(cmd)) return getCurrentTraits(cmd, ctx);
+  if (isDBCmd(cmd)) return forwardToExecutor(cmd);
 
   throw new HyperDBError(
     "UNSUPPORTED_COMMAND",
@@ -511,12 +478,29 @@ export function* runCommandGenerator<TReturn>(
     ? withTraceContextTrait(driverScopedDB, traceContext)
     : driverScopedDB;
 
+  // A root run starts the shared state; nested runs inherit it.
+  const asyncInSync = options.asyncInSync ?? {};
+  const runOptions = options.asyncInSync
+    ? options
+    : { ...options, asyncInSync };
+
+  // Shared by every command of this run; only traceFrame changes per command,
+  // and a handler finishes before the next command starts.
+  const ctx: CommandContext = {
+    db,
+    scopedDB,
+    options: runOptions,
+    tracer,
+    traceContext,
+    traceFrame: undefined,
+  };
+
   try {
     let result = gen.next();
 
     while (!result.done) {
       const cmd = result.value;
-      const traceFrame = traceContext
+      ctx.traceFrame = traceContext
         ? tracer?.enterFramePath(
             traceContext,
             options.skipChildTrace ? undefined : getCommandFramePath(cmd),
@@ -524,14 +508,8 @@ export function* runCommandGenerator<TReturn>(
         : undefined;
       let value: unknown;
       try {
-        const run = resolveCommandHandler(cmd);
-        value = yield* run({
-          db,
-          scopedDB,
-          options,
-          tracer,
-          traceContext,
-          traceFrame,
+        value = yield* observeSyncExecution(runCommand(cmd, ctx), (error) => {
+          asyncInSync.error ??= error;
         });
       } catch (error) {
         // Raise the failure at the handler's `yield*`, so its try/catch and
@@ -542,16 +520,21 @@ export function* runCommandGenerator<TReturn>(
       result = gen.next(value);
     }
 
+    // The sync run is aborted even if the handler caught the error: it must
+    // not commit or become a cached selector result.
+    if (asyncInSync.error) throw asyncInSync.error;
+
     if (ownsTraceContext) {
       tracer?.endTraceSuccess(traceContext);
     }
 
     return result.value;
   } catch (error) {
+    const failure = asyncInSync.error ?? error;
     if (ownsTraceContext) {
-      tracer?.endTraceError(traceContext, error);
+      tracer?.endTraceError(traceContext, failure);
     }
 
-    throw error;
+    throw failure;
   }
 }

@@ -179,7 +179,9 @@ yield *
 
 Run selectors outside React with `selectSync`, `selectAsync`,
 `selectCachedMaybeAsync`, or `preloadSelectorAsync`. Use sync helpers with sync
-drivers and async helpers with async drivers:
+drivers and async helpers with async drivers. A sync run that reaches async
+storage fails with `ASYNC_IN_SYNC_EXECUTION` even if the handler catches it;
+the action does not commit and no fallback result is cached:
 
 ```ts
 const rows = selectSync(db, {
@@ -303,7 +305,16 @@ persistence, closes wrapped databases and driver-owned resources, clears
 `SubscribableDB` subscribers, and unregisters the DB from devtools. Caller-owned
 SQLite handles stay open. Hybrid runtimes refuse new commits as soon as
 `close()` starts and wait for accepted ones. Later operations, including cached
-selector reads, throw `DB_CLOSED`; a failed `close()` can be retried.
+selector reads, throw `DB_CLOSED`; concurrent `close()` calls share one close,
+and a failed `close()` can be retried.
+`HybridDB` also waits for direct writes already updating the primary and cache,
+without waiting for open, uncommitted transactions. SQLite inserts roll back
+the entire batch when a trigger fails, even if the action catches the error.
+Hybrid shutdown continues if its caller abandons the command. A failed
+`SubscribableDB.close()` still rejects new operations and allows cleanup retries.
+`db.subscribe` receives `readonly Op[]`: leave shared operations and rows
+unchanged, and copy any values you need to edit. Copying the array alone does
+not copy its operations or rows.
 
 ## Undo And Redo
 
@@ -466,6 +477,8 @@ Both hybrid runtimes allow at most 100 unsettled persistence batches. At
 capacity, a transaction rejects before publishing memory changes; await
 `waitForPersistence()` and retry in a new transaction. A rejected HybridDB commit
 finishes the transaction; further commits throw, and rollback remains safe.
+For any runtime, a `commit()` that throws did not commit: roll back and retry
+in a new transaction.
 Await `execAsync(db.waitForPersistence())` on either hybrid runtime or its
 `SubscribableDB` wrapper before broadcasting changes or acknowledging sync.
 The wait covers transactions committed before the call. Permanent persistence

@@ -37,7 +37,7 @@ import {
   type TraceContext,
 } from "../core/tracer";
 import { wrapGeneratorWithExistingTracePath } from "../tracing/metadata";
-import { refVar, type RefVar } from "../utils";
+import { dbClosedError, refVar, type RefVar } from "../utils";
 import { HyperDBError } from "../core/errors";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
@@ -58,11 +58,15 @@ function rowsAsStored(
   return rows;
 }
 
-type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
+type Subscriber = (
+  op: readonly Op[],
+  traits: Trait[],
+  revision: number,
+) => void;
 
 const notifySubscribers = (
   subscribers: Subscriber[],
-  operations: Op[],
+  operations: readonly Op[],
   traits: Trait[],
   revision: number,
 ) => {
@@ -613,16 +617,24 @@ export class SubscribableDBTx implements HyperDBTx {
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
-    yield* this.txDb.commit();
+    try {
+      yield* this.txDb.commit();
+    } catch (error) {
+      // Like the inner tx: a second commit() must reach it again, not return
+      // as committed without notifying subscribers.
+      this.state.txCounter.val++;
+      throw error;
+    }
     this.state.committed.val = true;
 
     // if (this.operations.length === 0) return;
 
     const traits = withoutInternalTraits(this.getTraits());
     const revision = this.subDb.incrementRevision();
+    // Every subscriber shares this array, so none may change it for the rest.
     notifySubscribers(
       this.subDb.subscribers,
-      this.operations,
+      Object.freeze(this.operations.map((op) => Object.freeze(op))),
       traits,
       revision,
     );
@@ -696,20 +708,29 @@ export class SubscribableDB implements HyperDB {
     return this.state.revision.val;
   }
 
+  // The wrapped DB may not track closing itself (close() is optional).
+  private throwIfClosed(): void {
+    if (this.state.closed) throw dbClosedError();
+  }
+
   private delegateDB(): HyperDB {
+    this.throwIfClosed();
     return this.traits.length > 0
       ? this.db.withTraits(...this.traits)
       : this.db;
   }
 
-  loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
-    return this.db.loadTables(tables);
+  // Generator methods, so a closed DB fails when the command runs, not when
+  // it is created.
+  *loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
+    this.throwIfClosed();
+    yield* this.db.loadTables(tables);
   }
 
-  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {
-    return this.delegateDB().preloadTables(specs);
+    yield* this.delegateDB().preloadTables(specs);
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {
@@ -746,9 +767,10 @@ export class SubscribableDB implements HyperDB {
   }
 
   *close(): Generator<DBCmd, void> {
+    // Closing is terminal for new operations, even if resource cleanup fails.
+    this.state.closed = true;
     try {
       if (this.db.close) yield* this.db.close();
-      this.state.closed = true;
     } finally {
       // Release listeners even if the wrapped DB failed to close.
       this.clearSubscriptions();
@@ -844,6 +866,7 @@ export class SubscribableDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfClosed();
     if (clauses && clauses.length === 0) {
       const results: ExtractSchema<TTable>[] = [];
 

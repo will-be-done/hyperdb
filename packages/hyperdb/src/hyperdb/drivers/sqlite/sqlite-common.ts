@@ -16,6 +16,8 @@ import {
   getPersistentIndexPlan,
   isPrimaryKeyBackedIndex,
   type PersistentPhysicalIndex,
+  primaryKeyIdsFromBounds,
+  validateHashBounds,
 } from "../persistent-index-plan";
 import {
   encodeSqliteSortKeyTuple,
@@ -57,22 +59,16 @@ export const SQLITE_WRITE_SAVEPOINT = "hyperdb_write";
 
 /**
  * Whether a transactional write needs a savepoint to apply all-or-nothing.
- * One SQLite statement is already atomic; upserts (delete + insert) and
- * writes split into several chunks are not. A handler may catch a failed
- * write and keep going, so a half-applied write must not reach commit.
+ * A trigger using RAISE(FAIL) can leave earlier rows from an insert applied,
+ * even within a single statement. Upserts and chunked deletes also need a
+ * savepoint so a handler cannot catch a failure and commit a partial write.
  */
 export function sqliteWriteNeedsSavepoint(
   kind: "insert" | "upsert" | "delete",
-  tableDef: TableDefinition,
   count: number,
 ): boolean {
   if (count === 0) return false;
-  if (kind === "upsert") return true;
-  const chunkSize =
-    kind === "insert"
-      ? getSqliteInsertChunkSize(tableDef)
-      : getSqliteDeleteChunkSize();
-  return count > chunkSize;
+  return kind !== "delete" || count > getSqliteDeleteChunkSize();
 }
 
 function isSchemalessTable(tableDef: TableDefinition): boolean {
@@ -377,50 +373,6 @@ function expandBoundTuple(
   return [...tuple, ...new Array(targetLength - tuple.length).fill(filler)];
 }
 
-function validateHashBounds(
-  indexName: string,
-  indexColumns: string[],
-  bounds: ReturnType<typeof convertWhereToBound>,
-): void {
-  const indexColumn = indexColumns.join(", ");
-
-  if (bounds.length === 0 || bounds.some((bound) => !bound.gte)) {
-    throw new Error(
-      `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
-    );
-  }
-
-  for (const bound of bounds) {
-    if (
-      (bound.gt !== undefined && bound.gt.length > 0) ||
-      (bound.lt !== undefined && bound.lt.length > 0)
-    ) {
-      throw new Error(
-        `Hash index doesn't support range conditions for column '${indexColumn}'`,
-      );
-    }
-
-    if (
-      !bound.lte ||
-      !bound.gte ||
-      bound.lte.length !== indexColumns.length ||
-      bound.gte.length !== indexColumns.length
-    ) {
-      throw new Error(
-        `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bound)}`,
-      );
-    }
-
-    if (
-      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
-    ) {
-      throw new Error(
-        `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
-      );
-    }
-  }
-}
-
 function isExactSortKeyBound(bound: {
   gte?: unknown[];
   gt?: unknown[];
@@ -478,10 +430,7 @@ export function buildSortKeyWhereClause(
   }
 
   if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
-    const ids = rawBounds.map((bound) => bound.gte?.[0]);
-    if (ids.some((id) => typeof id !== "string")) {
-      throw new Error(`Primary-key index ${indexName} requires string IDs`);
-    }
+    const ids = primaryKeyIdsFromBounds(indexName, rawBounds);
     const placeholders = ids.map(() => "?").join(", ");
     return {
       where: `WHERE id IN (${placeholders})`,

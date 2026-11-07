@@ -37,6 +37,11 @@ const baseDb = new DB(new BptreeInmemDriver(), {
 execSync(baseDb.loadTables([tasksTable]));
 ```
 
+If `tx.commit()` throws, the transaction did not commit. Call `tx.rollback()`
+and run the work again in a new transaction. Actions do this cleanup for you.
+Calling `commit()` again never reports success for a commit that did not
+happen, but whether it can succeed depends on the driver.
+
 ### Options
 
 | Option                  | Default        | Description                                                                                                  |
@@ -79,6 +84,9 @@ const unsub = db.subscribe((ops, traits, revision) => {
   // ops describe the committed insert/upsert/delete operations
 });
 ```
+
+All subscribers share one frozen `ops` array per commit, so copy it before
+changing it.
 
 This is the mechanism the [selector cache](/database/reading-data/) uses.
 
@@ -369,17 +377,25 @@ await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
   background persistence and every flush has settled. A crashed runtime still
   closes without rethrowing the crash. `PreloadedHybridDB` then releases its
   preloaded rows and indexes.
+- `HybridDB` also waits for direct inserts, upserts, and deletes that have
+  started updating the primary and cache. It rejects writes still queued
+  behind a transaction and does not wait for open, uncommitted transactions.
 - The runtime then closes its wrapped databases and releases driver resources.
   `IdbDriver` closes its IndexedDB connection; the in-memory driver drops its
   data. SQLite handles you passed to `SqlDriver` or `AsyncSqlDriver` stay open,
   because you own them.
-- `SubscribableDB` removes its subscribers and mutation hooks.
+- `SubscribableDB` refuses new operations and removes its subscribers and
+  mutation hooks even if the wrapped database fails to close. Resource cleanup
+  can still be retried.
 - The `DB` is removed from devtools discovery.
 
 Afterwards every read, write, or transaction throws a `HyperDBError` with code
 `DB_CLOSED`, including cached selector reads. `db.isClosed` reports whether a
-runtime has started closing. If a driver fails to close, `close()` rejects and
-can be called again.
+runtime has started closing. Concurrent `close()` calls share one close and
+settle together. If a driver fails to close, `close()` rejects for every caller
+and can be called again.
+Once hybrid shutdown starts, it continues even if the calling generator is
+abandoned; another caller waits for the same shutdown to finish.
 
 ## Executing commands
 
@@ -397,7 +413,9 @@ for you, but you can also drive a generator directly:
 | `execAsync(generator)`                 | Drive a raw DB-command generator (async)        |
 
 `execSync` throws if the generator yields an async command, which is how the
-sync/async split is enforced. Async drivers must go through `execAsync` /
+sync/async split is enforced. The run fails even if the handler catches that
+error: `syncDispatch` does not commit, and the sync selector cache does not keep
+a fallback value. Async drivers must go through `execAsync` /
 `asyncDispatch` / `selectAsync`. Use the async helpers with `HybridDB` too,
 because reads can miss the in-memory cache and fall through to the primary
 store.
