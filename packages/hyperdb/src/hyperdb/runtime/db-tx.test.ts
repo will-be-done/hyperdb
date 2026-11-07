@@ -1492,6 +1492,24 @@ describe("commit retry after a driver commit failure", () => {
     ["DB", (db: DB) => db],
     ["SubscribableDB", (db: DB) => new SubscribableDB(db)],
   ] as const) {
+    it(`${name}: rollback after a failed commit discards the write`, () => {
+      const driver = new BptreeInmemDriver();
+      const db = wrap(new DB(driver, { register: false }));
+      execSync(db.loadTables([tasksTable]));
+      failFirstCommit(driver);
+      const tx = execSync(db.beginTx());
+      execSync(tx.insert(tasksTable, [{ id: "t1", title: "Rollback" }]));
+      expect(() => execSync(tx.commit())).toThrow("busy");
+      execSync(tx.rollback());
+      expect(
+        execSync(
+          db.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "t1" }] },
+          ]),
+        ),
+      ).toEqual([]);
+    });
+
     it(`${name}: a retried commit reaches the driver`, () => {
       const driver = new BptreeInmemDriver();
       const db = wrap(new DB(driver, { register: false }));

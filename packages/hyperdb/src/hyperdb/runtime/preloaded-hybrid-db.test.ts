@@ -218,7 +218,7 @@ describe("PreloadedHybridDB", () => {
       return tx;
     });
     const subscribable = new SubscribableDB(runtime);
-    const notifications: Op[][] = [];
+    const notifications: (readonly Op[])[] = [];
     subscribable.subscribe((ops) => notifications.push(ops));
     const pending = execMaybeAsync(
       (function* () {
@@ -633,7 +633,7 @@ describe("PreloadedHybridDB", () => {
     await execAsync(primary.insert(tasksTable, [external]));
     intervalScanSpy.mockClear();
 
-    const notifications: { operations: Op[]; traits: string[] }[] = [];
+    const notifications: { operations: readonly Op[]; traits: string[] }[] = [];
     subscribable.subscribe((operations, traits) => {
       notifications.push({
         operations,

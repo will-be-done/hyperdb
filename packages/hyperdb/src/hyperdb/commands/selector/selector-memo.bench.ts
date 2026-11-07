@@ -31,12 +31,22 @@ const cachedSelectors = (count: number): SelectRangeCmd[][] =>
   ]);
 
 const commitOps = (count: number): Op[] =>
-  Array.from({ length: count }, (_, i) => ({
-    type: "upsert",
-    table: tasks,
-    oldValue: { id: `task-${i}`, projectId: "project-hot", order: `a${i}` },
-    newValue: { id: `task-${i}`, projectId: "project-hot", order: `b${i}` },
-  }));
+  Array.from({ length: count }, (_, i) =>
+    Object.freeze({
+      type: "upsert",
+      table: tasks,
+      oldValue: Object.freeze({
+        id: `task-${i}`,
+        projectId: "project-hot",
+        order: `a${i}`,
+      }),
+      newValue: Object.freeze({
+        id: `task-${i}`,
+        projectId: "project-hot",
+        order: `b${i}`,
+      }),
+    }),
+  );
 
 let _rerunSink = 0;
 

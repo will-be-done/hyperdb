@@ -42,7 +42,8 @@ import {
   getGeneratorTraceMeta,
   wrapGeneratorWithExistingTracePath,
 } from "../tracing/metadata";
-import { HyperDBError, isHyperDBError } from "../core/errors";
+import { HyperDBError } from "../core/errors";
+import { observeSyncExecution } from "../core/executor";
 
 export type ChildMemoEntry = {
   selectRangeCmds: SelectRangeCmd[];
@@ -67,7 +68,7 @@ export type CommandRunnerOptions = {
   skipChildTrace?: boolean;
   // Ops that triggered this rerun. Undefined/empty on a first run, which forces
   // every nested selector to recompute.
-  ops?: Op[];
+  ops?: readonly Op[];
   // Cross-rerun memo for nested selectors. Created once per root cache entry.
   childMemo?: ChildMemo;
   // Selectors referenced during the current run. Used to drop memo entries that
@@ -507,11 +508,10 @@ export function* runCommandGenerator<TReturn>(
         : undefined;
       let value: unknown;
       try {
-        value = yield* runCommand(cmd, ctx);
-      } catch (error) {
-        if (isHyperDBError(error, "ASYNC_IN_SYNC_EXECUTION")) {
+        value = yield* observeSyncExecution(runCommand(cmd, ctx), (error) => {
           asyncInSync.error ??= error;
-        }
+        });
+      } catch (error) {
         // Raise the failure at the handler's `yield*`, so its try/catch and
         // finally blocks see it. An uncaught error still propagates below.
         result = gen.throw(error);
@@ -530,10 +530,11 @@ export function* runCommandGenerator<TReturn>(
 
     return result.value;
   } catch (error) {
+    const failure = asyncInSync.error ?? error;
     if (ownsTraceContext) {
-      tracer?.endTraceError(traceContext, error);
+      tracer?.endTraceError(traceContext, failure);
     }
 
-    throw error;
+    throw failure;
   }
 }

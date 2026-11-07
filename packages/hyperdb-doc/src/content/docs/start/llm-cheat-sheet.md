@@ -307,6 +307,14 @@ SQLite handles stay open. Hybrid runtimes refuse new commits as soon as
 `close()` starts and wait for accepted ones. Later operations, including cached
 selector reads, throw `DB_CLOSED`; concurrent `close()` calls share one close,
 and a failed `close()` can be retried.
+`HybridDB` also waits for direct writes already updating the primary and cache,
+without waiting for open, uncommitted transactions. SQLite inserts roll back
+the entire batch when a trigger fails, even if the action catches the error.
+Hybrid shutdown continues if its caller abandons the command. A failed
+`SubscribableDB.close()` still rejects new operations and allows cleanup retries.
+`db.subscribe` receives `readonly Op[]`: leave shared operations and rows
+unchanged, and copy any values you need to edit. Copying the array alone does
+not copy its operations or rows.
 
 ## Undo And Redo
 

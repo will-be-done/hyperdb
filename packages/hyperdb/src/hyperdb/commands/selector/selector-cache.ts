@@ -252,7 +252,7 @@ export const traceSelectorCacheHit = (
 
 export const rerunSelectorCacheEntry = <TReturn>(
   entry: SelectorCacheEntry<TReturn>,
-  ops?: Op[],
+  ops?: readonly Op[],
 ) => {
   entry.currentResult = runSelectorGeneratorSync(
     entry.db,

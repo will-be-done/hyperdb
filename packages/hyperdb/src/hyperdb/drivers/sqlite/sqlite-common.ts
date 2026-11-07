@@ -59,22 +59,16 @@ export const SQLITE_WRITE_SAVEPOINT = "hyperdb_write";
 
 /**
  * Whether a transactional write needs a savepoint to apply all-or-nothing.
- * One SQLite statement is already atomic; upserts (delete + insert) and
- * writes split into several chunks are not. A handler may catch a failed
- * write and keep going, so a half-applied write must not reach commit.
+ * A trigger using RAISE(FAIL) can leave earlier rows from an insert applied,
+ * even within a single statement. Upserts and chunked deletes also need a
+ * savepoint so a handler cannot catch a failure and commit a partial write.
  */
 export function sqliteWriteNeedsSavepoint(
   kind: "insert" | "upsert" | "delete",
-  tableDef: TableDefinition,
   count: number,
 ): boolean {
   if (count === 0) return false;
-  if (kind === "upsert") return true;
-  const chunkSize =
-    kind === "insert"
-      ? getSqliteInsertChunkSize(tableDef)
-      : getSqliteDeleteChunkSize();
-  return count > chunkSize;
+  return kind !== "delete" || count > getSqliteDeleteChunkSize();
 }
 
 function isSchemalessTable(tableDef: TableDefinition): boolean {

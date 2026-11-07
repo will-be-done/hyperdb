@@ -377,11 +377,16 @@ await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
   background persistence and every flush has settled. A crashed runtime still
   closes without rethrowing the crash. `PreloadedHybridDB` then releases its
   preloaded rows and indexes.
+- `HybridDB` also waits for direct inserts, upserts, and deletes that have
+  started updating the primary and cache. It rejects writes still queued
+  behind a transaction and does not wait for open, uncommitted transactions.
 - The runtime then closes its wrapped databases and releases driver resources.
   `IdbDriver` closes its IndexedDB connection; the in-memory driver drops its
   data. SQLite handles you passed to `SqlDriver` or `AsyncSqlDriver` stay open,
   because you own them.
-- `SubscribableDB` removes its subscribers and mutation hooks.
+- `SubscribableDB` refuses new operations and removes its subscribers and
+  mutation hooks even if the wrapped database fails to close. Resource cleanup
+  can still be retried.
 - The `DB` is removed from devtools discovery.
 
 Afterwards every read, write, or transaction throws a `HyperDBError` with code
@@ -389,6 +394,8 @@ Afterwards every read, write, or transaction throws a `HyperDBError` with code
 runtime has started closing. Concurrent `close()` calls share one close and
 settle together. If a driver fails to close, `close()` rejects for every caller
 and can be called again.
+Once hybrid shutdown starts, it continues even if the calling generator is
+abandoned; another caller waits for the same shutdown to finish.
 
 ## Executing commands
 

@@ -351,12 +351,15 @@ for lower-level needs:
 
 ```ts
 const unsub = db.subscribe((ops, traits, revision) => {
-  // ops: InsertOp[] | UpsertOp[] | DeleteOp[] for this commit
+  // ops: readonly Op[] for this commit
 });
 ```
 
-Every subscriber of a commit receives the same frozen `ops` array. Copy it
-(`[...ops]`) before changing it.
+Every subscriber of a commit receives the same frozen `ops` array and frozen
+operation objects. Leave shared operations and their rows unchanged. Copy the
+array (`[...ops]`) if you need to reorder or filter it in place; this shallow
+copy still shares the operations and rows. Copy any operation, row, or nested
+value you need to edit as well.
 
 ## Practical guidance
 

@@ -283,6 +283,12 @@ When a read or write fails, its error is raised at the handler's `yield*`, so
 ordinary `try` / `catch` / `finally` works inside actions and selectors. An
 error the handler does not catch rolls the transaction back.
 
+If a sync helper reaches asynchronous storage, the run fails with
+`ASYNC_IN_SYNC_EXECUTION`, even if a handler or driver catches it or throws a
+replacement. The action rolls back and subscribers are not notified. An async
+action can still catch a rejected promise from a separate sync call and commit
+its fallback work.
+
 ```ts
 import { DuplicateIdError, insert, upsert, v } from "@will-be-done/hyperdb";
 

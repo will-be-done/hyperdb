@@ -7,6 +7,7 @@ import {
 import { unwrap } from "../commands/async";
 import { execAsync, execSync } from "../core/executor";
 import { isHyperDBError } from "../core/errors";
+import type { Row } from "../core/primitives";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
@@ -140,6 +141,120 @@ describe("close()", () => {
     expect(hybrid.isCrashed).toBe(true);
     expect(primary.isClosed).toBe(true);
     expectClosed(() => execSync(hybrid.beginTx()));
+  });
+
+  it.each(["insert", "upsert", "delete"] as const)(
+    "waits for an in-flight root %s to update both primary and cache",
+    async (method) => {
+      const primaryDriver = new BptreeInmemDriver();
+      const cacheDriver = new BptreeInmemDriver();
+      const primary = new DB(primaryDriver, { register: false });
+      const cache = new DB(cacheDriver, { register: false });
+      const hybrid = new HybridDB(primary, cache);
+      await execAsync(hybrid.loadTables([rowsTable]));
+      await execAsync(hybrid.insert(rowsTable, [{ id: "r1" }]));
+
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let started!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const events: string[] = [];
+      const writePrimary = primaryDriver[method].bind(primaryDriver);
+      vi.spyOn(primaryDriver, method).mockImplementation(function* (
+        tableName: string,
+        values: Row[] | string[],
+      ) {
+        // The primary write completes before its caller resumes.
+        yield* writePrimary(tableName, values as never);
+        started();
+        yield* unwrap(gate);
+      });
+      const writeCache = cacheDriver[method].bind(cacheDriver);
+      vi.spyOn(cacheDriver, method).mockImplementation(function* (
+        tableName: string,
+        values: Row[] | string[],
+      ) {
+        yield* writeCache(tableName, values as never);
+        events.push("cache updated");
+      });
+      const closePrimary = vi.spyOn(primary, "close");
+      const closeCache = vi.spyOn(cache, "close");
+
+      const writing = execAsync(
+        method === "delete"
+          ? hybrid.delete(rowsTable, ["r1"])
+          : hybrid[method](rowsTable, [{ id: "r2" }]),
+      );
+      await pending;
+      const closing = execAsync(
+        hybrid.withTraits({ type: "closing" }).close!(),
+      );
+      const lateWrite = execAsync(hybrid.insert(rowsTable, [{ id: "late" }]));
+      await expect(lateWrite).rejects.toSatisfy((error) =>
+        isHyperDBError(error, "DB_CLOSED"),
+      );
+      // Assert before releasing the primary so this cannot pass by timing.
+      expect(closePrimary).not.toHaveBeenCalled();
+      expect(closeCache).not.toHaveBeenCalled();
+      release();
+      await writing;
+      await closing;
+
+      expect(events).toEqual(["cache updated"]);
+      expect(primary.isClosed).toBe(true);
+      expect(cache.isClosed).toBe(true);
+    },
+  );
+
+  it("closes without waiting for an open transaction or a queued root write", async () => {
+    const hybrid = new HybridDB(
+      new DB(new BptreeInmemDriver(), { register: false }),
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    const tx = await execAsync(hybrid.beginTx("readwrite"));
+    const queued = execAsync(hybrid.insert(rowsTable, [{ id: "r1" }]));
+
+    await execAsync(hybrid.close());
+    await execAsync(tx.rollback());
+
+    await expect(queued).rejects.toSatisfy((error) =>
+      isHyperDBError(error, "DB_CLOSED"),
+    );
+  });
+
+  it("finishes shutdown when an in-flight root write fails", async () => {
+    const driver = new BptreeInmemDriver();
+    const hybrid = new HybridDB(
+      new DB(driver, { register: false }),
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    vi.spyOn(driver, "insert").mockImplementationOnce(function* () {
+      started();
+      yield* unwrap(gate);
+      throw new Error("write failed");
+    });
+    const writing = execAsync(hybrid.insert(rowsTable, [{ id: "r1" }]));
+    await pending;
+    const closing = execAsync(hybrid.close());
+    const failed = expect(writing).rejects.toThrow("write failed");
+    release();
+    await failed;
+    await closing;
+    expect(hybrid.isClosed).toBe(true);
   });
 
   it("closes PreloadedHybridDB and its primary", async () => {
@@ -290,8 +405,9 @@ describe("close()", () => {
     const primary = new DB(primaryDriver, { register: false });
     const db = new PreloadedHybridDB(primary);
     await execAsync(db.loadTables([rowsTable]));
+    const closeError = new Error("busy");
     vi.spyOn(primaryDriver, "close").mockImplementationOnce(() => {
-      throw new Error("busy");
+      throw closeError;
     });
 
     const write = asyncDispatch(db, insertRow({ id: "r1" }));
@@ -307,6 +423,9 @@ describe("close()", () => {
       "rejected",
       "fulfilled",
     ]);
+    for (const result of results.slice(0, 2)) {
+      if (result.status === "rejected") expect(result.reason).toBe(closeError);
+    }
     await execAsync(db.close());
     expect(primary.isClosed).toBe(true);
   });
@@ -343,6 +462,43 @@ describe("close()", () => {
 
     expect(() => execSync(db.close())).toThrow("busy");
     expect(db.subscribers).toHaveLength(0);
+    expect(db.isClosed).toBe(true);
+    expectClosed(() => execSync(db.beginTx()));
+    expectClosed(() => execSync(db.withTraits({ type: "retry" }).beginTx()));
+    execSync(db.close());
+    expect(db.db.isClosed).toBe(true);
+  });
+
+  it("keeps an abandoned asynchronous resource close owned until it settles", async () => {
+    const primary = new DB(new BptreeInmemDriver(), { register: false });
+    const hybrid = new HybridDB(
+      primary,
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const close = primary.close.bind(primary);
+    const closingPrimary = vi
+      .spyOn(primary, "close")
+      .mockImplementationOnce(function* () {
+        yield* unwrap(gate);
+        yield* close();
+      });
+    const abandoned = hybrid.close();
+    abandoned.next();
+    const waiting = execAsync(hybrid.close());
+    abandoned.return(undefined);
+    await Promise.resolve();
+    expect(closingPrimary).toHaveBeenCalledOnce();
+    expect(primary.isClosed).toBe(false);
+    release();
+    await waiting;
+    expect(closingPrimary).toHaveBeenCalledOnce();
+    expect(primary.isClosed).toBe(true);
+    expect(hybrid.isClosed).toBe(true);
   });
 
   it("rejects cached selector reads after close", () => {

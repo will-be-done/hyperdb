@@ -1,7 +1,7 @@
 import type { DBCmd } from "../commands/async";
 import { unwrap } from "../commands/async";
 import type { HyperDB } from "../core/contracts";
-import { execAsync } from "../core/executor";
+import { execAsync, execMaybeAsync } from "../core/executor";
 import type { Row } from "../core/primitives";
 import type { TableDefinition } from "../schema/table";
 import { HyperDBError } from "../core/errors";
@@ -179,8 +179,9 @@ export class HybridPersistenceQueue {
   }
 
   /**
-   * Registers a commit that passed the gate but has not enqueued its batch
-   * yet, so close() waits for it. Returns the release function.
+   * Registers a commit that passed the gate but has not enqueued its batch,
+   * or a root write updating the primary and cache, so close() waits for it.
+   * Returns the release function.
    */
   acceptCommit(): () => void {
     this.acceptedCommits++;
@@ -194,8 +195,8 @@ export class HybridPersistenceQueue {
   }
 
   /**
-   * Waits until every accepted commit has enqueued and every batch settled,
-   * ignoring a crash; the owner is shutting down.
+   * Waits until every accepted commit has enqueued, every root write has
+   * finished, and every batch settled, ignoring a crash during shutdown.
    */
   *settle(): Generator<DBCmd, void> {
     while (this.acceptedCommits > 0 || this.pending.size > 0) {
@@ -208,11 +209,14 @@ export class HybridPersistenceQueue {
   /**
    * Runs the owner's close once: refuses new commits, settles accepted ones,
    * then calls `closeOwner`. Concurrent calls wait for the same close. After a
-   * failure the DB stays closing, and close() can be retried.
+   * failure the DB stays closing, and close() can be retried. Once started,
+   * shutdown continues even if the calling generator is abandoned.
    */
   *close(closeOwner: () => Generator<DBCmd, void>): Generator<DBCmd, void> {
-    // A waiter whose close was abandoned (not failed) takes over the close.
-    while (this.closing) yield* unwrap(this.closing);
+    if (this.closing) {
+      yield* unwrap(this.closing);
+      return;
+    }
     if (this.isClosed) return;
     let resolveClosing!: () => void;
     let rejectClosing!: (error: unknown) => void;
@@ -224,23 +228,34 @@ export class HybridPersistenceQueue {
     closing.catch(() => {});
     this.closing = closing;
     this.isClosing = true;
-    let settled = false;
-    try {
-      yield* this.settle();
-      yield* closeOwner();
+    const succeed = () => {
       this.isClosed = true;
-      settled = true;
-      resolveClosing();
-    } catch (error) {
-      settled = true;
-      rejectClosing(error);
-      throw error;
-    } finally {
       this.closing = undefined;
-      // The caller abandoned this close (generator return()); wake the waiting
-      // callers so one of them runs the close instead of hanging.
-      if (!settled) resolveClosing();
+      resolveClosing();
+    };
+    const fail = (error: unknown) => {
+      this.closing = undefined;
+      rejectClosing(error);
+    };
+    const settle = this.settle.bind(this);
+    let result: void | Promise<void>;
+    try {
+      // Drive shutdown independently: returning this generator cannot cancel
+      // an in-flight resource close or let a waiter start it a second time.
+      result = execMaybeAsync(
+        (function* () {
+          yield* settle();
+          yield* closeOwner();
+        })(),
+      );
+    } catch (error) {
+      fail(error);
+      throw error;
     }
+    if (result) {
+      result.then(succeed, fail);
+      yield* unwrap(closing);
+    } else succeed();
   }
 
   private notifyIfIdle(): void {

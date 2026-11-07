@@ -1,6 +1,42 @@
 import { isNoopCmd, isUnwrapCmd, type DBCmd } from "../commands/async";
 import { HyperDBError } from "./errors";
 
+const syncErrorHandler = Symbol("syncErrorHandler");
+type ObservedCommand = DBCmd & {
+  [syncErrorHandler]?: (error: HyperDBError) => void;
+};
+
+/** @internal Observe executor aborts before a driver can catch them. */
+export function* observeSyncExecution<T>(
+  cmd: Generator<DBCmd, T, unknown>,
+  onError: (error: HyperDBError) => void,
+): Generator<DBCmd, T, unknown> {
+  const observe = (
+    result: IteratorResult<DBCmd, T>,
+  ): IteratorResult<DBCmd, T> => {
+    if (result.done || !isUnwrapCmd(result.value)) return result;
+    const previous = (result.value as ObservedCommand)[syncErrorHandler];
+    const value: ObservedCommand = {
+      ...result.value,
+      [syncErrorHandler]: (error) => {
+        previous?.(error);
+        onError(error);
+      },
+    };
+    return { done: false, value };
+  };
+  // Delegate all three iterator methods so abandonment still runs cleanup.
+  return yield* {
+    [Symbol.iterator]() {
+      return {
+        next: (value?: unknown) => observe(cmd.next(value)),
+        throw: (error: unknown) => observe(cmd.throw(error)),
+        return: (value: T) => observe(cmd.return(value)),
+      };
+    },
+  };
+}
+
 function unexpectedCmdError(cmd: unknown): Error {
   return new HyperDBError(
     "UNSUPPORTED_COMMAND",
@@ -35,7 +71,13 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
         "ASYNC_IN_SYNC_EXECUTION",
         "Cannot execute async commands",
       );
-      result = cmd.throw(asyncError);
+      (result.value as ObservedCommand)[syncErrorHandler]?.(asyncError);
+      try {
+        result = cmd.throw(asyncError);
+      } catch {
+        // A replacement thrown during cleanup cannot hide the sync abort.
+        throw asyncError;
+      }
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {

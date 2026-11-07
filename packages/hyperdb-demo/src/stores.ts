@@ -229,7 +229,7 @@ async function hydrate(persistentDB: HyperDB, memDB: SubscribableDB) {
   }
 }
 
-function groupConsecutiveOps(ops: Op[]): Op[][] {
+function groupConsecutiveOps(ops: readonly Op[]): Op[][] {
   const runs: Op[][] = [];
   for (const op of ops) {
     const last = runs.at(-1);
@@ -266,7 +266,7 @@ const loadIntoMemory = action({
 
 const persistOps = action({
   name: "persist:batch",
-  args: { ops: v.pass<Op[]>() },
+  args: { ops: v.pass<readonly Op[]>() },
   handler: function* persistOps({ ops }) {
     for (const run of groupConsecutiveOps(ops)) {
       const { type, table } = run[0];
@@ -295,7 +295,7 @@ function startPersisting(
   memDB: SubscribableDB,
   monitor: PersistenceMonitor,
 ) {
-  const pending: Op[][] = [];
+  const pending: (readonly Op[])[] = [];
   let draining = false;
 
   const syncQueue = () => {
@@ -304,7 +304,7 @@ function startPersisting(
     monitor.update({ pendingBatches: pending.length, pendingOps, draining });
   };
 
-  async function persistBatch(ops: Op[]) {
+  async function persistBatch(ops: readonly Op[]) {
     const startedAt = performance.now();
     await asyncDispatch(persistentDB, persistOps({ ops }));
 

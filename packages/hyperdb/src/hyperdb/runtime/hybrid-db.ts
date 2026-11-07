@@ -175,6 +175,23 @@ function* withHybridLock<T>(
   }
 }
 
+// Register only after acquiring the lock: shutdown must wait for writes that
+// started, but must not wait for an open transaction holding the lock.
+function* withHybridRootWrite(
+  state: HybridDBState,
+  run: () => Generator<DBCmd, void>,
+): Generator<DBCmd, void> {
+  yield* withHybridLock(state, function* () {
+    state.persistence.throwIfCrashed();
+    const release = state.persistence.acceptCommit();
+    try {
+      yield* run();
+    } finally {
+      release();
+    }
+  });
+}
+
 function pendingWriteMatchReason(
   write: HybridPendingWrite,
   batchId: number,
@@ -430,7 +447,7 @@ export class HybridDB implements HyperDB {
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
-    yield* withHybridLock(this.state, function* () {
+    yield* withHybridRootWrite(this.state, function* () {
       yield* withDriverTraceContextTrait(primary, traceContext).insert(
         table,
         records,
@@ -450,7 +467,7 @@ export class HybridDB implements HyperDB {
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
-    yield* withHybridLock(this.state, function* () {
+    yield* withHybridRootWrite(this.state, function* () {
       yield* withDriverTraceContextTrait(primary, traceContext).upsert(
         table,
         records,
@@ -470,7 +487,7 @@ export class HybridDB implements HyperDB {
     const { cache, primary } = this;
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
-    yield* withHybridLock(this.state, function* () {
+    yield* withHybridRootWrite(this.state, function* () {
       yield* withDriverTraceContextTrait(primary, traceContext).delete(
         table,
         ids,

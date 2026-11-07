@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Op } from "../../runtime/ops";
 import { defineTable } from "../../schema/table";
 import { v } from "../../schema/values";
@@ -55,6 +55,28 @@ describe("isNeedToRerunRange", () => {
     expect(isNeedToRerunRange(cmds, ops)).toBe(false);
     ops[0] = { type: "insert", table, newValue: { id: "a", group: "g1" } };
     expect(isNeedToRerunRange(cmds, ops)).toBe(true);
+    ops[0] = { type: "insert", table, newValue: { id: "a", group: "g2" } };
+    expect(isNeedToRerunRange(cmds, ops)).toBe(false);
+    ops[0] = { type: "insert", table, newValue: { id: "a", group: "g1" } };
+    expect(isNeedToRerunRange(cmds, ops)).toBe(true);
+  });
+
+  it("does not reuse replaced or edited payloads from a frozen array", () => {
+    const table = defineRows();
+    const cmds = [rangeCmd(table)];
+    const original = { id: "a", group: "g1" };
+    const op = { type: "insert" as const, table, newValue: original };
+    const ops = Object.freeze([op]);
+    expect(isNeedToRerunRange(cmds, ops)).toBe(true);
+    op.newValue = { id: "a", group: "g2" };
+    expect(isNeedToRerunRange(cmds, ops)).toBe(false);
+    op.newValue = original;
+    expect(isNeedToRerunRange(cmds, ops)).toBe(true);
+    Object.freeze(op);
+    original.group = "g2";
+    expect(isNeedToRerunRange(cmds, ops)).toBe(false);
+    original.group = "g1";
+    expect(isNeedToRerunRange(cmds, ops)).toBe(true);
   });
 
   it("builds row tuples per index when selectors share a commit", () => {
@@ -74,18 +96,23 @@ describe("isNeedToRerunRange", () => {
     const cmd = (query: typeof byGroup | typeof byNameGroup) =>
       query[Symbol.iterator]().next().value as SelectRangeCmd;
     // Frozen like the arrays SubscribableDB notifies, so the grouping is shared.
+    const tableReads = vi.fn(() => table);
     const ops: Op[] = [
-      {
+      Object.freeze({
         type: "insert",
-        table,
-        newValue: { id: "a", group: "g2", name: "n1" },
-      },
+        get table() {
+          return tableReads();
+        },
+        newValue: Object.freeze({ id: "a", group: "g2", name: "n1" }),
+      }),
     ];
     Object.freeze(ops);
 
     expect(isNeedToRerunRange([cmd(byGroup)], ops)).toBe(false);
+    const readsAfterGrouping = tableReads.mock.calls.length;
     expect(isNeedToRerunRange([cmd(byNameGroup)], ops)).toBe(true);
     expect(isNeedToRerunRange([cmd(byGroup)], ops)).toBe(false);
+    expect(tableReads).toHaveBeenCalledTimes(readsAfterGrouping);
   });
 
   it("checks both sides of an upsert and the old row of a delete", () => {

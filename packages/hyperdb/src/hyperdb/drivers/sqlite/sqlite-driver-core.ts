@@ -418,7 +418,7 @@ class SqliteDriverTx implements DBDriverTX {
       if (this.readonly) throw readonlyTransaction();
       const tableDef = getTableDefinition(this.tableDefinitions, tableName);
       const run = () => writeRows(this.conn, kind, tableDef, values);
-      if (sqliteWriteNeedsSavepoint(kind, tableDef, values.length)) {
+      if (sqliteWriteNeedsSavepoint(kind, values.length)) {
         yield* inWriteSavepoint(this.conn, run, this.poison);
       } else {
         yield* run();

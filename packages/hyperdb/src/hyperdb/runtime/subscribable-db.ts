@@ -58,11 +58,15 @@ function rowsAsStored(
   return rows;
 }
 
-type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
+type Subscriber = (
+  op: readonly Op[],
+  traits: Trait[],
+  revision: number,
+) => void;
 
 const notifySubscribers = (
   subscribers: Subscriber[],
-  operations: Op[],
+  operations: readonly Op[],
   traits: Trait[],
   revision: number,
 ) => {
@@ -630,7 +634,7 @@ export class SubscribableDBTx implements HyperDBTx {
     // Every subscriber shares this array, so none may change it for the rest.
     notifySubscribers(
       this.subDb.subscribers,
-      Object.freeze(this.operations) as Op[],
+      Object.freeze(this.operations.map((op) => Object.freeze(op))),
       traits,
       revision,
     );
@@ -763,9 +767,10 @@ export class SubscribableDB implements HyperDB {
   }
 
   *close(): Generator<DBCmd, void> {
+    // Closing is terminal for new operations, even if resource cleanup fails.
+    this.state.closed = true;
     try {
       if (this.db.close) yield* this.db.close();
-      this.state.closed = true;
     } finally {
       // Release listeners even if the wrapped DB failed to close.
       this.clearSubscriptions();
