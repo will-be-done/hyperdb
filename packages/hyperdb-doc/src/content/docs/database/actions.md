@@ -147,8 +147,9 @@ Inside React use [`useSyncDispatch` / `useAsyncDispatch`](/integrations/react/),
 which bind the dispatcher to the database from context.
 
 `asyncDispatch` returns a promise, but runs cached operations and notifies
-subscribers before returning. Execution suspends for database I/O, a busy
-transaction lock, or an unresolved promise yielded by the action.
+subscribers before returning. Execution suspends only for database I/O or a
+busy transaction lock. Handlers cannot await other promises: fetch data or
+generate ids outside the action and pass them in as args.
 
 `dispatchMaybeAsync` runs the same transaction but returns the result directly
 when nothing had to wait, and a promise only when a step suspended. Use it when

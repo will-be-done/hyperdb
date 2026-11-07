@@ -433,8 +433,9 @@ from the primary and then reused by reads through every index. Do not add a
 `byIds` B-tree or call `preloadTables` for this runtime. Reads hydrate missing
 rows asynchronously. Transactions publish copy-on-write index and row changes
 before queued persistence. Cached `asyncDispatch` work runs before the call
-returns its promise. Execution suspends for database I/O, a busy transaction
-lock, or an unresolved promise yielded by the action.
+returns its promise. Execution suspends only for database I/O or a busy
+transaction lock; handlers cannot await other promises, so fetch outside the
+action and pass results in as args.
 Both hybrid runtimes allow at most 100 unsettled persistence batches. At
 capacity, a transaction rejects before publishing memory changes; await
 `waitForPersistence()` and retry in a new transaction. A rejected HybridDB commit
