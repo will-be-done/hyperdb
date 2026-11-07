@@ -381,6 +381,14 @@ function validateHashBounds(
 }
 
 function toIdbSortKey(sortKey: Uint8Array): ArrayBuffer {
+  // Encoded keys own their whole buffer, so it can be used without a copy.
+  if (
+    sortKey.buffer instanceof ArrayBuffer &&
+    sortKey.byteOffset === 0 &&
+    sortKey.byteLength === sortKey.buffer.byteLength
+  ) {
+    return sortKey.buffer;
+  }
   return Uint8Array.from(sortKey).buffer;
 }
 

@@ -284,6 +284,74 @@ describe("SqliteSortKey", () => {
     expect(encoded.length).toBeLessThan(value.length * 2);
   });
 
+  // Sort keys are persisted by SQLite and IndexedDB, so the bytes themselves
+  // must not change, not just their order.
+  it("keeps the persisted byte format", () => {
+    const cases: [mode: "scan" | "stored", tuple: unknown[], hex: string][] = [
+      ["scan", [MIN, MAX], "10ff"],
+      ["scan", [null], "30"],
+      [
+        "scan",
+        [-1n, 0n, 12345678901234567890n],
+        "40303939393939393939393939393939383840313030303030303030303030303030313040313030303030303030303030303032303132333435363738393031323334353637383930",
+      ],
+      [
+        "scan",
+        [-0, -1.5, 1, true],
+        "508000000000000000504007ffffffffffff50bff000000000000050bff0000000000000",
+      ],
+      [
+        "scan",
+        ["a", "\u0000", "߿", "￿", "𐀀"],
+        "70620070010070e0a0800070f09080800070eda081edb08100",
+      ],
+      ["scan", [new Uint8Array([0, 255])], "8001c48000"],
+      [
+        "scan",
+        ["project-1", "todo", 42, "task-42"],
+        "707173706b6664752e320070757065700050c045000000000000707562746c2e353300",
+      ],
+      ["stored", [undefined, null, false], "20306000"],
+      [
+        "stored",
+        [{ $hyperdbType: "bigint", value: "-2" }],
+        "403039393939393939393939393939393837",
+      ],
+      ["stored", [{ $hyperdbType: "bytes", value: [1, 2] }], "80020300"],
+      [
+        "stored",
+        [[1, "a"], { b: null, a: [true] }],
+        "9050bff000000000000070620000a070620070630000906001003000",
+      ],
+    ];
+
+    for (const [mode, tuple, hex] of cases) {
+      const encoded = encodeSqliteSortKeyTuple(tuple, mode);
+      expect(
+        Array.from(encoded, (byte) => byte.toString(16).padStart(2, "0")).join(
+          "",
+        ),
+      ).toBe(hex);
+    }
+  });
+
+  it("encodes a small key correctly after a large one", () => {
+    const large = encodeSqliteSortKeyTuple(["x".repeat(100_000)], "scan");
+    expect(large.length).toBe(100_002);
+    expect(encodeSqliteSortKeyTuple(["a"], "scan")).toEqual(
+      Uint8Array.from([0x70, 0x62, 0x00]),
+    );
+  });
+
+  it("does not let a failed encode leak into the next key", () => {
+    expect(() =>
+      encodeSqliteSortKeyTuple(["prefix", Symbol("bad")], "stored"),
+    ).toThrow();
+    expect(encodeSqliteSortKeyTuple(["a"], "stored")).toEqual(
+      Uint8Array.from([0x70, 0x62, 0x00]),
+    );
+  });
+
   describe("getSqliteSortKeyTuple", () => {
     it("returns index values in column order", () => {
       expect(
