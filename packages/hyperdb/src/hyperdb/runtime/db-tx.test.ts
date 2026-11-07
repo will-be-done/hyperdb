@@ -18,6 +18,18 @@ const tasksTable = defineTable("tasks", {
   .index("byTitle", ["title"], { type: "hash" })
   .index("byTitles", ["title"]);
 
+type OutsideTxBehavior = "rejects" | "waits" | "committed-snapshot";
+
+const OUTSIDE_TX_BEHAVIOR: Record<
+  string,
+  { read: OutsideTxBehavior; beginTx: OutsideTxBehavior }
+> = {
+  SqlDriver: { read: "rejects", beginTx: "rejects" },
+  "AsyncSqlDriver (Turso WASM)": { read: "waits", beginTx: "waits" },
+  BptreeInmemDriver: { read: "committed-snapshot", beginTx: "rejects" },
+  IdbDriver: { read: "waits", beginTx: "waits" },
+};
+
 describe("Database Transactions", async () => {
   for (const [name, createDriver] of createDriverFactories()) {
     describe(`${name}`, () => {
@@ -62,7 +74,7 @@ describe("Database Transactions", async () => {
         expect(hashData.length).toBe(0);
       });
 
-      it.skip("transaction commit makes changes visible", async () => {
+      it("transaction commit makes changes visible", async () => {
         const db = new AsyncDB(new DB(await createDriver()));
         await db.loadTables([tasksTable]);
         const tx = await db.beginTx();
@@ -74,24 +86,20 @@ describe("Database Transactions", async () => {
 
         await tx.insert(tasksTable, [task]);
 
-        // Changes should not be visible in main db before commit
-        const beforeCommit = Array.from(
-          await db.intervalScan(tasksTable, "byId", [
+        // The transaction reads its own uncommitted write.
+        expect(
+          await tx.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-commit" }] },
           ]),
-        );
-        expect(beforeCommit.length).toBe(0);
+        ).toEqual([task]);
 
         await tx.commit();
 
-        // Changes should be visible in main db after commit
-        const afterCommit = Array.from(
+        expect(
           await db.intervalScan(tasksTable, "byId", [
             { eq: [{ col: "id", val: "task-commit" }] },
           ]),
-        );
-        expect(afterCommit.length).toBe(1);
-        expect(afterCommit[0]).toEqual(task);
+        ).toEqual([task]);
       });
 
       it("transaction rollback discards changes", async () => {
@@ -139,45 +147,74 @@ describe("Database Transactions", async () => {
         expect(originalTaskResult[0]).toEqual(initialTask);
       });
 
-      it.skip("transaction isolation - reads don't see uncommitted changes", async () => {
+      // Drivers run one transaction at a time and never expose its uncommitted
+      // writes. What happens to outside work while it is open differs, and
+      // this pins it: sync drivers reject, async SQLite and IndexedDB wait
+      // for the commit, and the in-memory driver reads the last committed
+      // state immediately.
+      it("keeps uncommitted writes invisible outside the transaction", async () => {
+        const expected = OUTSIDE_TX_BEHAVIOR[name];
+        if (!expected) throw new Error(`No isolation expectation for ${name}`);
+
         const db = new AsyncDB(new DB(await createDriver()));
         await db.loadTables([tasksTable]);
+        await db.insert(tasksTable, [{ id: "committed", title: "Shared" }]);
 
-        const task1: Task = {
-          id: "task-isolation-1",
-          title: "Isolation Test 1",
-        };
+        const tx = await db.beginTx();
+        await tx.insert(tasksTable, [{ id: "pending", title: "Shared" }]);
 
-        const tx1 = await db.beginTx();
-        await tx1.insert(tasksTable, [task1]);
+        const events: string[] = [];
+        const readShared = (target: AsyncDB | AsyncDBTx) =>
+          target
+            .intervalScan(tasksTable, "byTitle", [
+              { eq: [{ col: "title", val: "Shared" }] },
+            ])
+            .then((rows) => rows.map((row) => row.id).sort());
+        const track = (label: string, run: Promise<string[]>) =>
+          run.then(
+            (ids) => {
+              events.push(label);
+              return { ids };
+            },
+            (error: Error) => {
+              events.push(label);
+              return { error: error.message };
+            },
+          );
 
-        // Another transaction should not see uncommitted changes
-        const tx2 = await db.beginTx();
-        const tx2Result = Array.from(
-          await tx2.intervalScan(tasksTable, "byId", [
-            { eq: [{ col: "id", val: "task-isolation-1" }] },
-          ]),
+        const outsideRead = track("read", readShared(db));
+        const secondTx = track(
+          "tx2",
+          db.beginTx().then(async (tx2) => {
+            const ids = await readShared(tx2);
+            await tx2.rollback();
+            return ids;
+          }),
         );
-        expect(tx2Result.length).toBe(0);
 
-        // Main db should not see uncommitted changes
-        const dbResult = Array.from(
-          await db.intervalScan(tasksTable, "byId", [
-            { eq: [{ col: "id", val: "task-isolation-1" }] },
-          ]),
-        );
-        expect(dbResult.length).toBe(0);
+        expect(await readShared(tx)).toEqual(["committed", "pending"]);
+        await tx.commit();
+        events.push("commit");
 
-        await tx1.commit();
-        await tx2.rollback();
+        const busy = { error: "can't run while transaction is in progress" };
+        const outcome = (behavior: OutsideTxBehavior) =>
+          behavior === "rejects"
+            ? busy
+            : behavior === "waits"
+              ? { ids: ["committed", "pending"] }
+              : { ids: ["committed"] };
 
-        // Now the committed changes should be visible
-        const finalResult = Array.from(
-          await db.intervalScan(tasksTable, "byId", [
-            { eq: [{ col: "id", val: "task-isolation-1" }] },
-          ]),
-        );
-        expect(finalResult.length).toBe(1);
+        expect(await outsideRead).toEqual(outcome(expected.read));
+        expect(await secondTx).toEqual(outcome(expected.beginTx));
+        for (const [label, behavior] of [
+          ["read", expected.read],
+          ["tx2", expected.beginTx],
+        ] as const) {
+          // Waiting work finishes after the commit; the rest before it.
+          expect(events.indexOf(label) > events.indexOf("commit")).toBe(
+            behavior === "waits",
+          );
+        }
       });
 
       it("transaction with multiple operations", async () => {
@@ -1125,7 +1162,7 @@ describe("Database Transactions", async () => {
         expect(postCommitDuplicates.length).toBe(3);
       });
 
-      it.skip("hash index consistency between transaction and direct operations", async () => {
+      it("hash index consistency between transaction and direct operations", async () => {
         const db = new AsyncDB(new DB(await createDriver()));
         await db.loadTables([tasksTable]);
 
@@ -1145,42 +1182,29 @@ describe("Database Transactions", async () => {
         await tx.insert(tasksTable, txTasks);
 
         // Query within transaction should see both direct and tx operations
-        const txResults = Array.from(
-          await tx.intervalScan(tasksTable, "byTitle", [
-            { eq: [{ col: "title", val: "Direct" }] },
-          ]),
-        );
-        expect(txResults.length).toBe(3); // 2 direct + 1 tx
+        const txResults = await tx.intervalScan(tasksTable, "byTitle", [
+          { eq: [{ col: "title", val: "Direct" }] },
+        ]);
         expect(txResults.map((t) => t.id).sort()).toEqual([
           "direct-1",
           "direct-2",
           "tx-1",
         ]);
 
-        // Query outside transaction should only see direct operations
-        const directResults = Array.from(
-          await db.intervalScan(tasksTable, "byTitle", [
-            { eq: [{ col: "title", val: "Direct" }] },
-          ]),
-        );
-        expect(directResults.length).toBe(2);
-        expect(directResults.map((t) => t.id).sort()).toEqual([
-          "direct-1",
-          "direct-2",
-        ]);
-
         await tx.commit();
 
         // After commit, all should be visible
-        const finalResults = Array.from(
-          await db.intervalScan(tasksTable, "byTitle", [
-            { eq: [{ col: "title", val: "Direct" }] },
-          ]),
-        );
-        expect(finalResults.length).toBe(3);
+        const finalResults = await db.intervalScan(tasksTable, "byTitle", [
+          { eq: [{ col: "title", val: "Direct" }] },
+        ]);
+        expect(finalResults.map((t) => t.id).sort()).toEqual([
+          "direct-1",
+          "direct-2",
+          "tx-1",
+        ]);
       });
 
-      it.skip("hash index upsert and delete with multiple values", async () => {
+      it("hash index upsert and delete with multiple values", async () => {
         const db = new AsyncDB(new DB(await createDriver()));
         await db.loadTables([tasksTable]);
 
