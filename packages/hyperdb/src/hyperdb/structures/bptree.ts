@@ -62,7 +62,9 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
   leafValues: ReturnType<typeof orderedArray<{ key: K; value: V }, K>>;
 
   /**
-   * minSize must be less than maxSize / 2.
+   * minSize must be an integer from 2 to maxSize / 2 (inclusive). Deletion
+   * relies on every non-root node keeping at least two entries, so a node
+   * never empties and always has a sibling to merge with.
    */
   constructor(
     minSize: number,
@@ -77,7 +79,9 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       this.compareKey,
     );
 
-    if (minSize > maxSize / 2) throw new Error("Invalid tree size.");
+    if (!Number.isInteger(minSize) || minSize < 2 || minSize > maxSize / 2) {
+      throw new Error("Invalid tree size.");
+    }
   }
 
   fork(): InMemoryBinaryPlusTree<K, V> {
@@ -707,13 +711,12 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
 
       const size =
         node.leaf === true ? node.values.length : node.children.length;
-      // console.log("minkey", node, node.leaf);
-      // TODO: doesn't handle when leaf has values.length === 0
-      const minKey =
-        node.leaf === true ? node.values[0].key : node.children[0].minKey;
 
       // No need to merge but we might need to update the minKey in the parent
       if (size >= this.minSize) {
+        // minSize >= 2, so the node is not empty here.
+        const minKey =
+          node.leaf === true ? node.values[0].key : node.children[0].minKey;
         const parentItem = parent.children[parentIndex];
         // No need to recusively update the left-most branch.
         if (parentItem.minKey === null) return;

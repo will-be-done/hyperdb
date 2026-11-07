@@ -601,6 +601,60 @@ describe("InMemoryBinaryPlusTree", () => {
     }
   });
 
+  it("rejects sizes that cannot keep non-root nodes non-empty and balanced", () => {
+    assert.throws(() => new InMemoryBinaryPlusTree(0, 4), "Invalid tree size.");
+    assert.throws(() => new InMemoryBinaryPlusTree(1, 4), "Invalid tree size.");
+    assert.throws(() => new InMemoryBinaryPlusTree(3, 4), "Invalid tree size.");
+    assert.throws(
+      () => new InMemoryBinaryPlusTree(1.5, 4),
+      "Invalid tree size.",
+    );
+    // minSize may equal maxSize / 2.
+    new InMemoryBinaryPlusTree(2, 4);
+  });
+
+  for (const [minSize, maxSize] of [
+    [2, 4],
+    [2, 5],
+    [3, 6],
+    [3, 9],
+  ]) {
+    it(`deletes every key from a ${minSize}-${maxSize} tree`, () => {
+      const keys = Array.from({ length: 60 }, (_, index) => index);
+      // Forward, backward, and interleaved orders reach empty leaves on
+      // both the left-most and the inner branches.
+      const orders = [
+        keys,
+        [...keys].reverse(),
+        [
+          ...keys.filter((key) => key % 2 === 0),
+          ...keys.filter((key) => key % 2),
+        ],
+        keys.map((_, index) => (index * 37) % keys.length),
+      ];
+
+      for (const order of orders) {
+        const tree = new InMemoryBinaryPlusTree<number, number>(
+          minSize!,
+          maxSize!,
+        );
+        for (const key of keys) tree.set(key, key);
+
+        const remaining = new Set(keys);
+        for (const key of order) {
+          tree.delete(key);
+          remaining.delete(key);
+          assert.deepEqual(
+            tree.list().map(({ key }) => key),
+            [...remaining].sort((a, b) => a - b),
+            `after deleting ${key}`,
+          );
+        }
+        assert.deepEqual(tree.list(), []);
+      }
+    });
+  }
+
   describe("list", () => {
     const listTest =
       (tree: InMemoryBinaryPlusTree, min: number, max: number) =>
