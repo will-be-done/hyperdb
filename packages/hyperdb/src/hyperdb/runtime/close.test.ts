@@ -262,6 +262,29 @@ describe("close()", () => {
     expect(hybrid.isClosed).toBe(true);
   });
 
+  it("lets a waiting close() finish when the first close is abandoned", async () => {
+    const primary = new DB(new BptreeInmemDriver(), { register: false });
+    const hybrid = new HybridDB(
+      primary,
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    const closePrimary = vi.spyOn(primary, "close");
+
+    const write = asyncDispatch(hybrid, insertRow({ id: "r1" }));
+    await Promise.resolve();
+    // Park the first close in settle(), then abandon it.
+    const abandoned = hybrid.close();
+    abandoned.next();
+    const waiting = execAsync(hybrid.close());
+    abandoned.return(undefined);
+
+    await Promise.all([waiting, write]);
+
+    expect(closePrimary).toHaveBeenCalledTimes(1);
+    expect(hybrid.isClosed).toBe(true);
+  });
+
   it("shares a failed concurrent close with every caller, then allows a retry", async () => {
     const primaryDriver = new BptreeInmemDriver();
     const primary = new DB(primaryDriver, { register: false });
@@ -302,6 +325,11 @@ describe("close()", () => {
       execSync(db.intervalScan(rowsTable, "byIds", [{ gte: [] }])),
     );
     expectClosed(() => execSync(db.withTraits({ type: "t" }).beginTx()));
+    // Creating the command does not throw; running it does.
+    const load = db.loadTables([rowsTable]);
+    const preload = db.preloadTables([]);
+    expectClosed(() => execSync(load));
+    expectClosed(() => execSync(preload));
   });
 
   it("clears SubscribableDB listeners even when the inner close fails", () => {

@@ -47,7 +47,9 @@ to strain:
   committed changes saved to the primary store. Both hybrid runtimes reject
   transactions before publishing memory changes when 100 persistence batches
   are unsettled; await persistence and retry in a new transaction. Rejected
-  commits finish the transaction, while rollback remains safe for cleanup.
+  commits finish the transaction, while rollback remains safe for cleanup. On
+  any runtime, a failed `commit()` did not commit: roll back and retry in a new
+  transaction.
   Ordinary `PreloadedHybridDB` inserts preserve duplicate-ID checks during
   background persistence.
 - **Run the same logic on the backend.** Because a table index is just a B-tree, the

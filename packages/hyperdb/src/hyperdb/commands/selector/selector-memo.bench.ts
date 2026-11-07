@@ -52,8 +52,9 @@ describe("isNeedToRerunRange on a commit no selector reads", () => {
     bench(
       `${selectorCount} selectors x ${opCount} ops`,
       () => {
-        // Each subscriber sees the same ops array, as on a real commit.
+        // Each subscriber sees the same frozen ops array, as on a real commit.
         const ops = commitOps(opCount);
+        Object.freeze(ops);
         let reruns = 0;
         for (const cmds of selectors) {
           if (isNeedToRerunRange(cmds, ops)) reruns++;

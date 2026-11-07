@@ -74,6 +74,10 @@ export type CommandRunnerOptions = {
   // were not referenced this run (e.g. a child behind a conditional branch),
   // whose data could change unobserved while it is out of the subscription.
   visited?: ChildVisited;
+  // Shared by a run and every nested run (child selectors, withTraits bodies).
+  // Records a sync run that reached async storage, so a nested handler that
+  // catches or replaces that error cannot hide it from the outer run.
+  asyncInSync?: { error?: unknown };
 };
 
 const argsKeyOf = (args: unknown): string | undefined => {
@@ -473,12 +477,18 @@ export function* runCommandGenerator<TReturn>(
     ? withTraceContextTrait(driverScopedDB, traceContext)
     : driverScopedDB;
 
+  // A root run starts the shared state; nested runs inherit it.
+  const asyncInSync = options.asyncInSync ?? {};
+  const runOptions = options.asyncInSync
+    ? options
+    : { ...options, asyncInSync };
+
   // Shared by every command of this run; only traceFrame changes per command,
   // and a handler finishes before the next command starts.
   const ctx: CommandContext = {
     db,
     scopedDB,
-    options,
+    options: runOptions,
     tracer,
     traceContext,
     traceFrame: undefined,
@@ -486,7 +496,6 @@ export function* runCommandGenerator<TReturn>(
 
   try {
     let result = gen.next();
-    let asyncInSyncError: unknown;
 
     while (!result.done) {
       const cmd = result.value;
@@ -501,7 +510,7 @@ export function* runCommandGenerator<TReturn>(
         value = yield* runCommand(cmd, ctx);
       } catch (error) {
         if (isHyperDBError(error, "ASYNC_IN_SYNC_EXECUTION")) {
-          asyncInSyncError ??= error;
+          asyncInSync.error ??= error;
         }
         // Raise the failure at the handler's `yield*`, so its try/catch and
         // finally blocks see it. An uncaught error still propagates below.
@@ -513,7 +522,7 @@ export function* runCommandGenerator<TReturn>(
 
     // The sync run is aborted even if the handler caught the error: it must
     // not commit or become a cached selector result.
-    if (asyncInSyncError) throw asyncInSyncError;
+    if (asyncInSync.error) throw asyncInSync.error;
 
     if (ownsTraceContext) {
       tracer?.endTraceSuccess(traceContext);

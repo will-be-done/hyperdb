@@ -123,7 +123,7 @@ export function validateHashBounds(
 ): void {
   const indexColumn = indexColumns.join(", ");
 
-  if (bounds.length === 0 || bounds.some((bound) => !bound.gte)) {
+  if (bounds.length === 0) {
     throw new Error(
       `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
     );
@@ -158,4 +158,18 @@ export function validateHashBounds(
       );
     }
   }
+}
+
+/** Returns the ids of validated primary-key hash bounds. */
+export function primaryKeyIdsFromBounds(
+  indexName: string,
+  bounds: TupleScanOptions[],
+): string[] {
+  return bounds.map((bound) => {
+    const id = bound.gte?.[0];
+    if (typeof id !== "string") {
+      throw new Error(`Primary-key index ${indexName} requires string IDs`);
+    }
+    return id;
+  });
 }

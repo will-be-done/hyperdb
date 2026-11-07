@@ -211,11 +211,9 @@ export class HybridPersistenceQueue {
    * failure the DB stays closing, and close() can be retried.
    */
   *close(closeOwner: () => Generator<DBCmd, void>): Generator<DBCmd, void> {
+    // A waiter whose close was abandoned (not failed) takes over the close.
+    while (this.closing) yield* unwrap(this.closing);
     if (this.isClosed) return;
-    if (this.closing) {
-      yield* unwrap(this.closing);
-      return;
-    }
     let resolveClosing!: () => void;
     let rejectClosing!: (error: unknown) => void;
     const closing = new Promise<void>((resolve, reject) => {
@@ -226,16 +224,22 @@ export class HybridPersistenceQueue {
     closing.catch(() => {});
     this.closing = closing;
     this.isClosing = true;
+    let settled = false;
     try {
       yield* this.settle();
       yield* closeOwner();
       this.isClosed = true;
+      settled = true;
       resolveClosing();
     } catch (error) {
+      settled = true;
       rejectClosing(error);
       throw error;
     } finally {
       this.closing = undefined;
+      // The caller abandoned this close (generator return()); wake the waiting
+      // callers so one of them runs the close instead of hanging.
+      if (!settled) resolveClosing();
     }
   }
 

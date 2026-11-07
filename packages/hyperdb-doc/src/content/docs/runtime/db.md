@@ -37,6 +37,11 @@ const baseDb = new DB(new BptreeInmemDriver(), {
 execSync(baseDb.loadTables([tasksTable]));
 ```
 
+If `tx.commit()` throws, the transaction did not commit. Call `tx.rollback()`
+and run the work again in a new transaction. Actions do this cleanup for you.
+Calling `commit()` again never reports success for a commit that did not
+happen, but whether it can succeed depends on the driver.
+
 ### Options
 
 | Option                  | Default        | Description                                                                                                  |

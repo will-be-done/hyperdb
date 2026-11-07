@@ -11,6 +11,7 @@ import {
   upsert,
 } from "./builders";
 import { selectFrom } from "../selector/builder";
+import { createSelector } from "../selector/selector";
 import { v } from "../../schema/values";
 import { getGeneratorTraceMeta } from "../../tracing/metadata";
 import { SubscribableDB } from "../../runtime/subscribable-db";
@@ -189,6 +190,52 @@ describe("action", () => {
     expect(() => syncDispatch(db, swallowingStep({}))).toThrow(
       expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
     );
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not commit a sync dispatch when a nested selector replaces the async error", () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    const rewrapping = createSelector()({
+      name: "rewrappingAsyncSelector",
+      args: {},
+      handler: function* () {
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          throw new Error("replaced");
+        }
+        return "done";
+      },
+    });
+    const swallowingStep = action({
+      name: "swallowingNestedAsyncAction",
+      args: {},
+      handler: function* () {
+        yield* updateAction({});
+        try {
+          yield* rewrapping({});
+        } catch {
+          return "fallback";
+        }
+        return "done";
+      },
+    });
+    let notified = false;
+    db.subscribe(() => {
+      notified = true;
+    });
+
+    expect(() => syncDispatch(db, swallowingStep({}))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(notified).toBe(false);
     expect(
       execSync(
         db.intervalScan(tasksTables, "byId", [

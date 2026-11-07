@@ -16,6 +16,7 @@ import {
   getPersistentIndexPlan,
   isPrimaryKeyBackedIndex,
   type PersistentPhysicalIndex,
+  primaryKeyIdsFromBounds,
   validateHashBounds,
 } from "../persistent-index-plan";
 import {
@@ -435,10 +436,7 @@ export function buildSortKeyWhereClause(
   }
 
   if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
-    const ids = rawBounds.map((bound) => bound.gte?.[0]);
-    if (ids.some((id) => typeof id !== "string")) {
-      throw new Error(`Primary-key index ${indexName} requires string IDs`);
-    }
+    const ids = primaryKeyIdsFromBounds(indexName, rawBounds);
     const placeholders = ids.map(() => "?").join(", ");
     return {
       where: `WHERE id IN (${placeholders})`,

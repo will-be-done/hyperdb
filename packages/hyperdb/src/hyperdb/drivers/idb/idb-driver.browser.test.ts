@@ -868,7 +868,7 @@ describe("IdbDriver", () => {
           {},
         ),
       ),
-    ).rejects.toThrow("Hash index should have equality conditions");
+    ).rejects.toThrow("Hash index doesn't support range conditions");
     // Matching inclusive bounds are an exact lookup.
     await expect(
       execAsync(

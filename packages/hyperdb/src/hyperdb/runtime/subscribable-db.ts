@@ -616,7 +616,8 @@ export class SubscribableDBTx implements HyperDBTx {
     try {
       yield* this.txDb.commit();
     } catch (error) {
-      // Keep the tx retryable, like the inner tx.
+      // Like the inner tx: a second commit() must reach it again, not return
+      // as committed without notifying subscribers.
       this.state.txCounter.val++;
       throw error;
     }
@@ -715,15 +716,17 @@ export class SubscribableDB implements HyperDB {
       : this.db;
   }
 
-  loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
+  // Generator methods, so a closed DB fails when the command runs, not when
+  // it is created.
+  *loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
     this.throwIfClosed();
-    return this.db.loadTables(tables);
+    yield* this.db.loadTables(tables);
   }
 
-  preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
+  *preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
     specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {
-    return this.delegateDB().preloadTables(specs);
+    yield* this.delegateDB().preloadTables(specs);
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, HyperDBTx> {

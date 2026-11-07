@@ -23,6 +23,7 @@ import {
   getPersistentIndexPlan,
   getPersistentIndexSortKeyMode,
   isPrimaryKeyBackedIndex,
+  primaryKeyIdsFromBounds,
   validateHashBounds,
 } from "../persistent-index-plan";
 import {
@@ -937,14 +938,7 @@ async function performScan(
       // without this a range or full scan silently returned no rows.
       const bounds = convertWhereToBound(["id"], clauses);
       validateHashBounds(indexName, ["id"], bounds);
-      const ids = new Set<string>();
-      for (const bound of bounds) {
-        const id = bound.gte?.[0];
-        if (typeof id !== "string") {
-          throw new Error(`Primary-key index ${indexName} requires string IDs`);
-        }
-        ids.add(id);
-      }
+      const ids = new Set(primaryKeyIdsFromBounds(indexName, bounds));
       const records = (
         await Promise.all(
           [...ids].map((id) =>
