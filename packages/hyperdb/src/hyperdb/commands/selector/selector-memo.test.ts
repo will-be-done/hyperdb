@@ -45,6 +45,18 @@ describe("isNeedToRerunRange", () => {
     expect(isNeedToRerunRange(cmds, ops)).toBe(true);
   });
 
+  it("regroups an ops array refilled in place at the same length", () => {
+    const table = defineRows();
+    const cmds = [rangeCmd(table)];
+    const ops: Op[] = [
+      { type: "insert", table: otherTable, newValue: { id: "x" } },
+    ];
+
+    expect(isNeedToRerunRange(cmds, ops)).toBe(false);
+    ops[0] = { type: "insert", table, newValue: { id: "a", group: "g1" } };
+    expect(isNeedToRerunRange(cmds, ops)).toBe(true);
+  });
+
   it("builds row tuples per index when selectors share a commit", () => {
     const table = defineTable("memoPeople", {
       id: v.string(),
@@ -61,6 +73,7 @@ describe("isNeedToRerunRange", () => {
     );
     const cmd = (query: typeof byGroup | typeof byNameGroup) =>
       query[Symbol.iterator]().next().value as SelectRangeCmd;
+    // Frozen like the arrays SubscribableDB notifies, so the grouping is shared.
     const ops: Op[] = [
       {
         type: "insert",
@@ -68,6 +81,7 @@ describe("isNeedToRerunRange", () => {
         newValue: { id: "a", group: "g2", name: "n1" },
       },
     ];
+    Object.freeze(ops);
 
     expect(isNeedToRerunRange([cmd(byGroup)], ops)).toBe(false);
     expect(isNeedToRerunRange([cmd(byNameGroup)], ops)).toBe(true);

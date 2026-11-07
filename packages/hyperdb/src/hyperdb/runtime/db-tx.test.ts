@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { execSync } from "../core/executor";
+import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { DB } from "./db";
+import { SubscribableDB } from "./subscribable-db";
 import { AsyncDB, type AsyncDBTx } from "../test-utils/async-db";
 import { createDriverFactories } from "../test-utils/driver-factories";
 import { v } from "../schema/values";
@@ -1463,6 +1466,51 @@ describe("Database Transactions", async () => {
         expect(finalAlpha.length).toBe(3);
         expect(finalAlpha.map((t) => t.id).sort()).toEqual(["a1", "a3", "g1"]);
       });
+    });
+  }
+});
+
+describe("commit retry after a driver commit failure", () => {
+  const failFirstCommit = (driver: BptreeInmemDriver) => {
+    const beginTx = driver.beginTx.bind(driver);
+    vi.spyOn(driver, "beginTx").mockImplementationOnce(function* (...args) {
+      const tx = yield* beginTx(...args);
+      const commit = tx.commit.bind(tx);
+      let failed = false;
+      tx.commit = function* () {
+        if (!failed) {
+          failed = true;
+          throw new Error("busy");
+        }
+        yield* commit();
+      };
+      return tx;
+    });
+  };
+
+  for (const [name, wrap] of [
+    ["DB", (db: DB) => db],
+    ["SubscribableDB", (db: DB) => new SubscribableDB(db)],
+  ] as const) {
+    it(`${name}: a retried commit reaches the driver`, () => {
+      const driver = new BptreeInmemDriver();
+      const db = wrap(new DB(driver, { register: false }));
+      execSync(db.loadTables([tasksTable]));
+      failFirstCommit(driver);
+
+      const tx = execSync(db.beginTx());
+      execSync(tx.insert(tasksTable, [{ id: "t1", title: "Retry" }]));
+      expect(() => execSync(tx.commit())).toThrow("busy");
+      execSync(tx.commit());
+
+      expect(
+        execSync(
+          db.intervalScan(tasksTable, "byId", [
+            { eq: [{ col: "id", val: "t1" }] },
+          ]),
+        ),
+      ).toEqual([{ id: "t1", title: "Retry" }]);
+      expect(() => execSync(tx.commit())).toThrow();
     });
   }
 });

@@ -80,6 +80,9 @@ const unsub = db.subscribe((ops, traits, revision) => {
 });
 ```
 
+All subscribers share one frozen `ops` array per commit, so copy it before
+changing it.
+
 This is the mechanism the [selector cache](/database/reading-data/) uses.
 
 ### Lifecycle hooks
@@ -378,8 +381,9 @@ await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
 
 Afterwards every read, write, or transaction throws a `HyperDBError` with code
 `DB_CLOSED`, including cached selector reads. `db.isClosed` reports whether a
-runtime has started closing. If a driver fails to close, `close()` rejects and
-can be called again.
+runtime has started closing. Concurrent `close()` calls share one close and
+settle together. If a driver fails to close, `close()` rejects for every caller
+and can be called again.
 
 ## Executing commands
 
@@ -397,7 +401,9 @@ for you, but you can also drive a generator directly:
 | `execAsync(generator)`                 | Drive a raw DB-command generator (async)        |
 
 `execSync` throws if the generator yields an async command, which is how the
-sync/async split is enforced. Async drivers must go through `execAsync` /
+sync/async split is enforced. The run fails even if the handler catches that
+error: `syncDispatch` does not commit, and the sync selector cache does not keep
+a fallback value. Async drivers must go through `execAsync` /
 `asyncDispatch` / `selectAsync`. Use the async helpers with `HybridDB` too,
 because reads can miss the in-memory cache and fall through to the primary
 store.

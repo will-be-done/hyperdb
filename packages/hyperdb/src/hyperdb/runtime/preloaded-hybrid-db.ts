@@ -541,17 +541,15 @@ export class PreloadedHybridDB implements HyperDB {
   }
 
   *close(): Generator<DBCmd, void> {
-    const { persistence } = this.state;
-    if (persistence.isClosed) return;
-    // Refuse new commits first; commits that passed the gate enqueue
-    // synchronously, so settle() drains them before the primary closes.
-    persistence.isClosing = true;
-    yield* persistence.settle();
-    yield* this.primary.close();
-    // Every operation now fails with DB_CLOSED, so release the preloaded
-    // indexes and rows; withTraits() views share this state.
-    this.state.data = new PreloadedHybridData();
-    persistence.isClosed = true;
+    // Commits that passed the gate enqueue synchronously, so they are drained
+    // before the primary closes.
+    const { state, primary } = this;
+    yield* state.persistence.close(function* () {
+      yield* primary.close();
+      // Every operation now fails with DB_CLOSED, so release the preloaded
+      // indexes and rows; withTraits() views share this state.
+      state.data = new PreloadedHybridData();
+    });
   }
 
   enqueuePersistence(writes: HybridPendingWrite[], primary: HyperDB): void {

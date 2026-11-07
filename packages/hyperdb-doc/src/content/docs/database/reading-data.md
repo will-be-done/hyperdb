@@ -243,6 +243,11 @@ stored in the selector cache. A later `useAsyncSelector` with the same selector
 identity and args can reuse that warmed entry when its async run starts, without
 doing a synchronous cache read during render.
 
+Preloading finds that in-memory cache through the runtime's optional
+`getCacheDB()` method. `HybridDB`, `PreloadedHybridDB`, and `SubscribableDB`
+provide it. If you write your own `HyperDB` wrapper around a hybrid runtime,
+forward `getCacheDB()` to the wrapped runtime so preloads keep warming the cache.
+
 ```ts
 const categories = await preloadSelectorAsync(db, {
   selector: projectCategoriesByProjectId,
@@ -349,6 +354,9 @@ const unsub = db.subscribe((ops, traits, revision) => {
   // ops: InsertOp[] | UpsertOp[] | DeleteOp[] for this commit
 });
 ```
+
+Every subscriber of a commit receives the same frozen `ops` array. Copy it
+(`[...ops]`) before changing it.
 
 ## Practical guidance
 

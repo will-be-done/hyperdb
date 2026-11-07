@@ -239,6 +239,71 @@ describe("close()", () => {
     expect(primary.isClosed).toBe(true);
   });
 
+  it("runs concurrent HybridDB close() calls as one close", async () => {
+    const primaryDriver = new BptreeInmemDriver();
+    const primary = new DB(primaryDriver, { register: false });
+    const hybrid = new HybridDB(
+      primary,
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    const closePrimary = vi.spyOn(primary, "close");
+
+    // The write keeps the first close() in settle() while the second starts.
+    const write = asyncDispatch(hybrid, insertRow({ id: "r1" }));
+    await Promise.resolve();
+    await Promise.all([
+      execAsync(hybrid.close()),
+      execAsync(hybrid.close()),
+      write,
+    ]);
+
+    expect(closePrimary).toHaveBeenCalledTimes(1);
+    expect(hybrid.isClosed).toBe(true);
+  });
+
+  it("shares a failed concurrent close with every caller, then allows a retry", async () => {
+    const primaryDriver = new BptreeInmemDriver();
+    const primary = new DB(primaryDriver, { register: false });
+    const db = new PreloadedHybridDB(primary);
+    await execAsync(db.loadTables([rowsTable]));
+    vi.spyOn(primaryDriver, "close").mockImplementationOnce(() => {
+      throw new Error("busy");
+    });
+
+    const write = asyncDispatch(db, insertRow({ id: "r1" }));
+    await Promise.resolve();
+    const results = await Promise.allSettled([
+      execAsync(db.close()),
+      execAsync(db.close()),
+      write,
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      "rejected",
+      "rejected",
+      "fulfilled",
+    ]);
+    await execAsync(db.close());
+    expect(primary.isClosed).toBe(true);
+  });
+
+  it("rejects SubscribableDB operations after close when the wrapped DB has no close()", () => {
+    const inner = new DB(new BptreeInmemDriver(), { register: false });
+    Object.defineProperty(inner, "close", { value: undefined });
+    const db = new SubscribableDB(inner);
+    execSync(db.loadTables([rowsTable]));
+
+    execSync(db.close());
+
+    expect(db.isClosed).toBe(true);
+    expectClosed(() => execSync(db.beginTx()));
+    expectClosed(() =>
+      execSync(db.intervalScan(rowsTable, "byIds", [{ gte: [] }])),
+    );
+    expectClosed(() => execSync(db.withTraits({ type: "t" }).beginTx()));
+  });
+
   it("clears SubscribableDB listeners even when the inner close fails", () => {
     const driver = new BptreeInmemDriver();
     const db = new SubscribableDB(new DB(driver, { register: false }));

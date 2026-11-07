@@ -179,7 +179,9 @@ yield *
 
 Run selectors outside React with `selectSync`, `selectAsync`,
 `selectCachedMaybeAsync`, or `preloadSelectorAsync`. Use sync helpers with sync
-drivers and async helpers with async drivers:
+drivers and async helpers with async drivers. A sync run that reaches async
+storage fails with `ASYNC_IN_SYNC_EXECUTION` even if the handler catches it;
+the action does not commit and no fallback result is cached:
 
 ```ts
 const rows = selectSync(db, {
@@ -303,7 +305,8 @@ persistence, closes wrapped databases and driver-owned resources, clears
 `SubscribableDB` subscribers, and unregisters the DB from devtools. Caller-owned
 SQLite handles stay open. Hybrid runtimes refuse new commits as soon as
 `close()` starts and wait for accepted ones. Later operations, including cached
-selector reads, throw `DB_CLOSED`; a failed `close()` can be retried.
+selector reads, throw `DB_CLOSED`; concurrent `close()` calls share one close,
+and a failed `close()` can be retried.
 
 ## Undo And Redo
 

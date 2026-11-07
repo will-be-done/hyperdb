@@ -60,6 +60,32 @@ describe("selector cache", () => {
     );
   });
 
+  it("does not cache a fallback a selector returns after catching an async step", () => {
+    const db = createMemDB();
+    let async = true;
+    const swallowing = selector({
+      name: "swallowingAsyncSelector",
+      args: {},
+      handler: function* () {
+        const rows = yield* selectFrom(rowsTable, "byIds").where((q) =>
+          q.gte("id", ""),
+        );
+        try {
+          if (async) yield* unwrap(Promise.resolve());
+        } catch {
+          return "fallback";
+        }
+        return rows.length;
+      },
+    });
+
+    expect(() =>
+      selectCachedSync(db, { selector: swallowing, args: {} }),
+    ).toThrow(expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }));
+    async = false;
+    expect(selectCachedSync(db, { selector: swallowing, args: {} })).toBe(0);
+  });
+
   it("does not prime the cache with a preload made stale by a write", async () => {
     const db = createMemDB();
     const cacheDB = createMemDB();

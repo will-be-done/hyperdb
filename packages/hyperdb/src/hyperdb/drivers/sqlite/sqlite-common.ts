@@ -16,6 +16,7 @@ import {
   getPersistentIndexPlan,
   isPrimaryKeyBackedIndex,
   type PersistentPhysicalIndex,
+  validateHashBounds,
 } from "../persistent-index-plan";
 import {
   encodeSqliteSortKeyTuple,
@@ -375,50 +376,6 @@ function expandBoundTuple(
 ): unknown[] | undefined {
   if (!tuple) return undefined;
   return [...tuple, ...new Array(targetLength - tuple.length).fill(filler)];
-}
-
-function validateHashBounds(
-  indexName: string,
-  indexColumns: string[],
-  bounds: ReturnType<typeof convertWhereToBound>,
-): void {
-  const indexColumn = indexColumns.join(", ");
-
-  if (bounds.length === 0 || bounds.some((bound) => !bound.gte)) {
-    throw new Error(
-      `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bounds)}`,
-    );
-  }
-
-  for (const bound of bounds) {
-    if (
-      (bound.gt !== undefined && bound.gt.length > 0) ||
-      (bound.lt !== undefined && bound.lt.length > 0)
-    ) {
-      throw new Error(
-        `Hash index doesn't support range conditions for column '${indexColumn}'`,
-      );
-    }
-
-    if (
-      !bound.lte ||
-      !bound.gte ||
-      bound.lte.length !== indexColumns.length ||
-      bound.gte.length !== indexColumns.length
-    ) {
-      throw new Error(
-        `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bound)}`,
-      );
-    }
-
-    if (
-      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
-    ) {
-      throw new Error(
-        `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
-      );
-    }
-  }
 }
 
 function isExactSortKeyBound(bound: {

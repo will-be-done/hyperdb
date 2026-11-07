@@ -169,6 +169,35 @@ describe("action", () => {
     syncDispatch(db, updateAction({}));
   });
 
+  it("does not commit a sync dispatch whose handler catches the async step", () => {
+    const db = new SubscribableDB(new DB(new BptreeInmemDriver()));
+    execSync(db.loadTables([tasksTables]));
+    const swallowingStep = action({
+      name: "swallowingAsyncStepAction",
+      args: {},
+      handler: function* () {
+        yield* updateAction({});
+        try {
+          yield* unwrap(Promise.resolve());
+        } catch {
+          return "fallback";
+        }
+        return "done";
+      },
+    });
+
+    expect(() => syncDispatch(db, swallowingStep({}))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(
+      execSync(
+        db.intervalScan(tasksTables, "byId", [
+          { eq: [{ col: "id", val: "task-1" }] },
+        ]),
+      ),
+    ).toEqual([]);
+  });
+
   it("dispatches object-form actions with one args object", () => {
     const driver = new BptreeInmemDriver();
     const db = new DB(driver);

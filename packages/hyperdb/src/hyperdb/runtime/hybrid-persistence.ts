@@ -5,6 +5,7 @@ import { execAsync } from "../core/executor";
 import type { Row } from "../core/primitives";
 import type { TableDefinition } from "../schema/table";
 import { HyperDBError } from "../core/errors";
+import { dbClosedError } from "../utils";
 
 /**
  * Thrown by every HybridDB read/write once background persistence has
@@ -166,12 +167,13 @@ export class HybridPersistenceQueue {
   isClosing = false;
   isClosed = false;
   private crashError: unknown;
+  private closing?: Promise<void>;
   private acceptedCommits = 0;
   private idleWaiters: (() => void)[] = [];
 
   throwIfCrashed(): void {
     if (this.isClosing || this.isClosed) {
-      throw new HyperDBError("DB_CLOSED", "DB is closed");
+      throw dbClosedError();
     }
     if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
   }
@@ -200,6 +202,40 @@ export class HybridPersistenceQueue {
       yield* unwrap(
         new Promise<void>((resolve) => this.idleWaiters.push(resolve)),
       );
+    }
+  }
+
+  /**
+   * Runs the owner's close once: refuses new commits, settles accepted ones,
+   * then calls `closeOwner`. Concurrent calls wait for the same close. After a
+   * failure the DB stays closing, and close() can be retried.
+   */
+  *close(closeOwner: () => Generator<DBCmd, void>): Generator<DBCmd, void> {
+    if (this.isClosed) return;
+    if (this.closing) {
+      yield* unwrap(this.closing);
+      return;
+    }
+    let resolveClosing!: () => void;
+    let rejectClosing!: (error: unknown) => void;
+    const closing = new Promise<void>((resolve, reject) => {
+      resolveClosing = resolve;
+      rejectClosing = reject;
+    });
+    // Only concurrent callers observe the outcome.
+    closing.catch(() => {});
+    this.closing = closing;
+    this.isClosing = true;
+    try {
+      yield* this.settle();
+      yield* closeOwner();
+      this.isClosed = true;
+      resolveClosing();
+    } catch (error) {
+      rejectClosing(error);
+      throw error;
+    } finally {
+      this.closing = undefined;
     }
   }
 

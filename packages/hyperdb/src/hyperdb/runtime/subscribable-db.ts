@@ -37,7 +37,7 @@ import {
   type TraceContext,
 } from "../core/tracer";
 import { wrapGeneratorWithExistingTracePath } from "../tracing/metadata";
-import { refVar, type RefVar } from "../utils";
+import { dbClosedError, refVar, type RefVar } from "../utils";
 import { HyperDBError } from "../core/errors";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
@@ -613,16 +613,23 @@ export class SubscribableDBTx implements HyperDBTx {
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
-    yield* this.txDb.commit();
+    try {
+      yield* this.txDb.commit();
+    } catch (error) {
+      // Keep the tx retryable, like the inner tx.
+      this.state.txCounter.val++;
+      throw error;
+    }
     this.state.committed.val = true;
 
     // if (this.operations.length === 0) return;
 
     const traits = withoutInternalTraits(this.getTraits());
     const revision = this.subDb.incrementRevision();
+    // Every subscriber shares this array, so none may change it for the rest.
     notifySubscribers(
       this.subDb.subscribers,
-      this.operations,
+      Object.freeze(this.operations) as Op[],
       traits,
       revision,
     );
@@ -696,13 +703,20 @@ export class SubscribableDB implements HyperDB {
     return this.state.revision.val;
   }
 
+  // The wrapped DB may not track closing itself (close() is optional).
+  private throwIfClosed(): void {
+    if (this.state.closed) throw dbClosedError();
+  }
+
   private delegateDB(): HyperDB {
+    this.throwIfClosed();
     return this.traits.length > 0
       ? this.db.withTraits(...this.traits)
       : this.db;
   }
 
   loadTables(tables: TableDefinition<any>[]): Generator<DBCmd, void> {
+    this.throwIfClosed();
     return this.db.loadTables(tables);
   }
 
@@ -844,6 +858,7 @@ export class SubscribableDB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfClosed();
     if (clauses && clauses.length === 0) {
       const results: ExtractSchema<TTable>[] = [];
 

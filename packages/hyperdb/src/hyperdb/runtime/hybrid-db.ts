@@ -528,15 +528,12 @@ export class HybridDB implements HyperDB {
   }
 
   *close(): Generator<DBCmd, void> {
-    const { persistence } = this.state;
-    if (persistence.isClosed) return;
-    // Refuse new commits first, then let accepted ones reach the primary.
-    persistence.isClosing = true;
-    yield* persistence.settle();
-    if (this.primary.close) yield* this.primary.close();
-    if (this.cache.close) yield* this.cache.close();
-    // Only now: a failed close above can be retried.
-    persistence.isClosed = true;
+    // Accepted commits reach the primary before it closes.
+    const { primary, cache } = this;
+    yield* this.state.persistence.close(function* () {
+      if (primary.close) yield* primary.close();
+      if (cache.close) yield* cache.close();
+    });
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {

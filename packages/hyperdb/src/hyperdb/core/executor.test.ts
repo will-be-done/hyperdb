@@ -57,6 +57,21 @@ describe("executor", () => {
     expect(steps).toEqual(["cleaned up"]);
   });
 
+  it("keeps execSync failing when the generator catches the async error", () => {
+    function* command(): Generator<DBCmd, string, unknown> {
+      try {
+        yield* unwrap(Promise.resolve("never awaited"));
+      } catch {
+        return "fallback";
+      }
+      return "done";
+    }
+
+    expect(() => execSync(command())).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+  });
+
   it("observes the promise execSync abandons so its rejection is handled", async () => {
     function* command(): Generator<DBCmd, void, unknown> {
       // No manual .catch(): execSync must observe it, or Vitest reports an

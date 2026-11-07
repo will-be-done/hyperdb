@@ -1,7 +1,7 @@
 // Root selector cache shared by cached reads and stores: entries, GC,
 // invalidation subscriptions, and preloading.
 import { SubscribableDB, type Op } from "../../runtime/subscribable-db";
-import { HyperDBError } from "../../core/errors";
+import { dbClosedError } from "../../utils";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import { type TraceOptions } from "../../core/tracer";
@@ -399,7 +399,7 @@ const runCachedSelectorInternal = <TSelector extends AnyObjectSelector>(
   } = {},
 ): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> => {
   // A cache hit never touches storage, so check closure explicitly.
-  if (db.isClosed) throw new HyperDBError("DB_CLOSED", "DB is closed");
+  if (db.isClosed) throw dbClosedError();
   if (!getSelectorMemoization(selector).root) {
     return runSelectorGenerator(
       mode,

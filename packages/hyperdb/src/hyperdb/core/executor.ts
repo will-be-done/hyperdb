@@ -21,6 +21,7 @@ const isPromiseLike = <T>(value: unknown): value is PromiseLike<T> => {
 
 export function execSync<T>(cmd: Generator<DBCmd, T>): T {
   let result = cmd.next();
+  let asyncError: HyperDBError | undefined;
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
@@ -30,18 +31,21 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
       if (isPromiseLike(data)) data.then(undefined, () => {});
       // Throw into the generator so its finally blocks (such as a transaction
       // rollback) still run before the error reaches the caller.
-      result = cmd.throw(
-        new HyperDBError(
-          "ASYNC_IN_SYNC_EXECUTION",
-          "Cannot execute async commands",
-        ),
+      asyncError ??= new HyperDBError(
+        "ASYNC_IN_SYNC_EXECUTION",
+        "Cannot execute async commands",
       );
+      result = cmd.throw(asyncError);
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {
       throw unexpectedCmdError(result.value);
     }
   }
+
+  // A generator that catches the error must not turn the aborted run into a
+  // normal result.
+  if (asyncError) throw asyncError;
 
   return result.value as T;
 }

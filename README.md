@@ -360,7 +360,8 @@ engine's own error passes through unchanged, for SQLite a
 Use `dispatchMaybeAsync(db, action(args))` when you want a synchronous result
 whenever no step had to wait. Close a runtime with `await execAsync(db.close())`:
 it flushes hybrid persistence, releases driver-owned resources, clears
-subscribers, and unregisters the DB from devtools.
+subscribers, and unregisters the DB from devtools. Concurrent `close()` calls
+share one close.
 
 ## Entry points
 

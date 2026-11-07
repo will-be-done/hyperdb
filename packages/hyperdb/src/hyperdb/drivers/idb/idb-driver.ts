@@ -23,6 +23,7 @@ import {
   getPersistentIndexPlan,
   getPersistentIndexSortKeyMode,
   isPrimaryKeyBackedIndex,
+  validateHashBounds,
 } from "../persistent-index-plan";
 import {
   assertSafeTableDefinition,
@@ -340,44 +341,6 @@ function expandBoundTuple(
 ): unknown[] | undefined {
   if (!tuple) return undefined;
   return [...tuple, ...new Array(targetLength - tuple.length).fill(filler)];
-}
-
-function validateHashBounds(
-  indexName: string,
-  indexColumns: string[],
-  bounds: ReturnType<typeof convertWhereToBound>,
-): void {
-  const indexColumn = indexColumns.join(", ");
-
-  for (const bound of bounds) {
-    if (
-      (bound.gt !== undefined && bound.gt.length > 0) ||
-      (bound.lt !== undefined && bound.lt.length > 0)
-    ) {
-      throw new Error(
-        `Hash index doesn't support range conditions for column '${indexColumn}'`,
-      );
-    }
-
-    if (
-      !bound.lte ||
-      !bound.gte ||
-      bound.lte.length !== indexColumns.length ||
-      bound.gte.length !== indexColumns.length
-    ) {
-      throw new Error(
-        `Hash index should have equality conditions for columns '${indexColumn}' and index name '${indexName}': ${JSON.stringify(bound)}`,
-      );
-    }
-
-    if (
-      bound.lte.some((value, index) => !Object.is(value, bound.gte?.[index]))
-    ) {
-      throw new Error(
-        `Hash index should have the same equality condition for columns '${indexColumn}' and index name '${indexName}'`,
-      );
-    }
-  }
 }
 
 function toIdbSortKey(sortKey: Uint8Array): ArrayBuffer {
@@ -970,24 +933,17 @@ async function performScan(
     }
 
     if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
+      // Like the other drivers, a hash index only answers id equality;
+      // without this a range or full scan silently returned no rows.
+      const bounds = convertWhereToBound(["id"], clauses);
+      validateHashBounds(indexName, ["id"], bounds);
       const ids = new Set<string>();
-      for (const clause of clauses) {
-        // Like the other drivers, a hash index only answers id equality;
-        // without this a range or full scan silently returned no rows.
-        const eq = exactIdConditions(clause);
-        if (!eq) {
-          throw new Error(
-            `Hash index should have equality conditions for columns 'id' and index name '${indexName}': ${JSON.stringify(clause)}`,
-          );
+      for (const bound of bounds) {
+        const id = bound.gte?.[0];
+        if (typeof id !== "string") {
+          throw new Error(`Primary-key index ${indexName} requires string IDs`);
         }
-        for (const condition of eq) {
-          if (condition.col !== "id" || typeof condition.val !== "string") {
-            throw new Error(
-              `Primary-key index ${indexName} requires string IDs`,
-            );
-          }
-          ids.add(condition.val);
-        }
+        ids.add(id);
       }
       const records = (
         await Promise.all(
@@ -1068,32 +1024,10 @@ async function performScan(
     }
     // Keep coded errors (such as INDEX_NOT_FOUND) matchable.
     if (isHyperDBError(error)) throw error;
-    throw new Error(`Scan failed for index ${indexName}: ${error}`);
+    throw new Error(`Scan failed for index ${indexName}: ${error}`, {
+      cause: error,
+    });
   }
-}
-
-// The equality conditions of a hash-index clause, or undefined if it asks for
-// a range. Matching inclusive bounds (gte === lte) are an exact lookup too.
-function exactIdConditions(
-  clause: WhereClause,
-): { col: string; val: unknown }[] | undefined {
-  const nonEmpty = (conditions: unknown[] | undefined) =>
-    conditions !== undefined && conditions.length > 0;
-  if (nonEmpty(clause.gt) || nonEmpty(clause.lt)) return undefined;
-
-  const eq = clause.eq ?? [];
-  const { gte, lte } = clause;
-  if (!nonEmpty(gte) && !nonEmpty(lte)) return eq.length > 0 ? eq : undefined;
-  if (
-    eq.length === 0 &&
-    gte?.length === 1 &&
-    lte?.length === 1 &&
-    gte[0]!.col === lte[0]!.col &&
-    Object.is(gte[0]!.val, lte[0]!.val)
-  ) {
-    return [gte[0]!];
-  }
-  return undefined;
 }
 
 class IdbDriverTx implements DBDriverTX {
