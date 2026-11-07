@@ -48,6 +48,11 @@ export function App() {
 There is also `HyperDBDevtoolsPanel` for embedding the panel directly (without
 the floating toggle), with an `embedded` flag and an `onClose` callback.
 
+When traces come from more than one database, the panel shows a database
+picker labelled with each DB's `dbName`. Without a `db` prop, it also lists
+every registered DB. A DB closed with `db.close()` drops out of the picker once
+none of its traces are left in the list.
+
 ## Tracing
 
 Each selector and action run produces a root trace. Open one to see:

@@ -419,6 +419,49 @@ describe("HyperDBDevtools", () => {
     host.remove();
   });
 
+  it("drops closed DBs without traces from discovered DB options", async () => {
+    activateTraceStore();
+    const openDB = createDB("Open DB");
+    const closedDB = createDB("Closed DB");
+    const tracedClosedDB = createDB("Traced closed DB");
+    const tracedContext = startRootTrace(
+      createTraceFrameMeta("selector", "tracedClosedSelector", undefined),
+      hyperDBTraceStore,
+      tracedClosedDB,
+    )!;
+    endTraceSuccess(tracedContext);
+    hyperDBTraceStore.flushTraceCommits();
+    deactivateActivatedTraceStore();
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(<HyperDBDevtoolsPanel />);
+    });
+
+    expect(host.innerHTML).toContain("Open DB");
+    expect(host.innerHTML).toContain("Closed DB");
+    expect(host.innerHTML).toContain("Traced closed DB");
+
+    await act(async () => {
+      execSync(closedDB.close());
+      execSync(tracedClosedDB.close());
+      await Promise.resolve();
+    });
+
+    expect(host.innerHTML).toContain("Open DB");
+    expect(host.innerHTML).not.toContain(">Closed DB<");
+    expect(host.innerHTML).toContain("Traced closed DB");
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+    execSync(openDB.close());
+  });
+
   it("keeps an explicit db prop as the active database when others are discovered", () => {
     activateTraceStore();
     const explicitDB = createDB("Explicit DB");
