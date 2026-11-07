@@ -2,24 +2,29 @@ import type { Op } from "../../runtime/ops";
 import { isRowInRange } from "../../core/query/tuple";
 import { type SelectRangeCmd } from "./commands";
 
-const opsByTableCache = new WeakMap<Op[], Map<Op["table"], Op[]>>();
+type OpsByTable = { length: number; byTable: Map<string, Op[]> };
 
-// Every subscriber of a commit receives the same, already-final ops array, so
-// grouping it once lets each selector skip ops on tables it never read.
-const groupOpsByTable = (ops: Op[]): Map<Op["table"], Op[]> => {
-  let byTable = opsByTableCache.get(ops);
-  if (byTable) return byTable;
+const opsByTableCache = new WeakMap<Op[], OpsByTable>();
 
-  byTable = new Map();
+// Every subscriber of a commit receives the same ops array, so grouping it
+// once lets each selector skip ops on tables it never read. HyperDB never
+// changes the array after notifying, but a subscriber could, so a different
+// length forces a regroup. Groups are keyed by table name so equivalent table
+// definitions invalidate each other.
+const groupOpsByTable = (ops: Op[]): Map<string, Op[]> => {
+  const cached = opsByTableCache.get(ops);
+  if (cached && cached.length === ops.length) return cached.byTable;
+
+  const byTable = new Map<string, Op[]>();
   for (const op of ops) {
-    let tableOps = byTable.get(op.table);
+    let tableOps = byTable.get(op.table.tableName);
     if (!tableOps) {
       tableOps = [];
-      byTable.set(op.table, tableOps);
+      byTable.set(op.table.tableName, tableOps);
     }
     tableOps.push(op);
   }
-  opsByTableCache.set(ops, byTable);
+  opsByTableCache.set(ops, { length: ops.length, byTable });
   return byTable;
 };
 
@@ -51,7 +56,7 @@ export const isNeedToRerunRange = (
   const opsByTable = groupOpsByTable(ops);
 
   for (const cmd of cmds) {
-    const tableOps = opsByTable.get(cmd.table);
+    const tableOps = opsByTable.get(cmd.table.tableName);
     if (!tableOps) continue;
 
     for (const bound of cmd.bounds) {

@@ -295,7 +295,13 @@ export class UndoManager {
   withoutUndo<T>(
     body: (db: HyperDB) => ActionGenerator<T>,
   ): Generator<RunWithTraitsCmd, T, unknown>;
-  withoutUndo<T>(body: (db: HyperDB) => T): T;
+  // Generators must match the overload above; any other generator would run
+  // in the undo scope but escape its typing, so it is rejected here.
+  withoutUndo<T>(
+    body: (
+      db: HyperDB,
+    ) => T extends Generator<unknown, unknown, unknown> ? never : T,
+  ): T;
   withoutUndo<T>(
     body: (db: HyperDB) => T | ActionGenerator<T>,
   ): T | Generator<RunWithTraitsCmd, T, unknown> {

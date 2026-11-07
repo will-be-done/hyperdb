@@ -204,6 +204,9 @@ function* performAsyncTxWrite(
   tableDef: TableDefinition,
   count: number,
   run: () => Generator<DBCmd, void>,
+  // Called when the savepoint cannot be rolled back or released, because part
+  // of the write may still be applied; the transaction must not commit.
+  poison: (error: unknown) => void,
   debug?: AsyncSqlDriverDebug,
 ): Generator<DBCmd, void> {
   if (!sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
@@ -232,14 +235,19 @@ function* performAsyncTxWrite(
           debug,
         );
       } catch {
-        // Keep the write error; the transaction itself still rolls back later.
+        poison(error);
       }
     });
     throw error;
   }
-  yield* unwrapCb(() =>
-    runAsyncSQL(db, `RELEASE ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
-  );
+  try {
+    yield* unwrapCb(() =>
+      runAsyncSQL(db, `RELEASE ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
+    );
+  } catch (error) {
+    poison(error);
+    throw error;
+  }
 }
 
 function* performAsyncInsertOperation(
@@ -446,6 +454,11 @@ class AsyncSqlDriverTx implements DBDriverTX {
   private onFinish: () => void;
   private queryLock = new AwaitLock();
   private debug: AsyncSqlDriverDebug | undefined;
+  // Set when a write's savepoint could not be cleaned up; commit refuses.
+  private poisonedBy: { error: unknown } | undefined;
+  private readonly poison = (error: unknown) => {
+    this.poisonedBy ??= { error };
+  };
 
   constructor(
     db: AsyncSQLiteDB,
@@ -467,6 +480,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
       );
     }
 
+    if (this.poisonedBy) throw this.poisonedBy.error;
     yield* unwrapCb(async () => {
       await runAsyncSQL(this.db, "COMMIT", undefined, this.debug);
     });
@@ -524,6 +538,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
             values as Row[],
             this.debug,
           ),
+        this.poison,
         this.debug,
       );
     } finally {
@@ -556,6 +571,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
         values.length,
         () =>
           performAsyncUpsertOperation(this.db, tableDef, values, this.debug),
+        this.poison,
         this.debug,
       );
     } finally {
@@ -588,6 +604,7 @@ class AsyncSqlDriverTx implements DBDriverTX {
         values.length,
         () =>
           performAsyncDeleteOperation(this.db, tableDef, values, this.debug),
+        this.poison,
         this.debug,
       );
     } finally {

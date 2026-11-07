@@ -156,7 +156,7 @@ export class DBTx implements HyperDBTx {
     _specs: TSpecs & ValidateHybridPreloadTableSpecs<TSpecs>,
   ): Generator<DBCmd, void> {}
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new DBTx(
       this.originalDB,
       this.driver,
@@ -212,7 +212,14 @@ export class DBTx implements HyperDBTx {
     if (this.txCounter.val !== 0) return;
 
     this.isFinished.val = true;
-    yield* this.driver.commit();
+    try {
+      yield* this.driver.commit();
+    } catch (error) {
+      // The driver transaction is still open; let rollback() close it
+      // instead of failing with TRANSACTION_FINISHED and masking `error`.
+      this.isFinished.val = false;
+      throw error;
+    }
   }
 
   *rollback(): Generator<DBCmd> {

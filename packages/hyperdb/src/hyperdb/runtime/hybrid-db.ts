@@ -259,7 +259,7 @@ export class HybridDB implements HyperDB {
     this.state = createHybridDBState();
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = new HybridDB(this.primary, this.cache, {
       traits: [...this.traits, ...traits],
       debug: this.debug,
@@ -517,13 +517,25 @@ export class HybridDB implements HyperDB {
     return this.cache;
   }
 
+  acceptCommit(): () => void {
+    return this.state.persistence.acceptCommit();
+  }
+
+  get isClosed(): boolean {
+    const { persistence } = this.state;
+    return persistence.isClosing || persistence.isClosed;
+  }
+
   *close(): Generator<DBCmd, void> {
     const { persistence } = this.state;
     if (persistence.isClosed) return;
+    // Refuse new commits first, then let accepted ones reach the primary.
+    persistence.isClosing = true;
     yield* persistence.settle();
-    persistence.isClosed = true;
     if (this.primary.close) yield* this.primary.close();
     if (this.cache.close) yield* this.cache.close();
+    // Only now: a failed close above can be retried.
+    persistence.isClosed = true;
   }
 
   *waitForPendingPersistence(): Generator<DBCmd, void> {
@@ -662,7 +674,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
     this.traits = traits;
   }
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new HybridDBReadonlyTx(this.hybridDB, this.state, [
       ...this.traits,
       ...traits,
@@ -855,7 +867,7 @@ class HybridDBTx implements HyperDBTx {
     this.traits = traits;
   }
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new HybridDBTx(
       this.hybridDB,
       this.cacheTx,
@@ -1046,12 +1058,15 @@ class HybridDBTx implements HyperDBTx {
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
+    let releaseAcceptedCommit: (() => void) | undefined;
     try {
       // Checked inside the try so the finally still releases the lock. A
-      // crashed DB must not publish new cache/coverage state or enqueue
-      // persistence that can never reach the primary.
+      // crashed or closing DB must not publish new cache/coverage state or
+      // enqueue persistence that can never reach the primary.
       this.hybridDB.throwIfCrashed();
       this.hybridDB.throwIfPersistenceFull(this.state.pendingWrites);
+      // Accepted: close() now waits for this commit to enqueue its batch.
+      releaseAcceptedCommit = this.hybridDB.acceptCommit();
       yield* this.cacheTx.commit();
       mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
@@ -1072,6 +1087,7 @@ class HybridDBTx implements HyperDBTx {
       this.state.rollbacked.val = true;
       throw error;
     } finally {
+      releaseAcceptedCommit?.();
       this.state.releaseLock();
     }
   }

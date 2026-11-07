@@ -60,7 +60,7 @@ export function isHyperDBError(
   if (
     typeof error !== "object" ||
     error === null ||
-    !(hyperDBErrorBrand in error)
+    (error as { [hyperDBErrorBrand]?: unknown })[hyperDBErrorBrand] !== true
   ) {
     return false;
   }

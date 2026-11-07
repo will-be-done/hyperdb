@@ -338,7 +338,7 @@ export class PreloadedHybridDB implements HyperDB {
     this.state = createState();
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = new PreloadedHybridDB(this.primary, {
       traits: [...this.traits, ...traits],
       preloadConcurrency: this.preloadConcurrency,
@@ -534,12 +534,23 @@ export class PreloadedHybridDB implements HyperDB {
     yield* this.state.persistence.waitForPersistence();
   }
 
+  get isClosed(): boolean {
+    const { persistence } = this.state;
+    return persistence.isClosing || persistence.isClosed;
+  }
+
   *close(): Generator<DBCmd, void> {
     const { persistence } = this.state;
     if (persistence.isClosed) return;
+    // Refuse new commits first; commits that passed the gate enqueue
+    // synchronously, so settle() drains them before the primary closes.
+    persistence.isClosing = true;
     yield* persistence.settle();
-    persistence.isClosed = true;
     yield* this.primary.close();
+    // Every operation now fails with DB_CLOSED, so release the preloaded
+    // indexes and rows; withTraits() views share this state.
+    this.state.data = new PreloadedHybridData();
+    persistence.isClosed = true;
   }
 
   enqueuePersistence(writes: HybridPendingWrite[], primary: HyperDB): void {
@@ -593,7 +604,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
     };
   }
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new PreloadedHybridDBTx(
       this.owner,
       this.data,

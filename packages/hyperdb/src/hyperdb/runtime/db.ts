@@ -178,7 +178,7 @@ export class DB implements HyperDB {
     }
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = Object.create(DB.prototype) as DB;
     db.driver = this.driver;
     db.traits = [...this.traits, ...traits];
@@ -230,9 +230,10 @@ export class DB implements HyperDB {
 
   *close(): Generator<DBCmd, void> {
     if (this.state.closed) return;
+    // Mark closed only after the driver closes, so a failed close can retry.
+    this.driver.close?.();
     this.state.closed = true;
     unregisterHyperDB(this.state.id);
-    this.driver.close?.();
   }
 
   *loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void> {

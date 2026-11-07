@@ -24,6 +24,10 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
+      // The promise is abandoned here; observe it so a later rejection (for
+      // example an async rollback) is not reported as unhandled.
+      const data = result.value.data;
+      if (isPromiseLike(data)) data.then(undefined, () => {});
       // Throw into the generator so its finally blocks (such as a transaction
       // rollback) still run before the error reaches the caller.
       result = cmd.throw(

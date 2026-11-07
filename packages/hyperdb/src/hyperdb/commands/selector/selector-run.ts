@@ -74,6 +74,13 @@ const executors = {
   <T>(cmd: Generator<DBCmd, T>) => T | Promise<T>
 >;
 
+// In "sync" mode a Promise is the selector's own return value, never pending
+// execution, so only the other modes may hand back a promise to await.
+export const isPendingRun = <TReturn>(
+  mode: SelectorExecMode,
+  result: TReturn | Promise<TReturn>,
+): result is Promise<TReturn> => mode !== "sync" && result instanceof Promise;
+
 // One runner for every execution mode: "sync" never returns a promise,
 // "async" always does, and "maybeAsync" returns one only if a step waited.
 export function runSelectorGenerator<TReturn>(
@@ -100,7 +107,7 @@ export function runSelectorGenerator<TReturn>(
     }),
   );
 
-  return result instanceof Promise ? result.then(prune) : prune(result);
+  return isPendingRun(mode, result) ? result.then(prune) : prune(result);
 }
 
 export const runSelectorGeneratorSync = <TReturn>(

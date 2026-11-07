@@ -174,8 +174,8 @@ for retry and recovery behavior.
 
 Selector handlers are typed to yield only read commands, so calling `insert`,
 `upsert`, `deleteRows`, or an action inside a selector is a TypeScript error.
-The runtime enforces the same rule for untyped code: the runner only permits
-mutations while dispatching an action and otherwise throws a `HyperDBError`
+The runtime enforces the same rule for untyped code: a selector cannot write,
+even when an action runs it, and a write from a selector throws a `HyperDBError`
 with code `WRITES_DISALLOWED`. This keeps reads pure and is what makes selector
 caching safe.
 
@@ -213,10 +213,12 @@ themselves are exported as `SelectorCommand` and `ActionCommand`.
 
 ## Errors
 
-HyperDB errors extend `HyperDBError` and carry a stable `code`. Match on the code
-rather than the message text. `isHyperDBError(error, code)` narrows the error
-and also recognizes errors raised by another copy of the package in the same
-bundle.
+Runtime errors extend `HyperDBError` and carry a stable `code`. Match on the
+code rather than the message text. `isHyperDBError(error, code)` narrows the
+error and also recognizes errors raised by another copy of the package in the
+same bundle. Mistakes in how tables, actions, or queries are defined (such as a
+blank action name, an invalid index, or conflicting query conditions) throw a
+plain `Error`, for which `isHyperDBError` returns `false`.
 
 ```ts
 import { DuplicateIdError, isHyperDBError } from "@will-be-done/hyperdb";
@@ -297,10 +299,17 @@ export const ensureTask = action({
 ```
 
 A failed write has no partial effect, so the action can continue after catching
-it. The exception is IndexedDB: a failed IndexedDB request aborts the whole
-browser transaction, so the dispatch still rejects even if the handler caught
-the error, and nothing is committed. With `HybridDB`, writes are checked against
-the in-memory cache first, so duplicates and constraint errors can be handled.
+it. Two cases still end the transaction:
+
+- A failed IndexedDB request aborts the whole browser transaction, so the
+  dispatch rejects even if the handler caught the error, and nothing is
+  committed. Duplicate ids are still reported as `DuplicateIdError`. With
+  `HybridDB`, writes are checked against the in-memory cache first, so
+  duplicates and constraint errors can be handled.
+- Mutation hooks (`afterInsert`, `afterChange`, ...) run after their write is
+  applied. If one fails, the handler sees the error, but the transaction can no
+  longer commit: the dispatch rejects with the hook's error, nothing is written,
+  and subscribers are not notified.
 
 When you dispatch against a [`SubscribableDB`](/runtime/db/), the commit bumps a
 revision and notifies subscribers with the exact rows that changed. This is what

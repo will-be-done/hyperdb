@@ -119,6 +119,13 @@ describe("HyperDB errors", () => {
     expect(isHyperDBError(foreign, "DUPLICATE_ID")).toBe(true);
     expect(isHyperDBError(foreign, "VALIDATION")).toBe(false);
     expect(isHyperDBError(new Error("plain"))).toBe(false);
+    for (const brand of [false, undefined, "true"]) {
+      const notBranded = Object.assign(new Error("not branded"), {
+        code: "DUPLICATE_ID",
+        [Symbol.for("hyperdb.error")]: brand,
+      });
+      expect(isHyperDBError(notBranded)).toBe(false);
+    }
     expect(isHyperDBError(null)).toBe(false);
   });
 

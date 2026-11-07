@@ -57,6 +57,17 @@ describe("executor", () => {
     expect(steps).toEqual(["cleaned up"]);
   });
 
+  it("observes the promise execSync abandons so its rejection is handled", async () => {
+    function* command(): Generator<DBCmd, void, unknown> {
+      // No manual .catch(): execSync must observe it, or Vitest reports an
+      // unhandled rejection once the promise rejects.
+      yield* unwrap(Promise.reject(new Error("late cleanup failure")));
+    }
+
+    expect(() => execSync(command())).toThrow("Cannot execute async commands");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   it("propagates errors rejected by async unwrap commands", async () => {
     function* command(): Generator<DBCmd, void, unknown> {
       yield* unwrap(Promise.reject(new Error("boom")));

@@ -274,9 +274,13 @@ A failed read or write raises its error at the handler's `yield*`, so
 the transaction back. Failed writes leave no partial effect, so catching (for
 example a `DuplicateIdError`, then `upsert`) and continuing is safe, except on a
 bare IndexedDB driver, where a failed request aborts the whole transaction and
-the dispatch rejects anyway.
+the dispatch rejects anyway. A failing mutation hook also blocks the commit,
+even if the handler catches its error. Selectors never write, even inside an
+action.
 
-HyperDB errors extend `HyperDBError` with a stable `code`; match on the code,
+Runtime errors extend `HyperDBError` with a stable `code` (definition mistakes,
+such as a blank action name or conflicting query conditions, throw plain
+`Error`); match on the code,
 not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
 across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),
 `ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
@@ -288,7 +292,9 @@ not log errors it throws.
 `await execAsync(db.close())` (or `execSync` for sync runtimes) flushes hybrid
 persistence, closes wrapped databases and driver-owned resources, clears
 `SubscribableDB` subscribers, and unregisters the DB from devtools. Caller-owned
-SQLite handles stay open. Later operations throw `DB_CLOSED`.
+SQLite handles stay open. Hybrid runtimes refuse new commits as soon as
+`close()` starts and wait for accepted ones. Later operations, including cached
+selector reads, throw `DB_CLOSED`; a failed `close()` can be retried.
 
 ## Undo And Redo
 

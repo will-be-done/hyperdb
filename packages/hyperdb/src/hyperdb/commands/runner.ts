@@ -348,6 +348,8 @@ function* runSelector(
   try {
     value = yield* runCommandGenerator(db, body, {
       ...options,
+      // Selectors stay read-only even when an action runs them.
+      allowWrites: false,
       selectRangeCmds: childRanges,
       childMemo: scopedMemo,
       visited: scopedVisited,
@@ -359,6 +361,8 @@ function* runSelector(
     // A parent may catch this failure and return a fallback, which still
     // depends on what the child read, so keep those ranges subscribed.
     options.selectRangeCmds?.push(...childRanges);
+    // The previous successful result no longer reflects this child.
+    if (argsKey != null) options.childMemo?.get(cmd.selector)?.delete(argsKey);
     throw error;
   }
 

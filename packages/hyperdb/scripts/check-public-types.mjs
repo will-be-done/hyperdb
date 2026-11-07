@@ -18,6 +18,8 @@ const specifierPattern =
   /(?:from\s+|import\s*\(\s*|import\s+)["']([^"']+)["']/g;
 
 const resolveDeclaration = (fromFile, specifier) => {
+  const explicit = resolve(dirname(fromFile), specifier);
+  if (/\.d\.(m|c)?ts$/.test(specifier) && existsSync(explicit)) return explicit;
   const base = resolve(dirname(fromFile), specifier.replace(/\.(m?js)$/, ""));
   for (const candidate of [`${base}.d.ts`, join(base, "index.d.ts")]) {
     if (existsSync(candidate)) return candidate;

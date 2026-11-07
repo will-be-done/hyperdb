@@ -8,6 +8,7 @@ import { selectFrom } from "../../commands/selector/builder";
 import { createSelector, selectAsync } from "../../commands/selector/selector";
 import { execAsync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
+import { DuplicateIdError, isHyperDBError } from "../../core/errors";
 import type { SelectorGenerator } from "../../commands/command-types";
 import { DB } from "../../runtime/db";
 import { HybridDB } from "../../runtime/hybrid-db";
@@ -848,6 +849,66 @@ describe("IdbDriver", () => {
     await expect(
       execAsync(db.intervalScan(tasksTable, "byId", [{}])),
     ).rejects.toThrow("Hash index should have equality conditions");
+    // DB.intervalScan rejects contradictory clauses itself, so hit the driver.
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [
+            {
+              eq: [{ col: "id", val: "task-1" }],
+              gt: [{ col: "id", val: "task-1" }],
+            },
+          ],
+          {},
+        ),
+      ),
+    ).rejects.toThrow("Hash index should have equality conditions");
+    // Matching inclusive bounds are an exact lookup.
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [
+            {
+              gte: [{ col: "id", val: "task-1" }],
+              lte: [{ col: "id", val: "task-1" }],
+            },
+          ],
+          {},
+        ),
+      ),
+    ).resolves.toEqual([task]);
+    await expect(
+      execAsync(
+        db.driver.intervalScan(tasksTable.tableName, "missing", [{}], {}),
+      ),
+    ).rejects.toSatisfy((error) => isHyperDBError(error, "INDEX_NOT_FOUND"));
+  });
+
+  it("reports duplicate ids as DuplicateIdError and keeps unique-index errors", async () => {
+    const usersTable = defineTable("idbUniqueUsers", {
+      id: v.string(),
+      email: v.string(),
+    }).index("byEmail", ["email"], { type: "uniqhash" });
+    const db = await createDB();
+    await execAsync(db.loadTables([usersTable]));
+    await execAsync(db.insert(usersTable, [{ id: "a", email: "a@x" }]));
+
+    await expect(
+      execAsync(db.insert(usersTable, [{ id: "a", email: "other@x" }])),
+    ).rejects.toBeInstanceOf(DuplicateIdError);
+
+    let caught: unknown;
+    try {
+      await execAsync(db.insert(usersTable, [{ id: "b", email: "a@x" }]));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toBeInstanceOf(DuplicateIdError);
+    expect((caught as Error).name).toBe("ConstraintError");
   });
 
   it("rolls back duplicate insert batches without stale index entries", async () => {

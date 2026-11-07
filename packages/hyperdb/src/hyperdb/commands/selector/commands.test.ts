@@ -28,7 +28,13 @@ describe("isRunSelectorCmd", () => {
 
   test("rejects look-alike objects without the command brand", () => {
     expect(
-      isRunSelectorCmd({ type: "runSelector", selector: {}, args: {} }),
+      isRunSelectorCmd({
+        type: "runSelector",
+        selector: {},
+        args: { id: "1" },
+        makeBody: function* () {},
+        name: "mySelector",
+      }),
     ).toBe(false);
     expect(isSelectRangeCmd({ type: "selectRange" })).toBe(false);
   });

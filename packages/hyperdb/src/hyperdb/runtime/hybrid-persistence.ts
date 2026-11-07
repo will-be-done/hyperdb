@@ -162,24 +162,63 @@ export class HybridPersistenceQueue {
   private tail = Promise.resolve();
   private nextBatchId = 1;
   isCrashed = false;
+  // Set when close() starts: new commits are refused, accepted ones drain.
+  isClosing = false;
   isClosed = false;
   private crashError: unknown;
+  private acceptedCommits = 0;
+  private idleWaiters: (() => void)[] = [];
 
   throwIfCrashed(): void {
-    if (this.isClosed) throw new HyperDBError("DB_CLOSED", "DB is closed");
+    if (this.isClosing || this.isClosed) {
+      throw new HyperDBError("DB_CLOSED", "DB is closed");
+    }
     if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
   }
 
-  /** Waits for pending batches, ignoring a crash; the owner is shutting down. */
-  *settle(): Generator<DBCmd, void> {
-    const pending = [...this.pending].map((batch) => batch.promise);
-    if (pending.length > 0)
-      yield* unwrap(Promise.allSettled(pending).then(() => undefined));
+  /**
+   * Registers a commit that passed the gate but has not enqueued its batch
+   * yet, so close() waits for it. Returns the release function.
+   */
+  acceptCommit(): () => void {
+    this.acceptedCommits++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.acceptedCommits--;
+      this.notifyIfIdle();
+    };
   }
 
-  // Call before publishing cache changes; enqueue also checks direct callers.
+  /**
+   * Waits until every accepted commit has enqueued and every batch settled,
+   * ignoring a crash; the owner is shutting down.
+   */
+  *settle(): Generator<DBCmd, void> {
+    while (this.acceptedCommits > 0 || this.pending.size > 0) {
+      yield* unwrap(
+        new Promise<void>((resolve) => this.idleWaiters.push(resolve)),
+      );
+    }
+  }
+
+  private notifyIfIdle(): void {
+    if (this.acceptedCommits > 0 || this.pending.size > 0) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  // Call before publishing cache changes.
   throwIfFull(writes: HybridPendingWrite[]): void {
     this.throwIfCrashed();
+    this.throwIfAtCapacity(writes);
+  }
+
+  // A commit that already passed throwIfFull() may enqueue while closing.
+  private throwIfAtCapacity(writes: HybridPendingWrite[]): void {
+    if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
     if (
       writes.length > 0 &&
       this.pending.size >= HybridPersistenceQueue.maxPendingBatches
@@ -196,7 +235,7 @@ export class HybridPersistenceQueue {
     writes: HybridPendingWrite[],
     onFailure?: (batchId: number, failure: HybridPersistenceFailure) => void,
   ): void {
-    this.throwIfFull(writes);
+    this.throwIfAtCapacity(writes);
     if (writes.length === 0) return;
     const batchId = this.nextBatchId++;
     const persistWithRetry = (attempt: number): Promise<void> =>
@@ -224,20 +263,18 @@ export class HybridPersistenceQueue {
         );
       });
     const promise = this.tail.then(() => {
-      this.throwIfCrashed();
+      // Only a crash stops queued batches; close() waits for them to drain.
+      if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
       return persistWithRetry(1);
     });
     const batch = { id: batchId, writes, promise };
     this.pending.add(batch);
     this.tail = promise.catch(() => {});
-    void promise.then(
-      () => {
-        this.pending.delete(batch);
-      },
-      () => {
-        this.pending.delete(batch);
-      },
-    );
+    const settled = () => {
+      this.pending.delete(batch);
+      this.notifyIfIdle();
+    };
+    void promise.then(settled, settled);
   }
 
   *waitForPersistence(): Generator<DBCmd, void> {

@@ -174,7 +174,13 @@ function rollbackQuietly(db: SQLiteDB): void {
   }
 }
 
-function inWriteSavepoint(db: SQLiteDB, run: () => void): void {
+// If the savepoint cannot be rolled back or released, part of the write may
+// still be applied, so `poison` marks the transaction as unable to commit.
+function inWriteSavepoint(
+  db: SQLiteDB,
+  run: () => void,
+  poison: (error: unknown) => void,
+): void {
   db.exec(`SAVEPOINT ${SQLITE_WRITE_SAVEPOINT}`);
   try {
     run();
@@ -183,11 +189,16 @@ function inWriteSavepoint(db: SQLiteDB, run: () => void): void {
       db.exec(`ROLLBACK TO ${SQLITE_WRITE_SAVEPOINT}`);
       db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
     } catch {
-      // Keep the write error; the transaction itself still rolls back later.
+      poison(error);
     }
     throw error;
   }
-  db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+  try {
+    db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+  } catch (error) {
+    poison(error);
+    throw error;
+  }
 }
 
 function performTxWrite(
@@ -196,9 +207,10 @@ function performTxWrite(
   tableDef: TableDefinition,
   count: number,
   run: () => void,
+  poison: (error: unknown) => void,
 ): void {
   if (sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
-    inWriteSavepoint(db, run);
+    inWriteSavepoint(db, run, poison);
   } else {
     run();
   }
@@ -209,6 +221,11 @@ class SqlDriverTx implements DBDriverTX {
   private tableDefinitions: Map<string, TableDefinition>;
   private committed = false;
   private rolledback = false;
+  // Set when a write's savepoint could not be cleaned up; commit refuses.
+  private poisonedBy: { error: unknown } | undefined;
+  private readonly poison = (error: unknown) => {
+    this.poisonedBy ??= { error };
+  };
   private onFinish: () => void;
 
   constructor(
@@ -229,6 +246,7 @@ class SqlDriverTx implements DBDriverTX {
         "Transaction already finished",
       );
     }
+    if (this.poisonedBy) throw this.poisonedBy.error;
     this.db.exec("COMMIT");
     this.committed = true;
     this.onFinish();
@@ -259,8 +277,13 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performTxWrite(this.db, "insert", tableDef, values.length, () =>
-      performInsertOperation(this.db, tableDef, values as Row[]),
+    performTxWrite(
+      this.db,
+      "insert",
+      tableDef,
+      values.length,
+      () => performInsertOperation(this.db, tableDef, values as Row[]),
+      this.poison,
     );
   }
 
@@ -274,8 +297,13 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performTxWrite(this.db, "upsert", tableDef, values.length, () =>
-      performUpsertOperation(this.db, tableDef, values),
+    performTxWrite(
+      this.db,
+      "upsert",
+      tableDef,
+      values.length,
+      () => performUpsertOperation(this.db, tableDef, values),
+      this.poison,
     );
   }
 
@@ -289,8 +317,13 @@ class SqlDriverTx implements DBDriverTX {
     const tableDef = this.tableDefinitions.get(tableName);
     if (!tableDef)
       throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
-    performTxWrite(this.db, "delete", tableDef, values.length, () =>
-      performDeleteOperation(this.db, tableDef, values),
+    performTxWrite(
+      this.db,
+      "delete",
+      tableDef,
+      values.length,
+      () => performDeleteOperation(this.db, tableDef, values),
+      this.poison,
     );
   }
 

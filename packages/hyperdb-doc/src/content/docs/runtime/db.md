@@ -364,8 +364,11 @@ await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
 
 `close()` is idempotent and does the following:
 
-- `HybridDB` and `PreloadedHybridDB` first wait for pending background
-  persistence. A crashed runtime still closes without rethrowing the crash.
+- `HybridDB` and `PreloadedHybridDB` immediately refuse new transactions with
+  `DB_CLOSED`, then wait until every transaction already accepted has reached
+  background persistence and every flush has settled. A crashed runtime still
+  closes without rethrowing the crash. `PreloadedHybridDB` then releases its
+  preloaded rows and indexes.
 - The runtime then closes its wrapped databases and releases driver resources.
   `IdbDriver` closes its IndexedDB connection; the in-memory driver drops its
   data. SQLite handles you passed to `SqlDriver` or `AsyncSqlDriver` stay open,
@@ -374,7 +377,9 @@ await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
 - The `DB` is removed from devtools discovery.
 
 Afterwards every read, write, or transaction throws a `HyperDBError` with code
-`DB_CLOSED`. `db.isClosed` reports the state of a `DB`.
+`DB_CLOSED`, including cached selector reads. `db.isClosed` reports whether a
+runtime has started closing. If a driver fails to close, `close()` rejects and
+can be called again.
 
 ## Executing commands
 

@@ -110,9 +110,15 @@ export const untypedHelper: SelectorGenerator<void> = (function* (): Generator<
   unknown
 > {})();
 
-// Traits carry free-form fields next to `type`.
+// Traits carry free-form fields next to `type`, as literals or interfaces.
 export const tagged = (db: HyperDB) =>
   db.withTraits({ type: "myFeature.source", value: "import" });
+interface SourceTrait {
+  type: "myFeature.source";
+  value: string;
+}
+export const taggedWithInterface = (db: HyperDB, trait: SourceTrait) =>
+  db.withTraits(trait);
 
 // Callback exclusions get a typed scoped DB; generator bodies keep their type.
 export const callbackExclusion = (history: UndoManager) =>
@@ -121,3 +127,8 @@ export const generatorExclusion = (history: UndoManager) =>
   history.withoutUndo(function* () {
     yield* rename("a", "b");
   });
+export const valueExclusion = (history: UndoManager): string =>
+  history.withoutUndo(() => "value");
+export const untypedGeneratorExclusion = (history: UndoManager) =>
+  // @ts-expect-error generator bodies must yield HyperDB commands
+  history.withoutUndo(function* (): Generator<unknown, void, unknown> {});

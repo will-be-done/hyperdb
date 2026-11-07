@@ -334,10 +334,12 @@ write.
 
 ## Errors and shutdown
 
-HyperDB errors extend `HyperDBError` and carry a stable `code` such as
+Runtime errors extend `HyperDBError` and carry a stable `code` such as
 `DUPLICATE_ID`, `VALIDATION`, `WRITES_DISALLOWED`, `HYBRID_DB_CRASHED`, or
-`DB_CLOSED`. Match on the code with `isHyperDBError(error, code)`. HyperDB does
-not log the errors it throws.
+`DB_CLOSED`. Match on the code with `isHyperDBError(error, code)`. Mistakes in
+how tables, actions, or queries are defined (such as a blank action name or
+conflicting query conditions) throw a plain `Error`, for which `isHyperDBError`
+returns `false`. HyperDB does not log the errors it throws.
 
 Use `dispatchMaybeAsync(db, action(args))` when you want a synchronous result
 whenever no step had to wait. Close a runtime with `await execAsync(db.close())`:

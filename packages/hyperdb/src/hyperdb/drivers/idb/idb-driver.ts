@@ -29,7 +29,11 @@ import {
   getSqliteIndexSortKeyValue,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
-import { HyperDBError, DuplicateIdError } from "../../core/errors";
+import {
+  DuplicateIdError,
+  HyperDBError,
+  isHyperDBError,
+} from "../../core/errors";
 
 type NativeStoredRecord = {
   id: string;
@@ -186,6 +190,39 @@ function staleConnectionError(event: IDBVersionChangeEvent): Error {
   return new Error(
     `${STALE_CONNECTION_MESSAGE} (version changed from ${event.oldVersion} to ${newVersion})`,
   );
+}
+
+// A failed add() aborts the transaction. Before it does, check whether the id
+// already exists so a primary-key collision surfaces as DuplicateIdError;
+// unique-index violations keep their native error. The transaction is then
+// aborted explicitly, as the browser would have done.
+function addRecord(
+  tx: IDBTransaction,
+  store: IDBObjectStore,
+  id: string,
+  record: unknown,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = store.add(record);
+    request.onsuccess = () => resolve();
+    request.onerror = (event) => {
+      const error = request.error ?? new Error("IDB request failed");
+      if (error.name !== "ConstraintError") {
+        reject(error);
+        return;
+      }
+      event.preventDefault();
+      const lookup = store.getKey(id);
+      lookup.onsuccess = () => {
+        reject(lookup.result === undefined ? error : new DuplicateIdError(id));
+        abortQuietly(tx);
+      };
+      lookup.onerror = () => {
+        reject(error);
+        abortQuietly(tx);
+      };
+    };
+  });
 }
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
@@ -764,7 +801,7 @@ async function performInsert(
 
     const store = tx.objectStore(tableStoreName(tableDef.tableName));
     const requests = values.map((value) =>
-      requestToPromise(store.add(createNativeRecord(tableDef, value))),
+      addRecord(tx, store, value.id, createNativeRecord(tableDef, value)),
     );
     await Promise.all(requests);
     emitIdbDebug(debug, "insert", startedAt, {
@@ -886,6 +923,8 @@ async function performScan(
   const tableDef = tableDefinitions.get(tableName);
   if (!tableDef)
     throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
+  if (!tableDef.indexes[indexName])
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const startedAt = debug ? nowMs() : 0;
   if (selectOptions.limit !== undefined && selectOptions.limit <= 0) {
@@ -927,15 +966,13 @@ async function performScan(
       for (const clause of clauses) {
         // Like the other drivers, a hash index only answers id equality;
         // without this a range or full scan silently returned no rows.
-        const hasRange = [clause.gt, clause.gte, clause.lt, clause.lte].some(
-          (conditions) => conditions !== undefined && conditions.length > 0,
-        );
-        if (hasRange || !clause.eq || clause.eq.length === 0) {
+        const eq = exactIdConditions(clause);
+        if (!eq) {
           throw new Error(
             `Hash index should have equality conditions for columns 'id' and index name '${indexName}': ${JSON.stringify(clause)}`,
           );
         }
-        for (const condition of clause.eq) {
+        for (const condition of eq) {
           if (condition.col !== "id" || typeof condition.val !== "string") {
             throw new Error(
               `Primary-key index ${indexName} requires string IDs`,
@@ -1021,8 +1058,34 @@ async function performScan(
         error,
       );
     }
+    // Keep coded errors (such as INDEX_NOT_FOUND) matchable.
+    if (isHyperDBError(error)) throw error;
     throw new Error(`Scan failed for index ${indexName}: ${error}`);
   }
+}
+
+// The equality conditions of a hash-index clause, or undefined if it asks for
+// a range. Matching inclusive bounds (gte === lte) are an exact lookup too.
+function exactIdConditions(
+  clause: WhereClause,
+): { col: string; val: unknown }[] | undefined {
+  const nonEmpty = (conditions: unknown[] | undefined) =>
+    conditions !== undefined && conditions.length > 0;
+  if (nonEmpty(clause.gt) || nonEmpty(clause.lt)) return undefined;
+
+  const eq = clause.eq ?? [];
+  const { gte, lte } = clause;
+  if (!nonEmpty(gte) && !nonEmpty(lte)) return eq.length > 0 ? eq : undefined;
+  if (
+    eq.length === 0 &&
+    gte?.length === 1 &&
+    lte?.length === 1 &&
+    gte[0]!.col === lte[0]!.col &&
+    Object.is(gte[0]!.val, lte[0]!.val)
+  ) {
+    return [gte[0]!];
+  }
+  return undefined;
 }
 
 class IdbDriverTx implements DBDriverTX {

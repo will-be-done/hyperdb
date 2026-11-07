@@ -11,6 +11,11 @@ import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
 import { defineTable } from "../schema/table";
 import { v } from "../schema/values";
 import { getRegisteredHyperDBs } from "../tracing/registry";
+import { selectFrom } from "../commands/selector/builder";
+import {
+  createSelector,
+  selectCachedSync,
+} from "../commands/selector/selector";
 import { DB } from "./db";
 import { HybridDB } from "./hybrid-db";
 import { PreloadedHybridDB } from "./preloaded-hybrid-db";
@@ -147,5 +152,138 @@ describe("close()", () => {
 
     expect(primary.isClosed).toBe(true);
     expectClosed(() => execSync(db.beginTx()));
+  });
+
+  it("waits for a commit accepted before close() and refuses later ones", async () => {
+    const primaryDriver = new BptreeInmemDriver();
+    const cacheDriver = new BptreeInmemDriver();
+    const primary = new DB(primaryDriver, { register: false });
+    const cache = new DB(cacheDriver, { register: false });
+    const hybrid = new HybridDB(primary, cache);
+    await execAsync(hybrid.loadTables([rowsTable]));
+
+    // Hold the cache commit so close() starts while the commit is in flight.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const beginCache = cacheDriver.beginTx.bind(cacheDriver);
+    vi.spyOn(cacheDriver, "beginTx").mockImplementationOnce(function* () {
+      const tx = yield* beginCache();
+      const commit = tx.commit.bind(tx);
+      tx.commit = function* () {
+        yield* unwrap(gate);
+        yield* commit();
+      };
+      return tx;
+    });
+    const events: string[] = [];
+    const beginPrimary = primaryDriver.beginTx.bind(primaryDriver);
+    vi.spyOn(primaryDriver, "beginTx").mockImplementation(function* (
+      ...args: unknown[]
+    ) {
+      const tx = yield* beginPrimary();
+      if (args[0] !== "readwrite") return tx;
+      const commit = tx.commit.bind(tx);
+      tx.commit = function* () {
+        yield* commit();
+        events.push("persisted");
+      };
+      return tx;
+    });
+    const closePrimary = primaryDriver.close.bind(primaryDriver);
+    vi.spyOn(primaryDriver, "close").mockImplementation(() => {
+      events.push("primary closed");
+      closePrimary();
+    });
+
+    const accepted = asyncDispatch(hybrid, insertRow({ id: "r1" }));
+    await Promise.resolve();
+    const closing = execAsync(hybrid.close());
+    const late = asyncDispatch(hybrid, insertRow({ id: "r2" }));
+    release();
+
+    await expect(accepted).resolves.toBeUndefined();
+    await expect(late).rejects.toSatisfy((error) =>
+      isHyperDBError(error, "DB_CLOSED"),
+    );
+    await closing;
+    expect(events).toEqual(["persisted", "primary closed"]);
+  });
+
+  it("lets close() be retried after a driver fails to close", async () => {
+    const driver = new BptreeInmemDriver();
+    const db = new DB(driver, { register: false });
+    execSync(db.loadTables([rowsTable]));
+    vi.spyOn(driver, "close").mockImplementationOnce(() => {
+      throw new Error("busy");
+    });
+
+    expect(() => execSync(db.close())).toThrow("busy");
+    expect(db.isClosed).toBe(false);
+    execSync(db.close());
+    expect(db.isClosed).toBe(true);
+
+    const primaryDriver = new BptreeInmemDriver();
+    const primary = new DB(primaryDriver, { register: false });
+    const hybrid = new HybridDB(
+      primary,
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    await execAsync(hybrid.loadTables([rowsTable]));
+    vi.spyOn(primaryDriver, "close").mockImplementationOnce(() => {
+      throw new Error("busy");
+    });
+    await expect(execAsync(hybrid.close())).rejects.toThrow("busy");
+    await execAsync(hybrid.close());
+    expect(primary.isClosed).toBe(true);
+  });
+
+  it("clears SubscribableDB listeners even when the inner close fails", () => {
+    const driver = new BptreeInmemDriver();
+    const db = new SubscribableDB(new DB(driver, { register: false }));
+    execSync(db.loadTables([rowsTable]));
+    db.subscribe(() => {});
+    vi.spyOn(driver, "close").mockImplementationOnce(() => {
+      throw new Error("busy");
+    });
+
+    expect(() => execSync(db.close())).toThrow("busy");
+    expect(db.subscribers).toHaveLength(0);
+  });
+
+  it("rejects cached selector reads after close", () => {
+    const db = new SubscribableDB(
+      new DB(new BptreeInmemDriver(), { register: false }),
+    );
+    execSync(db.loadTables([rowsTable]));
+    const allRows = createSelector()({
+      name: "closeAllRows",
+      args: {},
+      handler: function* () {
+        return yield* selectFrom(rowsTable, "byIds").where((q) =>
+          q.gte("id", ""),
+        );
+      },
+    });
+    expect(selectCachedSync(db, { selector: allRows, args: {} })).toEqual([]);
+
+    execSync(db.close());
+
+    expectClosed(() => selectCachedSync(db, { selector: allRows, args: {} }));
+  });
+
+  it("releases PreloadedHybridDB's preloaded data on close", async () => {
+    const primary = new DB(new BptreeInmemDriver(), { register: false });
+    const db = new PreloadedHybridDB(primary);
+    await execAsync(db.loadTables([rowsTable]));
+    await asyncDispatch(db, insertRow({ id: "r1" }));
+    const state = (db as unknown as { state: { data: object } }).state;
+    const before = state.data;
+
+    await execAsync(db.close());
+
+    expect(state.data).not.toBe(before);
+    expect(db.isClosed).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 // Root selector cache shared by cached reads and stores: entries, GC,
 // invalidation subscriptions, and preloading.
 import { SubscribableDB, type Op } from "../../runtime/subscribable-db";
+import { HyperDBError } from "../../core/errors";
 import type { HyperDB } from "../../core/contracts";
 import { deepFreeze } from "../../deep-freeze";
 import { type TraceOptions } from "../../core/tracer";
@@ -30,7 +31,11 @@ import {
   type PreloadSelectorInput,
   normalizeSelectorMemoization,
 } from "./selector-definition";
-import { runSelectorGenerator, runSelectorGeneratorSync } from "./selector-run";
+import {
+  isPendingRun,
+  runSelectorGenerator,
+  runSelectorGeneratorSync,
+} from "./selector-run";
 
 export type SelectorCacheEntry<TReturn> = {
   argsKey: string;
@@ -78,17 +83,28 @@ let selectorGcTicker: ReturnType<typeof setInterval> | undefined;
 
 const subscribableCacheDBs = new WeakMap<HyperDB, SubscribableDB>();
 
+// Structural so a cache from another copy of HyperDB in the bundle is reused
+// instead of wrapped, which would split its revisions from its notifications.
+const isSubscribableDB = (db: HyperDB): db is SubscribableDB =>
+  db instanceof SubscribableDB ||
+  (typeof (db as Partial<SubscribableDB>).subscribe === "function" &&
+    typeof (db as Partial<SubscribableDB>).getRevision === "function");
+
 export const getSubscribableHybridCacheDB = (
   db: SubscribableDB,
 ): SubscribableDB | undefined => {
   const cacheDB = db.getCacheDB?.();
   if (!cacheDB) return undefined;
-  if (cacheDB instanceof SubscribableDB) return cacheDB;
+  if (isSubscribableDB(cacheDB)) return cacheDB;
 
   let subscribable = subscribableCacheDBs.get(cacheDB);
   if (!subscribable) {
-    subscribable = new SubscribableDB(cacheDB);
-    subscribableCacheDBs.set(cacheDB, subscribable);
+    const wrapper = new SubscribableDB(cacheDB);
+    subscribable = wrapper;
+    subscribableCacheDBs.set(cacheDB, wrapper);
+    // Cached selector entries subscribe to the wrapper; release them when
+    // the runtime that owns the cache closes.
+    db.onClose?.(() => wrapper.clearSubscriptions());
   }
 
   return subscribable;
@@ -273,7 +289,7 @@ const refreshSelectorCacheEntry = <TReturn>(
     },
   );
 
-  if (result instanceof Promise) {
+  if (isPendingRun(mode, result)) {
     return result.then((value) => {
       if (entry.db.getRevision() !== revision) {
         entry.needsRerun = true;
@@ -382,6 +398,8 @@ const runCachedSelectorInternal = <TSelector extends AnyObjectSelector>(
     gcTime?: number;
   } = {},
 ): SelectorReturn<TSelector> | Promise<SelectorReturn<TSelector>> => {
+  // A cache hit never touches storage, so check closure explicitly.
+  if (db.isClosed) throw new HyperDBError("DB_CLOSED", "DB is closed");
   if (!getSelectorMemoization(selector).root) {
     return runSelectorGenerator(
       mode,
@@ -420,7 +438,7 @@ const runCachedSelectorInternal = <TSelector extends AnyObjectSelector>(
     }
 
     const result = refreshSelectorCacheEntry(mode, entry);
-    if (result instanceof Promise) {
+    if (isPendingRun(mode, result)) {
       return result.then((value) => {
         if (!entry) return value;
 
@@ -492,7 +510,7 @@ const runCachedSelectorInternal = <TSelector extends AnyObjectSelector>(
     return value;
   };
 
-  if (result instanceof Promise && pendingByArgs) {
+  if (isPendingRun(mode, result) && pendingByArgs) {
     pendingEntry = {
       revision,
       promise: undefined as unknown as Promise<SelectorReturn<TSelector>>,
@@ -513,7 +531,7 @@ const runCachedSelectorInternal = <TSelector extends AnyObjectSelector>(
     return promise;
   }
 
-  if (result instanceof Promise)
+  if (isPendingRun(mode, result))
     return result.then((value) => storeEntry(value));
   return storeEntry(result);
 };
@@ -594,6 +612,12 @@ export async function preloadSelectorAsync<TSelector extends AnyObjectSelector>(
   input: PreloadSelectorInput<TSelector>,
 ): Promise<SelectorReturn<TSelector>> {
   const selectRangeCmds: SelectRangeCmd[] = [];
+  const cacheDB =
+    input.cacheDB === undefined
+      ? getSubscribableHybridCacheDB(db)
+      : input.cacheDB || undefined;
+  const revision = db.getRevision();
+  const cacheRevision = cacheDB?.getRevision();
   const value = await Promise.resolve(
     runCachedSelectorMaybeAsyncInternal(
       db,
@@ -603,12 +627,12 @@ export async function preloadSelectorAsync<TSelector extends AnyObjectSelector>(
       input,
     ),
   );
-  const cacheDB =
-    input.cacheDB === undefined
-      ? getSubscribableHybridCacheDB(db)
-      : input.cacheDB || undefined;
 
-  if (cacheDB) {
+  // A write that landed while the preload was pending may have changed the
+  // result; priming the cache with it would serve stale data.
+  const fresh =
+    db.getRevision() === revision && cacheDB?.getRevision() === cacheRevision;
+  if (cacheDB && fresh) {
     primeCachedSelector(
       cacheDB,
       input.selector,
