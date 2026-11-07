@@ -58,7 +58,7 @@ export default defineConfig({
     name: "browser",
     testTimeout: 120_000,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-    exclude: [...configDefaults.exclude, "**/*.browser.test.ts", "e2e/**"],
+    exclude: [...configDefaults.exclude, "e2e/**"],
     browser: {
       enabled: true,
       headless: true,

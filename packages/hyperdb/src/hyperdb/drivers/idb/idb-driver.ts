@@ -925,7 +925,17 @@ async function performScan(
     if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
       const ids = new Set<string>();
       for (const clause of clauses) {
-        for (const condition of clause.eq ?? []) {
+        // Like the other drivers, a hash index only answers id equality;
+        // without this a range or full scan silently returned no rows.
+        const hasRange = [clause.gt, clause.gte, clause.lt, clause.lte].some(
+          (conditions) => conditions !== undefined && conditions.length > 0,
+        );
+        if (hasRange || !clause.eq || clause.eq.length === 0) {
+          throw new Error(
+            `Hash index should have equality conditions for columns 'id' and index name '${indexName}': ${JSON.stringify(clause)}`,
+          );
+        }
+        for (const condition of clause.eq) {
           if (condition.col !== "id" || typeof condition.val !== "string") {
             throw new Error(
               `Primary-key index ${indexName} requires string IDs`,
