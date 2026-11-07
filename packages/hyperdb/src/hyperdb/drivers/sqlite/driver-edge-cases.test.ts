@@ -7,12 +7,19 @@ import {
   type TableDefinition,
 } from "../../schema/table";
 import {
+  createInspectableSqlAsyncDriver,
   createInspectableSqlDriver,
+  createSqlJsAsyncDriver,
   createSqlJsDriver,
   createSqlJsDriverFromDatabase,
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
+import { execAsync, execSync } from "../../core/executor";
+import { DuplicateIdError, HyperDBError } from "../../core/errors";
+import { createTursoWasmDriver } from "../../test-utils/turso-wasm-driver";
+import type { DBDriver } from "../../core/driver";
+import type { DBCmd } from "../../commands/async";
 import {
   buildSortKeyWhereClause,
   SQLITE_SCHEMA_METADATA_TABLE,
@@ -75,6 +82,41 @@ const uniqhashMigrationTableV2 = defineTable("driverEdgeUniqhashMigration", {
   id: v.string(),
   email: v.string(),
 }).index("byEmail", ["email"], { type: "uniqhash" });
+
+const indexColumnsTableV1 = defineTable("driverEdgeIndexColumns", {
+  id: v.string(),
+  title: v.string(),
+  state: v.string(),
+}).index("byKey", ["title"]);
+
+const indexColumnsTableV2 = defineTable("driverEdgeIndexColumns", {
+  id: v.string(),
+  title: v.string(),
+  state: v.string(),
+}).index("byKey", ["state"]);
+
+const lowerCaseTable = defineTable("driverEdgeCaseName", {
+  id: v.string(),
+});
+
+const upperCaseTable = defineTable("DRIVEREDGECASENAME", {
+  id: v.string(),
+});
+
+function schemalessTable(
+  tableName: string,
+  indexes: Record<string, { type: "hash" | "btree"; cols: string[] }>,
+): TableDefinition<unknown, AnyIndexDefinitions> {
+  return {
+    tableName,
+    schema: {},
+    indexes: { byId: { type: "hash", cols: ["id"] }, ...indexes },
+    idIndexName: "byId",
+    index() {
+      throw new Error("Not used in tests");
+    },
+  } as unknown as TableDefinition<unknown, AnyIndexDefinitions>;
+}
 
 const multiColumnHashTable = {
   tableName: "driverEdgeMultiColumnHash",
@@ -162,6 +204,215 @@ describe("SQLite driver edge case regressions", () => {
     expect(() => db.loadTables([noSideTablesTable])).toThrow(
       "metadata read failed",
     );
+  });
+
+  it("releases the transaction slot when BEGIN fails", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let failBegin = false;
+    const { driver } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforeExec(sql) {
+        if (failBegin && sql === "BEGIN TRANSACTION") {
+          throw new Error("begin failed");
+        }
+      },
+    });
+    execSync(driver.loadTables([noSideTablesTable]));
+
+    failBegin = true;
+    expect(() => execSync(driver.beginTx())).toThrow("begin failed");
+
+    failBegin = false;
+    const tx = execSync(driver.beginTx());
+    execSync(tx.insert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]));
+    execSync(tx.commit());
+    expect(
+      execSync(
+        driver.intervalScan(noSideTablesTable.tableName, "byTitle", [{}], {}),
+      ),
+    ).toEqual([{ id: "a", title: "A" }]);
+  });
+
+  it("rejects driver operations while a sync transaction is open", async () => {
+    const driver = await createSqlJsDriver();
+    execSync(driver.loadTables([noSideTablesTable]));
+    const tx = execSync(driver.beginTx());
+
+    const operations: (() => Generator<DBCmd, unknown>)[] = [
+      () => driver.insert(noSideTablesTable.tableName, [{ id: "a" }]),
+      () =>
+        driver.intervalScan(noSideTablesTable.tableName, "byTitle", [{}], {}),
+      () => driver.loadTables([noSideTablesTable]),
+      () => driver.beginTx(),
+    ];
+    for (const run of operations) {
+      expect(() => execSync(run())).toThrow(
+        "can't run while transaction is in progress",
+      );
+    }
+
+    execSync(tx.rollback());
+    expect(() => execSync(tx.commit())).toThrow("Transaction already finished");
+  });
+
+  it("rejects table names that differ only in case", async () => {
+    const driver = await createSqlJsDriver();
+
+    expect(() =>
+      execSync(driver.loadTables([lowerCaseTable, upperCaseTable])),
+    ).toThrow("SQLite table names are case-insensitive");
+
+    execSync(driver.loadTables([lowerCaseTable]));
+    expect(() => execSync(driver.loadTables([upperCaseTable]))).toThrow(
+      "SQLite table names are case-insensitive",
+    );
+    // Reloading the same name is fine.
+    execSync(driver.loadTables([lowerCaseTable]));
+  });
+
+  it("frees the driver when SQLite already rolled the transaction back", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver();
+    execSync(driver.loadTables([noSideTablesTable]));
+    const tx = execSync(driver.beginTx());
+    execSync(tx.insert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]));
+    // What SQLite does on its own after errors such as a full disk.
+    sqldb.run("ROLLBACK");
+
+    execSync(tx.rollback());
+
+    execSync(driver.insert(noSideTablesTable.tableName, [{ id: "b" }]));
+    expect(execSync(driver.scanAll(noSideTablesTable.tableName))).toEqual([
+      { id: "b" },
+    ]);
+  });
+
+  it("refuses the connection after a transaction rollback fails", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let failRollback = false;
+    const { driver } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforeExec(sql) {
+        if (failRollback && sql === "ROLLBACK") {
+          throw new Error("rollback failed");
+        }
+      },
+    });
+    execSync(driver.loadTables([noSideTablesTable]));
+    const tx = execSync(driver.beginTx());
+    execSync(tx.insert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]));
+
+    failRollback = true;
+    expect(() => execSync(tx.rollback())).toThrow("rollback failed");
+
+    // The uncommitted row must not be readable through the driver.
+    expect(() => execSync(driver.scanAll(noSideTablesTable.tableName))).toThrow(
+      "SQLite connection is unusable",
+    );
+    expect(() => execSync(driver.beginTx())).toThrow(
+      "SQLite connection is unusable",
+    );
+  });
+
+  it("refuses the connection after a failed write cannot be rolled back", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let failWrites = false;
+    const { driver } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforeExec(sql) {
+        if (!failWrites) return;
+        if (sql.startsWith("INSERT INTO")) throw new Error("insert failed");
+        if (sql === "ROLLBACK") throw new Error("rollback failed");
+      },
+    });
+    execSync(driver.loadTables([noSideTablesTable]));
+
+    failWrites = true;
+    // The caller gets the write's error, not the rollback's.
+    expect(() =>
+      execSync(
+        driver.upsert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]),
+      ),
+    ).toThrow("insert failed");
+
+    failWrites = false;
+    let error: unknown;
+    try {
+      execSync(driver.scanAll(noSideTablesTable.tableName));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(String(error)).toContain("SQLite connection is unusable");
+    expect((error as Error).cause).toEqual(new Error("rollback failed"));
+  });
+
+  it("recomputes sort keys when an index keeps its name but changes columns", async () => {
+    const driver = await createSqlJsDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([indexColumnsTableV1]);
+    db.insert(indexColumnsTableV1, [
+      { id: "task-a", title: "A", state: "done" },
+      { id: "task-b", title: "B", state: "todo" },
+    ]);
+
+    db.loadTables([indexColumnsTableV2]);
+
+    expect(
+      db.intervalScan(indexColumnsTableV2, "byKey", [
+        { eq: [{ col: "state", val: "todo" }] },
+      ]),
+    ).toEqual([{ id: "task-b", title: "B", state: "todo" }]);
+    expect(
+      db.intervalScan(indexColumnsTableV2, "byKey", [{}]).map((row) => row.id),
+    ).toEqual(["task-a", "task-b"]);
+  });
+
+  it("recomputes every sort key when the stored signature is missing", async () => {
+    const { driver, sqldb } = await createInspectableSqlDriver();
+    const db = new SyncDB(new DB(driver));
+    db.loadTables([noSideTablesTable]);
+    db.insert(noSideTablesTable, [
+      { id: "task-a", title: "A" },
+      { id: "task-b", title: "B" },
+    ]);
+    // Nothing records how these keys were encoded.
+    sqldb.run(
+      "UPDATE driverEdgeNoSideTables SET idx_byTitle_sort_key_v2 = x'00'",
+    );
+    sqldb.run(`DELETE FROM ${SQLITE_SCHEMA_METADATA_TABLE}`);
+
+    db.loadTables([noSideTablesTable]);
+
+    expect(
+      db.intervalScan(noSideTablesTable, "byTitle", [
+        { eq: [{ col: "title", val: "B" }] },
+      ]),
+    ).toEqual([{ id: "task-b", title: "B" }]);
+  });
+
+  it("backfills sort keys page by page past rows that stay out of the index", async () => {
+    const tableV1 = schemalessTable("driverEdgeBackfillPages", {});
+    const tableV2 = schemalessTable("driverEdgeBackfillPages", {
+      byTitle: { type: "hash", cols: ["title"] },
+    });
+    const { driver, sqldb, execLog } = await createInspectableSqlDriver();
+    execSync(driver.loadTables([tableV1]));
+    // More rows than one page, and every other row has no title, so it
+    // keeps a NULL sort key after the backfill.
+    const rows = Array.from({ length: 12_500 }, (_, index) => {
+      const id = `row-${String(index).padStart(5, "0")}`;
+      return index % 2 ? { id } : { id, title: `title-${index}` };
+    });
+    execSync(driver.insert(tableV1.tableName, rows));
+    execLog.length = 0;
+
+    execSync(driver.loadTables([tableV2]));
+
+    expect(
+      execLog.filter((sql) => sql.startsWith("SELECT id, data FROM")),
+    ).toHaveLength(2);
+    expect(
+      sqliteRows(
+        sqldb,
+        "SELECT count(idx_byTitle_sort_key_v2) FROM driverEdgeBackfillPages",
+      ),
+    ).toEqual([[6_250]]);
   });
 
   it("refreshes per-table metadata after another table changes the schema", async () => {
@@ -619,4 +870,183 @@ describe("SQLite driver edge case regressions", () => {
         .map((row) => row.id),
     ).toEqual(["task-a", "task-b"]);
   });
+
+  it("commits only after the transaction's in-flight write finishes", async () => {
+    const { driver, execLog } = await createInspectableSqlAsyncDriver();
+    await execAsync(driver.loadTables([noSideTablesTable]));
+    const tx = await execAsync(driver.beginTx());
+    execLog.length = 0;
+
+    // Neither is awaited before the other starts.
+    const write = execAsync(
+      tx.upsert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]),
+    );
+    const commit = execAsync(tx.commit());
+    await Promise.all([write, commit]);
+
+    expect(execLog.at(-1)).toBe("COMMIT");
+    expect(
+      await execAsync(driver.scanAll(noSideTablesTable.tableName)),
+    ).toEqual([{ id: "a", title: "A" }]);
+  });
+
+  const sqliteDrivers: [string, () => Promise<DBDriver>][] = [
+    ["SqlDriver", createSqlJsDriver],
+    ["AsyncSqlDriver (sql.js)", () => createSqlJsAsyncDriver()],
+    ["AsyncSqlDriver (Turso WASM)", () => createTursoWasmDriver()],
+  ];
+
+  for (const [name, createDriver] of sqliteDrivers) {
+    describe(`${name} duplicate ids`, () => {
+      const usersTable = defineTable("driverEdgeDuplicateUsers", {
+        id: v.string(),
+        email: v.string(),
+      }).index("byEmail", ["email"], { type: "uniqhash" });
+
+      const setup = async () => {
+        const driver = await createDriver();
+        await execAsync(driver.loadTables([usersTable]));
+        await execAsync(
+          driver.insert(usersTable.tableName, [{ id: "a", email: "a@x" }]),
+        );
+        return driver;
+      };
+
+      const rejection = async (run: Promise<unknown>) => {
+        try {
+          await run;
+        } catch (error) {
+          return error;
+        }
+        throw new Error("expected the write to fail");
+      };
+
+      it("reports an existing id as DuplicateIdError", async () => {
+        const driver = await setup();
+        const error = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [
+              { id: "b", email: "b@x" },
+              { id: "a", email: "other@x" },
+            ]),
+          ),
+        );
+
+        expect(error).toBeInstanceOf(DuplicateIdError);
+        expect((error as DuplicateIdError).id).toBe("a");
+        expect((error as DuplicateIdError).cause).toBeInstanceOf(Error);
+      });
+
+      it("reports a repeated id inside one batch", async () => {
+        const driver = await setup();
+        const insertError = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [
+              { id: "c", email: "c@x" },
+              { id: "c", email: "c2@x" },
+            ]),
+          ),
+        );
+        const upsertError = await rejection(
+          execAsync(
+            driver.upsert(usersTable.tableName, [
+              { id: "a", email: "a2@x" },
+              { id: "a", email: "a3@x" },
+            ]),
+          ),
+        );
+
+        expect(insertError).toBeInstanceOf(DuplicateIdError);
+        expect((insertError as DuplicateIdError).code).toBe("DUPLICATE_ID");
+        expect((insertError as DuplicateIdError).id).toBe("c");
+        expect(upsertError).toBeInstanceOf(DuplicateIdError);
+        expect((upsertError as DuplicateIdError).code).toBe("DUPLICATE_ID");
+        expect((upsertError as DuplicateIdError).id).toBe("a");
+      });
+
+      it("finds the duplicate when the batch spans several statements", async () => {
+        const driver = await setup();
+        const rows = Array.from({ length: 1000 }, (_, index) => ({
+          id: `row-${index}`,
+          email: `${index}@x`,
+        }));
+        const tx = await execAsync(driver.beginTx());
+        const error = await rejection(
+          execAsync(
+            tx.insert(usersTable.tableName, [
+              ...rows,
+              { id: "row-3", email: "again@x" },
+            ]),
+          ),
+        );
+        // The failed write leaves nothing behind, even when committed.
+        await execAsync(tx.commit());
+
+        expect(error).toBeInstanceOf(DuplicateIdError);
+        expect((error as DuplicateIdError).code).toBe("DUPLICATE_ID");
+        expect((error as DuplicateIdError).id).toBe("row-3");
+        expect(await execAsync(driver.scanAll!(usersTable.tableName))).toEqual([
+          { id: "a", email: "a@x" },
+        ]);
+      });
+
+      it("reports a row that repeats both its id and a unique value", async () => {
+        const driver = await setup();
+        const error = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [{ id: "a", email: "a@x" }]),
+          ),
+        );
+
+        expect(error).toBeInstanceOf(DuplicateIdError);
+        expect((error as DuplicateIdError).id).toBe("a");
+      });
+
+      it("keeps the engine error for unique-index violations", async () => {
+        const driver = await setup();
+        const error = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [{ id: "b", email: "a@x" }]),
+          ),
+        );
+
+        expect(error).not.toBeInstanceOf(DuplicateIdError);
+        expect(String((error as Error).message)).toContain(
+          "UNIQUE constraint failed",
+        );
+      });
+    });
+
+    describe(`${name} transactions`, () => {
+      it("rejects writes through a readonly transaction", async () => {
+        const driver = await createDriver();
+        await execAsync(driver.loadTables([noSideTablesTable]));
+        await execAsync(
+          driver.insert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]),
+        );
+        const tx = await execAsync(driver.beginTx("readonly"));
+
+        for (const run of [
+          () => tx.insert(noSideTablesTable.tableName, [{ id: "b" }]),
+          () => tx.upsert(noSideTablesTable.tableName, [{ id: "a" }]),
+          () => tx.delete(noSideTablesTable.tableName, ["a"]),
+        ]) {
+          let error: unknown;
+          try {
+            await execAsync(run());
+          } catch (caught) {
+            error = caught;
+          }
+          expect(error).toBeInstanceOf(HyperDBError);
+          expect((error as HyperDBError).code).toBe("READONLY_TRANSACTION");
+        }
+        expect(
+          await execAsync(
+            tx.intervalScan(noSideTablesTable.tableName, "byTitle", [{}], {}),
+          ),
+        ).toEqual([{ id: "a", title: "A" }]);
+        await execAsync(tx.commit());
+      });
+    });
+  }
 });

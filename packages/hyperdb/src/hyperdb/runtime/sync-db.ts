@@ -11,6 +11,7 @@ import type { SelectOptions, WhereClause } from "../core/primitives";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 
@@ -36,14 +37,14 @@ export class SyncDBTx {
 
   insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): void {
     return execSync(this.dbTx.insert(table, records));
   }
 
   upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): void {
     return execSync(this.dbTx.upsert(table, records));
   }
@@ -106,14 +107,14 @@ export class SyncDB {
 
   insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): void {
     return execSync(this.db.insert(table, records));
   }
 
   upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): void {
     return execSync(this.db.upsert(table, records));
   }

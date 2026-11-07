@@ -10,6 +10,7 @@ import type { SelectOptions, WhereClause } from "../core/primitives";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 
@@ -36,14 +37,14 @@ export class AsyncDBTx {
 
   insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Promise<void> {
     return execAsync(this.dbTx.insert(table, records));
   }
 
   upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Promise<void> {
     return execAsync(this.dbTx.upsert(table, records));
   }
@@ -101,14 +102,14 @@ export class AsyncDB {
 
   insert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Promise<void> {
     return execAsync(this.db.insert(table, records));
   }
 
   upsert<TTable extends TableDefinition<any, any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Promise<void> {
     return execAsync(this.db.upsert(table, records));
   }

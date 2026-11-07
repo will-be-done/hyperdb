@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { defineTable } from "../../schema/table";
-import { execAsync } from "../../core/executor";
+import { execAsync, execSync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { v } from "../../schema/values";
 import {
@@ -92,6 +92,47 @@ describe("db", async () => {
       "BEGIN TRANSACTION",
       "ROLLBACK",
     ]);
+  });
+
+  it("releases its locks when a sync caller cannot wait for them", async () => {
+    const statements: string[] = [];
+    const driver = new AsyncSqlDriver({
+      async exec(sql) {
+        statements.push(sql);
+      },
+      prepare() {
+        throw new Error("not used by this test");
+      },
+    });
+    const notHung = <T>(promise: Promise<T>) => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      return Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("lock was not released")),
+            100,
+          );
+        }),
+      ]).finally(() => clearTimeout(timeout));
+    };
+
+    expect(() => execSync(driver.beginTx())).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    const tx = await notHung(execAsync(driver.beginTx()));
+
+    expect(() => execSync(tx.delete(tasksTable.tableName, []))).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    // Getting as far as the table lookup means the lock was free again.
+    await expect(
+      notHung(execAsync(tx.delete(tasksTable.tableName, []))),
+    ).rejects.toThrow(expect.objectContaining({ code: "TABLE_NOT_FOUND" }));
+    await execAsync(tx.rollback());
+
+    // The rejected sync calls never reached SQLite.
+    expect(statements).toEqual(["BEGIN TRANSACTION", "ROLLBACK"]);
   });
 
   it("uses one metadata read when async table schemas are unchanged", async () => {
@@ -206,6 +247,39 @@ describe("db", async () => {
     );
   });
 
+  it("still reports a metadata read that really failed", async () => {
+    const debug = vi.fn();
+    let failMetadataRead = false;
+    const { driver } = await createInspectableSqlAsyncDriver(
+      { debug },
+      {
+        beforePrepare(sql) {
+          if (
+            failMetadataRead &&
+            sql.includes(`LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE}`)
+          ) {
+            throw new Error("disk I/O error");
+          }
+        },
+      },
+    );
+    const db = new DB(driver);
+    await execAsync(db.loadTables([tasksTable]));
+
+    failMetadataRead = true;
+    debug.mockClear();
+    await expect(execAsync(db.loadTables([tasksTable]))).rejects.toThrow(
+      "disk I/O error",
+    );
+
+    expect(debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "error",
+        error: expect.objectContaining({ message: "disk I/O error" }),
+      }),
+    );
+  });
+
   for (const driver of [createSqlJsAsyncDriver, createTursoWasmDriver]) {
     it("preserves physical indexes whose logical names end in _sort_key", async () => {
       const debug = vi.fn();
@@ -305,6 +379,54 @@ describe("db", async () => {
             event.normalizedSql === "BEGIN TRANSACTION",
         ),
       ).toBe(true);
+    });
+
+    it("reports no SQL errors when a fresh database boots", async () => {
+      const debug = vi.fn();
+      const db = new DB(await driver({ debug }));
+
+      await execAsync(db.loadTables([tasksTable]));
+
+      expect(
+        debug.mock.calls.filter(([event]) => event.status === "error"),
+      ).toEqual([]);
+    });
+
+    it("keeps statement results when the debug hook throws", async () => {
+      const errorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      try {
+        const db = new DB(
+          await driver({
+            debug() {
+              throw new Error("hook failed");
+            },
+          }),
+        );
+        const task = {
+          id: "task-1",
+          title: "Task 1",
+          state: "done",
+          projectId: "1",
+          orderToken: "b",
+          type: "task",
+          lastToggledAt: 0,
+        } as const;
+
+        await execAsync(db.loadTables([tasksTable]));
+        await execAsync(db.insert(tasksTable, [task]));
+
+        await expect(
+          execAsync(db.intervalScan(tasksTable, "ids", [{}])),
+        ).resolves.toEqual([task]);
+        expect(errorSpy).toHaveBeenCalledWith(
+          "AsyncSqlDriver debug hook threw",
+          expect.objectContaining({ message: "hook failed" }),
+        );
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
 
     it("formats SQL diagnostics as one-line console messages", () => {

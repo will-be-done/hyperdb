@@ -59,6 +59,18 @@ export default defineConfig({
     testTimeout: 120_000,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: [...configDefaults.exclude, "e2e/**"],
+    coverage: {
+      provider: "v8",
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.typetest.ts",
+        "src/**/*.bench.ts",
+        "src/hyperdb/test-utils/**",
+      ],
+      reporter: ["text-summary", "html", "json-summary"],
+      reportsDirectory: "coverage",
+    },
     browser: {
       enabled: true,
       headless: true,

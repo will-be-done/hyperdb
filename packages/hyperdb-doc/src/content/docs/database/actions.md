@@ -251,8 +251,10 @@ try {
 HyperDB does not log errors it throws; they reach the caller of the dispatch or
 select helper, or the `error` state of async selector stores and
 `useAsyncSelector`.
-SQLite engine errors (for example a `UNIQUE` constraint on a plain `SqlDriver`)
-are passed through unchanged.
+Every driver reports a primary-key collision as `DuplicateIdError`, including
+a repeated id inside one batch and a row that also breaks a `uniqhash` index.
+Other storage-engine errors, such as a SQLite or IndexedDB `uniqhash`
+violation, are passed through unchanged.
 
 ## Transactions
 

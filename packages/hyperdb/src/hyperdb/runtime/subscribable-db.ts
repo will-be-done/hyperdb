@@ -14,12 +14,19 @@ import type {
 } from "../core/primitives";
 import { runCommandGenerator } from "../commands/runner";
 import type { DBCmd } from "../commands/async";
-import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
+import {
+  DEFAULT_CODEC_OPTIONS,
+  normalizeRecordsForDriver,
+  tableStoresArrayBuffers,
+  type CodecOptions,
+} from "../storage/codec";
+import { deepFreeze } from "../deep-freeze";
 import type { DBTransactionMode } from "../core/driver";
 // import { collectAll } from "../commands/async";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import {
@@ -36,6 +43,20 @@ import { HyperDBError } from "../core/errors";
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
 import type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
+
+// Hooks and subscribers treat `newValue` as the stored row. A typed array or
+// DataView written to a binary column is stored as an ArrayBuffer, so rows
+// that may hold one are passed on in their stored form.
+function rowsAsStored(
+  table: TableDefinition,
+  records: Row[],
+  options: CodecOptions,
+): Row[] {
+  if (!tableStoresArrayBuffers(table)) return records;
+  const rows = normalizeRecordsForDriver(table, records, options);
+  if (options.freezeRows) deepFreeze(rows);
+  return rows;
+}
 
 type Subscriber = (op: Op[], traits: Trait[], revision: number) => void;
 
@@ -328,7 +349,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     if (records.length === 0) return;
@@ -360,7 +381,7 @@ export class SubscribableDBTx implements HyperDBTx {
       throw error;
     }
 
-    const insertOps = records.map(
+    const insertOps = rowsAsStored(table, records, this.getOptions()).map(
       (r) =>
         ({
           type: "insert",
@@ -392,7 +413,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     if (records.length === 0) return;
@@ -456,7 +477,7 @@ export class SubscribableDBTx implements HyperDBTx {
       throw error;
     }
 
-    const upsertOps = upsertRecords.map(
+    const upsertOps = rowsAsStored(table, upsertRecords, this.getOptions()).map(
       (record) =>
         ({
           type: "upsert",
@@ -861,7 +882,7 @@ export class SubscribableDB implements HyperDB {
 
   *insert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     if (records.length === 0) return;
 
@@ -873,7 +894,7 @@ export class SubscribableDB implements HyperDB {
 
   *upsert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ) {
     if (records.length === 0) return;
 

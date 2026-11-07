@@ -55,7 +55,8 @@ is enabled for driver reads. Important rules:
   are rejected if they normalize to `undefined`.
 - Typed-array and `DataView` values passed to `v.arrayBuffer()` are copied into
   a fresh `ArrayBuffer`, so later mutations to the original view do not mutate
-  the normalized value.
+  the normalized value. This conversion happens on every write, even with
+  runtime row validation off, so reads always return an `ArrayBuffer`.
 
 ```ts
 import { assertValid, v } from "@will-be-done/hyperdb";

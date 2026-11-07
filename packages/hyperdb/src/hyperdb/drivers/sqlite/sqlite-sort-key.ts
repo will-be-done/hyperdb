@@ -55,14 +55,64 @@ function isEncodedBytesObject(value: unknown): value is {
   );
 }
 
-function bytesOf(value: unknown): number[] {
+// Keys are written into one scratch buffer and copied out once per tuple, so
+// encoding allocates little beyond the returned key.
+const INITIAL_BUFFER_SIZE = 256;
+// A buffer grown past this by an unusually large key is not kept around.
+const MAX_RETAINED_BUFFER_SIZE = 64 * 1024;
+let buffer = new Uint8Array(INITIAL_BUFFER_SIZE);
+let length = 0;
+const numberView = new DataView(new ArrayBuffer(8));
+
+function reserve(extra: number): void {
+  const needed = length + extra;
+  if (needed <= buffer.length) return;
+  let size = buffer.length * 2;
+  while (size < needed) size *= 2;
+  const next = new Uint8Array(size);
+  next.set(buffer.subarray(0, length));
+  buffer = next;
+}
+
+function writeByte(byte: number): void {
+  reserve(1);
+  buffer[length++] = byte;
+}
+
+function writeAscii(value: string): void {
+  reserve(value.length);
+  for (let index = 0; index < value.length; index++) {
+    buffer[length++] = value.charCodeAt(index);
+  }
+}
+
+// Writes positive integers from 1 through 0x3fffff inclusive with the same
+// bytewise order as their numeric value. Zero is reserved as a terminator;
+// callers must keep values within the supported range and reserve 4 bytes.
+function writePositiveInteger(value: number): void {
+  if (value <= 0x7f) {
+    buffer[length++] = value;
+  } else if (value <= 0x7ff) {
+    buffer[length++] = 0xc0 | (value >> 6);
+    buffer[length++] = 0x80 | (value & 0x3f);
+  } else if (value <= 0xffff) {
+    buffer[length++] = 0xe0 | (value >> 12);
+    buffer[length++] = 0x80 | ((value >> 6) & 0x3f);
+    buffer[length++] = 0x80 | (value & 0x3f);
+  } else {
+    buffer[length++] = 0xf0 | (value >> 18);
+    buffer[length++] = 0x80 | ((value >> 12) & 0x3f);
+    buffer[length++] = 0x80 | ((value >> 6) & 0x3f);
+    buffer[length++] = 0x80 | (value & 0x3f);
+  }
+}
+
+function bytesOf(value: unknown): ArrayLike<number> {
   if (value instanceof ArrayBuffer) {
-    return Array.from(new Uint8Array(value));
+    return new Uint8Array(value);
   }
   if (ArrayBuffer.isView(value)) {
-    return Array.from(
-      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
-    );
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
   if (isEncodedBytesObject(value)) {
     return value.value;
@@ -84,11 +134,24 @@ function bigintOf(value: unknown): bigint {
   throw new UnreachableError(value as never, "Expected bigint value");
 }
 
-function asciiBytes(value: string): number[] {
-  return Array.from(value, (character) => character.charCodeAt(0));
+function isBigintValue(value: unknown): boolean {
+  return (
+    typeof value === "bigint" ||
+    (isEncodedObject(value) &&
+      value.$hyperdbType === "bigint" &&
+      typeof value.value === "string")
+  );
 }
 
-function encodeBigintPayload(value: unknown): number[] {
+function isBytesValue(value: unknown): boolean {
+  return (
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value) ||
+    isEncodedBytesObject(value)
+  );
+}
+
+function writeBigintPayload(value: unknown): void {
   const bigint = bigintOf(value);
   const negative = bigint < 0n;
   const digits = (negative ? -bigint : bigint).toString();
@@ -97,161 +160,129 @@ function encodeBigintPayload(value: unknown): number[] {
   }
 
   if (!negative) {
-    return asciiBytes(
-      `1${digits.length.toString().padStart(15, "0")}${digits}`,
-    );
+    writeAscii(`1${digits.length.toString().padStart(15, "0")}`);
+    writeAscii(digits);
+    return;
   }
 
   const invertedLength = MAX_DECIMAL_LENGTH - digits.length;
-  const invertedDigits = digits
-    .split("")
-    .map((digit) => String(9 - Number(digit)))
-    .join("");
-
-  return asciiBytes(
-    `0${invertedLength.toString().padStart(15, "0")}${invertedDigits}`,
-  );
+  writeAscii(`0${invertedLength.toString().padStart(15, "0")}`);
+  reserve(digits.length);
+  for (let index = 0; index < digits.length; index++) {
+    // "0".."9" is 0x30..0x39, so 9 - digit is 0x69 - code.
+    buffer[length++] = 0x69 - digits.charCodeAt(index);
+  }
 }
 
-function encodeNumberPayload(value: number): number[] {
-  const normalized = Object.is(value, -0) ? 0 : value;
-  const buffer = new ArrayBuffer(8);
-  const view = new DataView(buffer);
-  view.setFloat64(0, normalized, false);
-  const bytes = Array.from(new Uint8Array(buffer));
-
-  if ((bytes[0]! & 0x80) !== 0) {
-    for (let i = 0; i < bytes.length; i++) {
-      bytes[i] = ~bytes[i]! & 0xff;
+function writeNumberPayload(value: number): void {
+  numberView.setFloat64(0, Object.is(value, -0) ? 0 : value, false);
+  reserve(8);
+  if ((numberView.getUint8(0) & 0x80) !== 0) {
+    for (let index = 0; index < 8; index++) {
+      buffer[length++] = ~numberView.getUint8(index) & 0xff;
     }
   } else {
-    bytes[0] = bytes[0]! ^ 0x80;
+    buffer[length++] = numberView.getUint8(0) ^ 0x80;
+    for (let index = 1; index < 8; index++) {
+      buffer[length++] = numberView.getUint8(index);
+    }
   }
-
-  return bytes;
 }
 
-// Encodes positive integers from 1 through 0x3fffff inclusive with the same
-// bytewise order as their numeric value. Zero is reserved as a terminator;
-// callers must keep values within the supported range.
-function encodePositiveInteger(value: number): number[] {
-  if (value <= 0x7f) return [value];
-  if (value <= 0x7ff) {
-    return [0xc0 | (value >> 6), 0x80 | (value & 0x3f)];
-  }
-  if (value <= 0xffff) {
-    return [
-      0xe0 | (value >> 12),
-      0x80 | ((value >> 6) & 0x3f),
-      0x80 | (value & 0x3f),
-    ];
-  }
-  return [
-    0xf0 | (value >> 18),
-    0x80 | ((value >> 12) & 0x3f),
-    0x80 | ((value >> 6) & 0x3f),
-    0x80 | (value & 0x3f),
-  ];
-}
-
-function encodeStringPayload(value: string): number[] {
-  const result: number[] = [];
+function writeStringPayload(value: string): void {
+  reserve(value.length * 4 + 1);
   for (let index = 0; index < value.length; index++) {
-    result.push(...encodePositiveInteger(value.charCodeAt(index) + 1));
+    writePositiveInteger(value.charCodeAt(index) + 1);
   }
-  result.push(TERMINATOR);
-  return result;
+  buffer[length++] = TERMINATOR;
 }
 
-function encodeByteArrayPayload(bytes: readonly number[]): number[] {
-  const result: number[] = [];
-  for (const byte of bytes) {
-    result.push(...encodePositiveInteger(byte + 1));
+function writeByteArrayPayload(bytes: ArrayLike<number>): void {
+  reserve(bytes.length * 2 + 1);
+  for (let index = 0; index < bytes.length; index++) {
+    writePositiveInteger(bytes[index]! + 1);
   }
-  result.push(TERMINATOR);
-  return result;
+  buffer[length++] = TERMINATOR;
 }
 
-function encodeArrayPayload(values: readonly unknown[]): number[] {
-  return [...values.flatMap((item) => encodeStoredSortValue(item)), TERMINATOR];
+function writeArrayPayload(values: readonly unknown[]): void {
+  for (let index = 0; index < values.length; index++) {
+    // Holes in sparse arrays are skipped, as the format always has.
+    if (index in values) writeStoredSortValue(values[index]);
+  }
+  writeByte(TERMINATOR);
 }
 
-function encodeObjectPayload(value: Record<string, unknown>): number[] {
+function writeObjectPayload(value: Record<string, unknown>): void {
   const keys = Object.keys(value).sort();
-  return [
-    ...encodeArrayPayload(keys),
-    ...keys.flatMap((key) => encodeStoredSortValue(value[key])),
-    TERMINATOR,
-  ];
+  writeArrayPayload(keys);
+  for (const key of keys) {
+    writeStoredSortValue(value[key]);
+  }
+  writeByte(TERMINATOR);
 }
 
-function encodeScanSortValue(value: unknown): number[] {
-  if (value === MIN) return [TAG.min];
-  if (value === MAX) return [TAG.max];
-  if (value === null || value === undefined) return [TAG.null];
-  if (
-    typeof value === "bigint" ||
-    (isEncodedObject(value) &&
-      value.$hyperdbType === "bigint" &&
-      typeof value.value === "string")
-  ) {
-    return [TAG.bigint, ...encodeBigintPayload(value)];
+function writeScanSortValue(value: unknown): void {
+  if (value === MIN) return writeByte(TAG.min);
+  if (value === MAX) return writeByte(TAG.max);
+  if (value === null || value === undefined) return writeByte(TAG.null);
+  if (isBigintValue(value)) {
+    writeByte(TAG.bigint);
+    return writeBigintPayload(value);
   }
   if (typeof value === "number") {
-    return [TAG.number, ...encodeNumberPayload(value)];
+    writeByte(TAG.number);
+    return writeNumberPayload(value);
   }
   if (typeof value === "boolean") {
-    return [TAG.number, ...encodeNumberPayload(Number(value))];
+    writeByte(TAG.number);
+    return writeNumberPayload(Number(value));
   }
   if (typeof value === "string") {
-    return [TAG.string, ...encodeStringPayload(value)];
+    writeByte(TAG.string);
+    return writeStringPayload(value);
   }
-  if (
-    value instanceof ArrayBuffer ||
-    ArrayBuffer.isView(value) ||
-    isEncodedBytesObject(value)
-  ) {
-    return [TAG.bytes, ...encodeByteArrayPayload(bytesOf(value))];
+  if (isBytesValue(value)) {
+    writeByte(TAG.bytes);
+    return writeByteArrayPayload(bytesOf(value));
   }
 
   throw new UnreachableError(value as never, "Unknown scan sort-key value");
 }
 
-function encodeStoredSortValue(value: unknown): number[] {
-  if (value === MIN) return [TAG.min];
-  if (value === MAX) return [TAG.max];
-  if (value === undefined) return [TAG.missing];
-  if (value === null) return [TAG.null];
+function writeStoredSortValue(value: unknown): void {
+  if (value === MIN) return writeByte(TAG.min);
+  if (value === MAX) return writeByte(TAG.max);
+  if (value === undefined) return writeByte(TAG.missing);
+  if (value === null) return writeByte(TAG.null);
 
-  if (
-    typeof value === "bigint" ||
-    (isEncodedObject(value) &&
-      value.$hyperdbType === "bigint" &&
-      typeof value.value === "string")
-  ) {
-    return [TAG.bigint, ...encodeBigintPayload(value)];
+  if (isBigintValue(value)) {
+    writeByte(TAG.bigint);
+    return writeBigintPayload(value);
   }
   if (typeof value === "number") {
-    return [TAG.number, ...encodeNumberPayload(value)];
+    writeByte(TAG.number);
+    return writeNumberPayload(value);
   }
   if (typeof value === "boolean") {
-    return [TAG.boolean, value ? 1 : 0];
+    writeByte(TAG.boolean);
+    return writeByte(value ? 1 : 0);
   }
   if (typeof value === "string") {
-    return [TAG.string, ...encodeStringPayload(value)];
+    writeByte(TAG.string);
+    return writeStringPayload(value);
   }
-  if (
-    value instanceof ArrayBuffer ||
-    ArrayBuffer.isView(value) ||
-    isEncodedBytesObject(value)
-  ) {
-    return [TAG.bytes, ...encodeByteArrayPayload(bytesOf(value))];
+  if (isBytesValue(value)) {
+    writeByte(TAG.bytes);
+    return writeByteArrayPayload(bytesOf(value));
   }
   if (Array.isArray(value)) {
-    return [TAG.array, ...encodeArrayPayload(value)];
+    writeByte(TAG.array);
+    return writeArrayPayload(value);
   }
   if (isEncodedObject(value)) {
-    return [TAG.object, ...encodeObjectPayload(value)];
+    writeByte(TAG.object);
+    return writeObjectPayload(value as Record<string, unknown>);
   }
 
   throw new UnreachableError(value as never, "Unknown stored sort-key value");
@@ -261,9 +292,18 @@ export function encodeSqliteSortKeyTuple(
   tuple: readonly unknown[],
   mode: SqliteSortKeyMode,
 ): Uint8Array {
-  const encodeValue =
-    mode === "stored" ? encodeStoredSortValue : encodeScanSortValue;
-  return Uint8Array.from(tuple.flatMap((value) => encodeValue(value)));
+  const writeValue =
+    mode === "stored" ? writeStoredSortValue : writeScanSortValue;
+  // A throw on an earlier call can leave bytes behind; start from empty.
+  length = 0;
+  for (let index = 0; index < tuple.length; index++) {
+    if (index in tuple) writeValue(tuple[index]);
+  }
+  const key = buffer.slice(0, length);
+  if (buffer.length > MAX_RETAINED_BUFFER_SIZE) {
+    buffer = new Uint8Array(INITIAL_BUFFER_SIZE);
+  }
+  return key;
 }
 
 export function getSqliteSortKeyTuple(

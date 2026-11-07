@@ -827,16 +827,14 @@ describe("PreloadedHybridDB", () => {
       indexes: Map<
         string,
         {
-          tree?: { nodes: Map<string, { leaf: boolean; values?: unknown[] }> };
+          tree?: { list(): { value: unknown }[] };
           index?: { buckets: Map<string, Map<string, unknown>> };
         }
       >;
     };
 
     const btree = internal.indexes.get("byValue")?.tree;
-    const btreeLeafValues = Array.from(btree?.nodes.values() ?? [])
-      .filter((node) => node.leaf)
-      .flatMap((node) => node.values ?? []) as { value: unknown }[];
+    const btreeLeafValues = btree?.list() ?? [];
     expect(btreeLeafValues.map((entry) => entry.value)).toEqual(["001", "002"]);
 
     const hashBuckets = internal.indexes.get("byTitle")?.index?.buckets;

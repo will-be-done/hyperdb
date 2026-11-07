@@ -1,18 +1,30 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // NOTE: taken from https://github.com/ccorcos/database-experiments/blob/master/src/lib/InMemoryBinaryPlusTree.ts
-import { orderedArray } from "./ordered-array";
 
-export type BranchNode<K> = {
+// Entries are never changed in place: a write replaces the entry in its
+// node's array. A copied node can then share the entries of the node it was
+// copied from, and a fork can share them with its base.
+export type LeafEntry<K, V> = { readonly key: K; readonly value: V };
+
+export type BranchEntry<K, V> = {
+  readonly minKey: K | null;
+  readonly child: TreeNode<K, V>;
+};
+
+export type BranchNode<K, V = any> = {
   leaf: false;
-  id: string;
-  children: { minKey: K | null; childId: string }[];
+  children: BranchEntry<K, V>[];
+  // The tree allowed to change this node in place. Any other tree copies it.
+  owner: object;
 };
 
 export type LeafNode<K, V> = {
   leaf: true;
-  id: string;
-  values: { key: K; value: V }[];
+  values: LeafEntry<K, V>[];
+  owner: object;
 };
+
+export type TreeNode<K, V> = BranchNode<K, V> | LeafNode<K, V>;
 
 function compare(a: any, b: any) {
   if (a === b) return 0;
@@ -20,8 +32,10 @@ function compare(a: any, b: any) {
   return -1;
 }
 
+// Both paths run from the leaf up: indexPath[i] is the position of
+// nodePath[i] among the children of nodePath[i + 1].
 type NodeCursor<K, V> = {
-  nodePath: (BranchNode<K> | LeafNode<K, V>)[];
+  nodePath: TreeNode<K, V>[];
   indexPath: number[];
 };
 
@@ -34,35 +48,34 @@ type IterateArgs<K> = {
   reverse?: boolean;
 };
 
-function newLeafNode<K, V>(
-  values: { key: K; value: V }[],
-  id = randomId(),
-): LeafNode<K, V> {
-  if (values.length === 0) throw new Error("Empty leaf node");
+const iteratorDone: IteratorReturnResult<undefined> = {
+  done: true,
+  value: undefined,
+};
 
-  // console.log("newLeafNode", id, values);
-
-  return {
-    leaf: true,
-    id,
-    values,
+function emptyIterator<T>(): IterableIterator<T> {
+  const iterator: IterableIterator<T> = {
+    next: () => iteratorDone,
+    [Symbol.iterator]: () => iterator,
   };
+  return iterator;
 }
 
 export class InMemoryBinaryPlusTree<K = any, V = any> {
-  nodes = new Map<string, BranchNode<K> | LeafNode<K, V>>();
-  rootId = "root";
+  root: TreeNode<K, V> | undefined;
   private base?: InMemoryBinaryPlusTree<K, V>;
   private activeFork?: InMemoryBinaryPlusTree<K, V>;
   private owner = {};
-  private supersededBaseNodeIds = new Set<string>();
+  // Nodes a fork created or copied, handed to the base on materialize.
+  private forkNodes: TreeNode<K, V>[] = [];
   minSize: number;
   maxSize: number;
   compareKey: (a: K, b: K) => number;
-  leafValues: ReturnType<typeof orderedArray<{ key: K; value: V }, K>>;
 
   /**
-   * minSize must be less than maxSize / 2.
+   * minSize must be an integer from 2 to maxSize / 2 (inclusive). Deletion
+   * relies on every non-root node keeping at least two entries, so a node
+   * never empties and always has a sibling to merge with.
    */
   constructor(
     minSize: number,
@@ -72,12 +85,15 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     this.minSize = minSize;
     this.maxSize = maxSize;
     this.compareKey = compareKey;
-    this.leafValues = orderedArray<{ key: K; value: V }, K>(
-      (item: { key: K }) => item.key,
-      this.compareKey,
-    );
 
-    if (minSize > maxSize / 2) throw new Error("Invalid tree size.");
+    if (
+      !Number.isInteger(minSize) ||
+      !Number.isInteger(maxSize) ||
+      minSize < 2 ||
+      minSize > maxSize / 2
+    ) {
+      throw new Error("Invalid tree size.");
+    }
   }
 
   fork(): InMemoryBinaryPlusTree<K, V> {
@@ -94,7 +110,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     );
 
     forked.base = this;
-    forked.rootId = this.rootId;
+    forked.root = this.root;
     this.activeFork = forked;
 
     return forked;
@@ -112,16 +128,13 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     }
 
     const base = this.base;
-    base.rootId = this.rootId;
+    base.root = this.root;
 
-    for (const id of this.supersededBaseNodeIds) {
-      base.detachMaterializedNode(id);
+    for (const node of this.forkNodes) {
+      node.owner = base.owner;
+      base.trackForkNode(node);
     }
-    for (const [id, node] of this.nodes) {
-      this.ownNode(node, base.owner);
-      base.nodes.set(id, node);
-    }
-    this.supersededBaseNodeIds.clear();
+    this.forkNodes = [];
     base.activeFork = undefined;
 
     return base;
@@ -141,91 +154,52 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     this.base.activeFork = undefined;
   }
 
-  private getNode(id: string): BranchNode<K> | LeafNode<K, V> | undefined {
-    return this.nodes.get(id) ?? this.base?.getNode(id);
+  private trackForkNode(node: TreeNode<K, V>) {
+    if (this.base) this.forkNodes.push(node);
   }
 
-  private ownNode<T extends BranchNode<K> | LeafNode<K, V>>(
-    node: T,
-    owner = this.owner,
-  ): T {
-    (node as T & { owner?: object }).owner = owner;
+  private newLeaf(values: LeafEntry<K, V>[]): LeafNode<K, V> {
+    const node: LeafNode<K, V> = { leaf: true, values, owner: this.owner };
+    this.trackForkNode(node);
     return node;
   }
 
-  private ownsNode(node: BranchNode<K> | LeafNode<K, V>): boolean {
-    return (node as typeof node & { owner?: object }).owner === this.owner;
+  private newBranch(children: BranchEntry<K, V>[]): BranchNode<K, V> {
+    const node: BranchNode<K, V> = { leaf: false, children, owner: this.owner };
+    this.trackForkNode(node);
+    return node;
   }
 
-  private detachNode(node: BranchNode<K> | LeafNode<K, V>) {
-    if (this.ownsNode(node)) {
-      this.nodes.delete(node.id);
-      return;
-    }
-
-    if (this.base) {
-      this.supersededBaseNodeIds.add(node.id);
-    }
+  private cloneNode(node: TreeNode<K, V>): TreeNode<K, V> {
+    return node.leaf === true
+      ? this.newLeaf(node.values.slice())
+      : this.newBranch(node.children.slice());
   }
 
-  private detachMaterializedNode(id: string) {
-    if (this.nodes.delete(id)) return;
+  private writableRoot(): TreeNode<K, V> | undefined {
+    const root = this.root;
+    if (!root || root.owner === this.owner) return root;
 
-    if (this.base) {
-      this.supersededBaseNodeIds.add(id);
-    }
+    this.root = this.cloneNode(root);
+    return this.root;
   }
 
-  private cloneNode(
-    node: BranchNode<K> | LeafNode<K, V>,
-    id = randomId(),
-  ): BranchNode<K> | LeafNode<K, V> {
-    if (node.leaf === true) {
-      return this.ownNode({
-        id,
-        leaf: true,
-        values: node.values.map((entry) => ({
-          key: entry.key,
-          value: entry.value,
-        })),
-      });
-    }
+  private writableChild(parent: BranchNode<K, V>, childIndex: number) {
+    const entry = parent.children[childIndex];
+    if (entry.child.owner === this.owner) return entry.child;
 
-    return this.ownNode({
-      id,
-      leaf: false,
-      children: node.children.map((child) => ({
-        minKey: child.minKey,
-        childId: child.childId,
-      })),
-    });
-  }
-
-  private writableRoot(): BranchNode<K> | LeafNode<K, V> | undefined {
-    const root = this.getNode(this.rootId);
-    if (!root) return;
-    if (this.ownsNode(root)) return root;
-
-    const cloned = this.cloneNode(root, this.rootId);
-    this.nodes.set(cloned.id, cloned);
-    this.rootId = cloned.id;
+    const cloned = this.cloneNode(entry.child);
+    parent.children[childIndex] = { minKey: entry.minKey, child: cloned };
     return cloned;
   }
 
-  private writableChild(parent: BranchNode<K>, childIndex: number) {
-    const childId = parent.children[childIndex].childId;
-    const child = this.getNode(childId);
-    if (!child) throw Error("Missing child node.");
-    if (this.ownsNode(child)) return child;
-
-    this.detachNode(child);
-    const cloned = this.cloneNode(child);
-    this.nodes.set(cloned.id, cloned);
-    parent.children[childIndex] = {
-      ...parent.children[childIndex],
-      childId: cloned.id,
-    };
-    return cloned;
+  private setMinKey(
+    parent: BranchNode<K, V>,
+    childIndex: number,
+    minKey: K | null,
+  ) {
+    const entry = parent.children[childIndex];
+    parent.children[childIndex] = { minKey, child: entry.child };
   }
 
   private compareBranchKey = (a: K | null, b: K | null) => {
@@ -236,10 +210,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return this.compareKey(a, b);
   };
 
-  private searchBranchChild(
-    children: { minKey: K | null; childId: string }[],
-    key: K,
-  ) {
+  private searchBranchChild(children: BranchEntry<K, V>[], key: K) {
     let left = 0;
     let right = children.length;
 
@@ -257,60 +228,40 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return left - 1;
   }
 
+  // Unlike NodeCursor, this path runs from the root down.
   private findPathFromRoot(key: K, writable = false): NodeCursor<K, V> {
-    const nodePath: (BranchNode<K> | LeafNode<K, V>)[] = [];
+    const nodePath: TreeNode<K, V>[] = [];
     const indexPath: number[] = [];
 
-    const root = writable ? this.writableRoot() : this.getNode(this.rootId);
-    if (!root) return { nodePath, indexPath };
-    nodePath.push(root);
+    let node = writable ? this.writableRoot() : this.root;
+    if (!node) return { nodePath, indexPath };
+    nodePath.push(node);
 
-    while (true) {
-      const node = nodePath[nodePath.length - 1];
-      if (node.leaf === true) return { nodePath, indexPath };
-
-      const childIndex = this.searchBranchChild(node.children, key);
-      const child = writable
+    while (node.leaf !== true) {
+      const childIndex: number = this.searchBranchChild(node.children, key);
+      node = writable
         ? this.writableChild(node, childIndex)
-        : this.getNode(node.children[childIndex].childId);
-      if (!child) throw Error("Missing child node.");
-      nodePath.push(child);
+        : node.children[childIndex].child;
+      nodePath.push(node);
       indexPath.push(childIndex);
     }
+
+    return { nodePath, indexPath };
   }
 
   private findPath(key: K, writable = false): NodeCursor<K, V> {
-    const nodePath: (BranchNode<K> | LeafNode<K, V>)[] = [];
-    const indexPath: number[] = [];
-
-    const root = writable ? this.writableRoot() : this.getNode(this.rootId);
-    if (!root) return { nodePath, indexPath };
-    nodePath.push(root);
-
-    while (true) {
-      const node = nodePath[0];
-      if (node.leaf === true) return { nodePath, indexPath };
-
-      const childIndex = this.searchBranchChild(node.children, key);
-      const child = writable
-        ? this.writableChild(node, childIndex)
-        : this.getNode(node.children[childIndex].childId);
-      if (!child) throw Error("Missing child node.");
-      nodePath.unshift(child);
-      indexPath.unshift(childIndex);
-    }
+    const cursor = this.findPathFromRoot(key, writable);
+    cursor.nodePath.reverse();
+    cursor.indexPath.reverse();
+    return cursor;
   }
 
   get(key: K): V | undefined {
-    let node = this.getNode(this.rootId);
+    let node = this.root;
     if (!node) return;
 
     while (node.leaf !== true) {
-      const childIndex = this.searchBranchChild(node.children, key);
-      const childId = node.children[childIndex].childId;
-      const child = this.getNode(childId);
-      if (!child) throw Error("Missing child node.");
-      node = child;
+      node = node.children[this.searchBranchChild(node.children, key)].child;
     }
 
     const index = this.searchLeafValueIndex(node.values, key);
@@ -318,109 +269,58 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return node.values[index].value;
   }
 
-  private startCursor() {
-    const cursor: NodeCursor<K, V> = {
-      nodePath: [],
-      indexPath: [],
-    };
-    const root = this.getNode(this.rootId);
-    if (!root) return cursor;
-    cursor.nodePath.push(root);
+  private edgeCursor(last: boolean): NodeCursor<K, V> {
+    const nodePath: TreeNode<K, V>[] = [];
+    const indexPath: number[] = [];
 
-    while (true) {
-      const node = cursor.nodePath[0];
-      if (node.leaf === true) break;
-      const childIndex = 0;
-      const childId = node.children[childIndex].childId;
-      const child = this.getNode(childId);
-      if (!child) throw new Error("Broken.");
-      cursor.nodePath.unshift(child);
-      cursor.indexPath.unshift(childIndex);
+    let node = this.root;
+    if (!node) return { nodePath, indexPath };
+    nodePath.push(node);
+
+    while (node.leaf !== true) {
+      const childIndex: number = last ? node.children.length - 1 : 0;
+      node = node.children[childIndex].child;
+      nodePath.push(node);
+      indexPath.push(childIndex);
     }
-    return cursor;
+
+    nodePath.reverse();
+    indexPath.reverse();
+    return { nodePath, indexPath };
   }
 
-  private nextCursor(cursor: NodeCursor<K, V>): NodeCursor<K, V> | undefined {
-    // console.log(cursor)
-    cursor = {
-      nodePath: [...cursor.nodePath],
-      indexPath: [...cursor.indexPath],
-    };
-    for (let i = 0; i < cursor.nodePath.length - 1; i++) {
+  // Moves the cursor to the next (or previous) leaf in place. Returns false,
+  // leaving the cursor unchanged, when it is already on the last leaf.
+  private stepCursor(cursor: NodeCursor<K, V>, reverse: boolean): boolean {
+    const { nodePath, indexPath } = cursor;
+
+    for (let i = 0; i < nodePath.length - 1; i++) {
       // Find the point in the path where we need to go down a sibling branch.
-      const parent = cursor.nodePath[i + 1] as BranchNode<K>;
-      const parentIndex = cursor.indexPath[i];
-      const nextIndex = parentIndex + 1;
-      if (nextIndex >= parent.children.length) continue;
+      const parent = nodePath[i + 1] as BranchNode<K, V>;
+      const siblingIndex = indexPath[i] + (reverse ? -1 : 1);
+      if (siblingIndex < 0 || siblingIndex >= parent.children.length) continue;
 
       // Here's a branch.
-      cursor.indexPath[i] = nextIndex;
+      indexPath[i] = siblingIndex;
 
       // Fix the rest of the cursor.
       for (let j = i; j >= 0; j--) {
-        const parent = cursor.nodePath[j + 1] as BranchNode<K>;
-        const parentIndex = cursor.indexPath[j];
-        const childId = parent.children[parentIndex].childId;
-        const child = this.getNode(childId);
-        if (!child) throw new Error("Broken.");
-        cursor.nodePath[j] = child;
-        if (j > 0) cursor.indexPath[j - 1] = 0;
+        const child = (nodePath[j + 1] as BranchNode<K, V>).children[
+          indexPath[j]
+        ].child;
+        nodePath[j] = child;
+        if (j > 0) {
+          indexPath[j - 1] = reverse
+            ? (child.leaf === true
+                ? child.values.length
+                : child.children.length) - 1
+            : 0;
+        }
       }
-      return cursor;
+      return true;
     }
-  }
 
-  private endCursor() {
-    const cursor: NodeCursor<K, V> = {
-      nodePath: [],
-      indexPath: [],
-    };
-    const root = this.getNode(this.rootId);
-    if (!root) return cursor;
-    cursor.nodePath.push(root);
-    while (true) {
-      const node = cursor.nodePath[0];
-      if (node.leaf === true) break;
-      const childIndex = node.children.length - 1;
-      const childId = node.children[childIndex].childId;
-      const child = this.getNode(childId);
-      if (!child) throw new Error("Broken.");
-      cursor.nodePath.unshift(child);
-      cursor.indexPath.unshift(childIndex);
-    }
-    return cursor;
-  }
-
-  private prevCursor(cursor: NodeCursor<K, V>): NodeCursor<K, V> | undefined {
-    cursor = {
-      nodePath: [...cursor.nodePath],
-      indexPath: [...cursor.indexPath],
-    };
-    for (let i = 0; i < cursor.nodePath.length - 1; i++) {
-      // Find the point in the path where we need to go down a sibling branch.
-      const parentIndex = cursor.indexPath[i];
-      const prevIndex = parentIndex - 1;
-      if (prevIndex < 0) continue;
-
-      // Here's a branch.
-      cursor.indexPath[i] = prevIndex;
-
-      // Fix the rest of the cursor.
-      for (let j = i; j >= 0; j--) {
-        const parent = cursor.nodePath[j + 1] as BranchNode<K>;
-        const parentIndex = cursor.indexPath[j];
-        const childId = parent.children[parentIndex].childId;
-        const child = this.getNode(childId);
-        if (!child) throw new Error("Broken.");
-        cursor.nodePath[j] = child;
-        if (j > 0)
-          cursor.indexPath[j - 1] =
-            child.leaf === true
-              ? child.values.length - 1
-              : child.children.length - 1;
-      }
-      return cursor;
-    }
+    return false;
   }
 
   private validateIterateArgs(args: IterateArgs<K>) {
@@ -459,28 +359,29 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return { start, startOpen, end, endOpen };
   }
 
-  *iterate(args: IterateArgs<K> = {}): IterableIterator<{ key: K; value: V }> {
-    if (args.limit !== undefined && args.limit <= 0) return;
+  /**
+   * Iterates entries in key order within the bounds. The cursor is placed
+   * when this is called, so writes made to the tree while iterating are not
+   * supported.
+   */
+  iterate(args: IterateArgs<K> = {}): IterableIterator<LeafEntry<K, V>> {
+    let remaining = args.limit ?? Infinity;
+    if (remaining <= 0) return emptyIterator();
 
     const { start, startOpen, end, endOpen } = this.validateIterateArgs(args);
-    let yielded = 0;
+    const reverse = args.reverse === true;
+    const compareKey = this.compareKey;
 
-    if (args.reverse) {
-      let cursor: NodeCursor<K, V> | undefined;
-      if (end !== undefined) {
-        cursor = this.findPath(end);
-      } else {
-        cursor = this.endCursor();
-      }
+    const from = reverse ? end : start;
+    const cursor =
+      from !== undefined ? this.findPath(from) : this.edgeCursor(reverse);
+    let leaf = cursor.nodePath[0] as LeafNode<K, V> | undefined;
+    let index = 0;
 
-      if (cursor.nodePath.length === 0) return;
-
-      let isFirstLeaf = true;
-      while (cursor) {
-        const leaf = cursor.nodePath[0] as LeafNode<K, V>;
-        let index = leaf.values.length - 1;
-
-        if (isFirstLeaf && end !== undefined) {
+    if (leaf) {
+      if (reverse) {
+        index = leaf.values.length - 1;
+        if (end !== undefined) {
           const result = this.searchLeafValues(leaf.values, end);
           index =
             result.found !== undefined
@@ -489,43 +390,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
                 : result.found
               : result.closest - 1;
         }
-
-        for (let i = index; i >= 0; i--) {
-          const item = leaf.values[i];
-
-          if (start !== undefined) {
-            const comp = this.compareKey(item.key, start);
-            if (comp < 0 || (comp === 0 && startOpen)) return;
-          }
-
-          yield item;
-          yielded++;
-
-          if (args.limit !== undefined && yielded >= args.limit) return;
-        }
-
-        cursor = this.prevCursor(cursor);
-        isFirstLeaf = false;
-      }
-
-      return;
-    }
-
-    let cursor: NodeCursor<K, V> | undefined;
-    if (start !== undefined) {
-      cursor = this.findPath(start);
-    } else {
-      cursor = this.startCursor();
-    }
-
-    if (cursor.nodePath.length === 0) return;
-
-    let isFirstLeaf = true;
-    while (cursor) {
-      const leaf = cursor.nodePath[0] as LeafNode<K, V>;
-      let index = 0;
-
-      if (isFirstLeaf && start !== undefined) {
+      } else if (start !== undefined) {
         const result = this.searchLeafValues(leaf.values, start);
         index =
           result.found !== undefined
@@ -534,28 +399,67 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
               : result.found
             : result.closest;
       }
+    }
 
-      for (let i = index; i < leaf.values.length; i++) {
-        const item = leaf.values[i];
+    const next = (): IteratorResult<LeafEntry<K, V>, undefined> => {
+      while (leaf !== undefined) {
+        const values: LeafEntry<K, V>[] = leaf.values;
 
-        if (end !== undefined) {
-          const comp = this.compareKey(item.key, end);
-          if (comp > 0 || (comp === 0 && endOpen)) return;
+        if (reverse ? index < 0 : index >= values.length) {
+          if (!this.stepCursor(cursor, reverse)) {
+            leaf = undefined;
+            break;
+          }
+          leaf = cursor.nodePath[0] as LeafNode<K, V>;
+          index = reverse ? leaf.values.length - 1 : 0;
+          continue;
         }
 
-        yield item;
-        yielded++;
+        const item = values[index];
+        index += reverse ? -1 : 1;
 
-        if (args.limit !== undefined && yielded >= args.limit) return;
+        if (reverse) {
+          if (start !== undefined) {
+            const comp = compareKey(item.key, start);
+            if (comp < 0 || (comp === 0 && startOpen)) break;
+          }
+        } else if (end !== undefined) {
+          const comp = compareKey(item.key, end);
+          if (comp > 0 || (comp === 0 && endOpen)) break;
+        }
+
+        if (--remaining <= 0) leaf = undefined;
+        return { done: false, value: item };
       }
 
-      cursor = this.nextCursor(cursor);
-      isFirstLeaf = false;
-    }
+      leaf = undefined;
+      return iteratorDone;
+    };
+
+    const iterator: IterableIterator<LeafEntry<K, V>> = {
+      next,
+      [Symbol.iterator]: () => iterator,
+    };
+    return iterator;
   }
 
-  list(args: IterateArgs<K> = {}) {
-    return Array.from(this.iterate(args));
+  list(args: IterateArgs<K> = {}): LeafEntry<K, V>[] {
+    const result: LeafEntry<K, V>[] = [];
+    const iterator = this.iterate(args);
+    for (let step = iterator.next(); !step.done; step = iterator.next()) {
+      result.push(step.value);
+    }
+    return result;
+  }
+
+  /** Same as list(args), but returns only the values. */
+  values(args: IterateArgs<K> = {}): V[] {
+    const result: V[] = [];
+    const iterator = this.iterate(args);
+    for (let step = iterator.next(); !step.done; step = iterator.next()) {
+      result.push(step.value.value);
+    }
+    return result;
   }
 
   set(key: K, value: V) {
@@ -563,8 +467,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
 
     // Intitalize root node.
     if (nodePath.length === 0) {
-      const root = this.ownNode(newLeafNode([{ key, value }], this.rootId));
-      this.nodes.set(root.id, root);
+      this.root = this.newLeaf([{ key, value }]);
       return;
     }
 
@@ -582,81 +485,35 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       if (size <= this.maxSize) break;
       const splitIndex = Math.round(size / 2);
 
+      // NOTE: splice mutates the node, which keeps the left half.
+      let rightNode: TreeNode<K, V>;
+      let rightMinKey: K | null;
       if (node.leaf === true) {
-        // NOTE: this mutates the array!
-        const rightValues = node.values.splice(splitIndex);
-        const rightNode = this.ownNode(newLeafNode(rightValues));
-        this.nodes.set(rightNode.id, rightNode);
-        const rightMinKey = rightNode.values[0].key;
-
-        if (node.id === this.rootId) {
-          const leftNode = this.ownNode(newLeafNode(node.values));
-          this.nodes.set(leftNode.id, leftNode);
-          const rootNode = this.ownNode<BranchNode<K>>({
-            id: node.id,
-            leaf: false,
-            children: [
-              { minKey: null, childId: leftNode.id },
-              { minKey: rightMinKey, childId: rightNode.id },
-            ],
-          });
-          this.nodes.set(rootNode.id, rootNode);
-          break;
-        }
-
-        // Insert right node into parent.
-        const parent = nodePath.pop() as BranchNode<K>;
-        const parentIndex = indexPath.pop();
-        if (!parent) throw new Error("Broken.");
-        if (parentIndex === undefined) throw new Error("Broken.");
-        parent.children.splice(parentIndex + 1, 0, {
-          minKey: rightMinKey,
-          childId: rightNode.id,
-        });
-
-        // Recur
-        node = parent;
-        continue;
+        const rightLeaf = this.newLeaf(node.values.splice(splitIndex));
+        rightMinKey = rightLeaf.values[0].key;
+        rightNode = rightLeaf;
+      } else {
+        const rightBranch = this.newBranch(node.children.splice(splitIndex));
+        rightMinKey = rightBranch.children[0].minKey;
+        rightNode = rightBranch;
       }
 
-      // NOTE: this mutates the array!
-      const rightChildren = node.children.splice(splitIndex);
-      const rightNode = this.ownNode<BranchNode<K>>({
-        id: randomId(),
-        leaf: false,
-        children: rightChildren,
-      });
-      this.nodes.set(rightNode.id, rightNode);
-      const rightMinKey = rightNode.children[0].minKey;
-
-      if (node.id === this.rootId) {
-        const leftNode = this.ownNode<BranchNode<K>>({
-          id: randomId(),
-          leaf: false,
-          // NOTE: this array was mutated above.
-          children: node.children,
-        });
-        this.nodes.set(leftNode.id, leftNode);
-        const rootNode = this.ownNode<BranchNode<K>>({
-          id: node.id,
-          leaf: false,
-          children: [
-            { minKey: null, childId: leftNode.id },
-            { minKey: rightMinKey, childId: rightNode.id },
-          ],
-        });
-        this.nodes.set(rootNode.id, rootNode);
+      if (node === this.root) {
+        this.root = this.newBranch([
+          { minKey: null, child: node },
+          { minKey: rightMinKey, child: rightNode },
+        ]);
         break;
       }
 
       // Insert right node into parent.
-      const parent = nodePath.pop() as BranchNode<K>;
+      const parent = nodePath.pop() as BranchNode<K, V>;
       const parentIndex = indexPath.pop();
       if (!parent) throw new Error("Broken.");
       if (parentIndex === undefined) throw new Error("Broken.");
       parent.children.splice(parentIndex + 1, 0, {
         minKey: rightMinKey,
-        childId: rightNode.id,
+        child: rightNode,
       });
 
       // Recur
@@ -669,58 +526,51 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     if (nodePath.length === 0) return;
 
     const leaf = nodePath[0] as LeafNode<K, V>;
-    const exists = this.leafValues.remove(leaf.values, key);
-    // console.log("delete", node, exists);
-    if (!exists) return; // No changes to the tree!
+    const removeIndex = this.searchLeafValueIndex(leaf.values, key);
+    if (removeIndex < 0) return; // No changes to the tree!
+    leaf.values.splice(removeIndex, 1);
 
     // Merge or redistribute to maintain minSize.
     let node = nodePath.shift();
     while (node) {
-      if (node.id === this.rootId) {
+      if (node === this.root) {
         // A root leaf node has no minSize constaint.
         if (node.leaf === true) return;
 
         // Cleanup an empty root node.
         if (node.children.length === 0) {
-          this.nodes.delete(this.rootId);
+          this.root = undefined;
           return;
         }
 
         // A root node with one child becomes its child.
         if (node.children.length === 1) {
-          const childId = node.children[0].childId;
-          const childNode = this.getNode(childId);
-          if (!childNode) throw new Error("Broken.");
-          const root = this.cloneNode(childNode, this.rootId);
-          this.nodes.set(root.id, root);
-          this.rootId = root.id;
-          this.detachNode(childNode);
+          this.root = node.children[0].child;
         }
 
         return;
       }
 
-      const parent = nodePath.shift() as BranchNode<K>;
+      const parent = nodePath.shift() as BranchNode<K, V>;
       const parentIndex = indexPath.shift();
       if (!parent) throw new Error("Broken.");
       if (parentIndex === undefined) throw new Error("Broken.");
 
       const size =
         node.leaf === true ? node.values.length : node.children.length;
-      // console.log("minkey", node, node.leaf);
-      // TODO: doesn't handle when leaf has values.length === 0
-      const minKey =
-        node.leaf === true ? node.values[0].key : node.children[0].minKey;
 
       // No need to merge but we might need to update the minKey in the parent
       if (size >= this.minSize) {
+        // minSize >= 2, so the node is not empty here.
+        const minKey =
+          node.leaf === true ? node.values[0].key : node.children[0].minKey;
         const parentItem = parent.children[parentIndex];
         // No need to recusively update the left-most branch.
         if (parentItem.minKey === null) return;
         // No need to recursively update if the minKey didn't change.
         if (this.compareBranchKey(parentItem.minKey, minKey) === 0) return;
         // Set the minKey and recur
-        parentItem.minKey = minKey;
+        this.setMinKey(parent, parentIndex, minKey);
         node = parent;
         continue;
       }
@@ -728,10 +578,8 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       // Merge or redistribute leaf nodes.
       if (node.leaf === true) {
         if (parentIndex === 0) {
-          const rightId = parent.children[parentIndex + 1].childId;
-          const rightSibling = this.getNode(rightId) as LeafNode<K, V>;
-          if (!rightSibling) throw new Error("Broken.");
-
+          const rightSibling = parent.children[parentIndex + 1]
+            .child as LeafNode<K, V>;
           const combinedSize = node.values.length + rightSibling.values.length;
 
           // Redistribute leaf.
@@ -747,11 +595,13 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
             node.values.push(...moveLeft);
             // Update parent minKey.
             if (parent.children[parentIndex].minKey !== null) {
-              const leftMinKey = node.values[0].key;
-              parent.children[parentIndex].minKey = leftMinKey;
+              this.setMinKey(parent, parentIndex, node.values[0].key);
             }
-            const rightMinKey = writableRightSibling.values[0].key;
-            parent.children[parentIndex + 1].minKey = rightMinKey;
+            this.setMinKey(
+              parent,
+              parentIndex + 1,
+              writableRightSibling.values[0].key,
+            );
 
             // Recur
             node = parent;
@@ -762,21 +612,19 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
           node.values.push(...rightSibling.values);
           // Delete rightSibling
           parent.children.splice(1, 1);
-          this.detachNode(rightSibling);
           // Update parent minKey
           const leftMost = parent.children[0].minKey === null;
-          const minKey = leftMost ? null : node.values[0].key;
-          parent.children[0].minKey = minKey;
+          this.setMinKey(parent, 0, leftMost ? null : node.values[0].key);
 
           // Recur
           node = parent;
           continue;
         }
 
-        const leftId = parent.children[parentIndex - 1].childId;
-        const leftSibling = this.getNode(leftId) as LeafNode<K, V>;
-        if (!leftSibling) throw new Error("Broken.");
-
+        const leftSibling = parent.children[parentIndex - 1].child as LeafNode<
+          K,
+          V
+        >;
         const combinedSize = leftSibling.values.length + node.values.length;
 
         // Redistribute leaf.
@@ -794,7 +642,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
           node.values.unshift(...moveRight);
 
           // Update parent minKey.
-          parent.children[parentIndex].minKey = node.values[0].key;
+          this.setMinKey(parent, parentIndex, node.values[0].key);
 
           // Recur
           node = parent;
@@ -809,7 +657,6 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
         writableLeftSibling.values.push(...node.values);
         // Delete the node
         parent.children.splice(parentIndex, 1);
-        this.detachNode(node);
         // No need to update minKey because we added to the right.
 
         // Recur
@@ -819,10 +666,8 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
 
       // Merge or redistribute branch nodes.
       if (parentIndex === 0) {
-        const rightId = parent.children[parentIndex + 1].childId;
-        const rightSibling = this.getNode(rightId) as BranchNode<K>;
-        if (!rightSibling) throw new Error("Broken.");
-
+        const rightSibling = parent.children[parentIndex + 1]
+          .child as BranchNode<K, V>;
         const combinedSize =
           node.children.length + rightSibling.children.length;
 
@@ -831,7 +676,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
           const writableRightSibling = this.writableChild(
             parent,
             parentIndex + 1,
-          ) as BranchNode<K>;
+          ) as BranchNode<K, V>;
           const splitIndex =
             Math.round(combinedSize / 2) - node.children.length;
           // NOTE: this mutates the array!
@@ -839,11 +684,13 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
           node.children.push(...moveLeft);
           // Update parent minKey.
           if (parent.children[parentIndex].minKey !== null) {
-            const leftMinKey = node.children[0].minKey;
-            parent.children[parentIndex].minKey = leftMinKey;
+            this.setMinKey(parent, parentIndex, node.children[0].minKey);
           }
-          const rightMinKey = writableRightSibling.children[0].minKey;
-          parent.children[parentIndex + 1].minKey = rightMinKey;
+          this.setMinKey(
+            parent,
+            parentIndex + 1,
+            writableRightSibling.children[0].minKey,
+          );
 
           // Recur
           node = parent;
@@ -854,21 +701,19 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
         node.children.push(...rightSibling.children);
         // Delete rightSibling
         parent.children.splice(1, 1);
-        this.detachNode(rightSibling);
         // Update parent minKey
         const leftMost = parent.children[0].minKey === null;
-        const minKey = leftMost ? null : node.children[0].minKey;
-        parent.children[0].minKey = minKey;
+        this.setMinKey(parent, 0, leftMost ? null : node.children[0].minKey);
 
         // Recur
         node = parent;
         continue;
       }
 
-      const leftId = parent.children[parentIndex - 1].childId;
-      const leftSibling = this.getNode(leftId) as BranchNode<K>;
-      if (!leftSibling) throw new Error("Broken.");
-
+      const leftSibling = parent.children[parentIndex - 1].child as BranchNode<
+        K,
+        V
+      >;
       const combinedSize = leftSibling.children.length + node.children.length;
 
       // Redistribute leaf.
@@ -876,7 +721,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
         const writableLeftSibling = this.writableChild(
           parent,
           parentIndex - 1,
-        ) as BranchNode<K>;
+        ) as BranchNode<K, V>;
         const splitIndex = Math.round(combinedSize / 2);
 
         const moveRight = writableLeftSibling.children.splice(
@@ -886,7 +731,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
         node.children.unshift(...moveRight);
 
         // Update parent minKey.
-        parent.children[parentIndex].minKey = node.children[0].minKey;
+        this.setMinKey(parent, parentIndex, node.children[0].minKey);
 
         // Recur
         node = parent;
@@ -897,11 +742,10 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       const writableLeftSibling = this.writableChild(
         parent,
         parentIndex - 1,
-      ) as BranchNode<K>;
+      ) as BranchNode<K, V>;
       writableLeftSibling.children.push(...node.children);
       // Delete the node
       parent.children.splice(parentIndex, 1);
-      this.detachNode(node);
       // No need to update minKey because we added to the right.
 
       // Recur
@@ -910,13 +754,13 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     }
   }
 
-  private searchLeafValues(values: { key: K; value: V }[], searchKey: K) {
+  private searchLeafValues(values: LeafEntry<K, V>[], searchKey: K) {
     const index = this.searchLeafValueIndex(values, searchKey);
     if (index >= 0) return { found: index, closest: index };
     return { closest: ~index };
   }
 
-  private searchLeafValueIndex(values: { key: K; value: V }[], searchKey: K) {
+  private searchLeafValueIndex(values: LeafEntry<K, V>[], searchKey: K) {
     let left = 0;
     let right = values.length;
 
@@ -932,10 +776,7 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     return ~left;
   }
 
-  private insertLeafValue(
-    values: { key: K; value: V }[],
-    item: { key: K; value: V },
-  ) {
+  private insertLeafValue(values: LeafEntry<K, V>[], item: LeafEntry<K, V>) {
     const index = this.searchLeafValueIndex(values, item.key);
 
     if (index >= 0) {
@@ -949,8 +790,4 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
       return undefined;
     }
   }
-}
-
-function randomId() {
-  return Math.random().toString(36).slice(2, 10);
 }

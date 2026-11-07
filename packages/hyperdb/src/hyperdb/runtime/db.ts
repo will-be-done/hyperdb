@@ -32,6 +32,7 @@ import {
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import { registerHyperDB, unregisterHyperDB } from "../tracing/registry";
@@ -296,7 +297,7 @@ export class DB implements HyperDB {
 
   *insert<TTable extends TableDefinition<any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ) {
     this.throwIfClosed();
     yield* performInsert(this.driver, table, records as Row[], this.options, {
@@ -306,7 +307,7 @@ export class DB implements HyperDB {
 
   *upsert<TTable extends TableDefinition<any, any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ) {
     this.throwIfClosed();
     yield* performUpsert(this.driver, table, records as Row[], this.options, {

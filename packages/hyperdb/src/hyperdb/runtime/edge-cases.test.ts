@@ -130,6 +130,24 @@ async function scanOrderIdsWithDriver(
   );
 }
 
+const binaryTable = defineTable("driverEdgeBinary", {
+  id: v.string(),
+  data: v.arrayBuffer(),
+  maybe: v.optional(v.union(v.arrayBuffer(), v.null())),
+  list: v.array(v.arrayBuffer()),
+}).index("byData", ["data"]);
+
+const lazyBinary = v.lazy(() => v.arrayBuffer());
+
+const binaryUnionTable = defineTable("driverEdgeBinaryUnion", {
+  id: v.string(),
+  lazy: v.union(lazyBinary, v.null()),
+  attachment: v.union(
+    v.object({ kind: v.literal("file"), bytes: v.arrayBuffer() }),
+    v.object({ kind: v.literal("link"), url: v.string() }),
+  ),
+});
+
 describe("runtime edge case regressions", () => {
   for (const [driverName, createDriver] of createDriverFactories()) {
     describe(driverName, () => {
@@ -145,6 +163,68 @@ describe("runtime edge case regressions", () => {
             { eq: [{ col: "profile.name", val: "Ada" }] },
           ]),
         ).toEqual([{ id: "user-a", "profile.name": "Ada" }]);
+      });
+
+      it("stores typed arrays in binary columns as ArrayBuffers", async () => {
+        // Runtime row validation is off by default; the conversion must
+        // still happen so reads match the ArrayBuffer output type.
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([binaryTable]);
+        const source = new Uint8Array([9, 1, 2, 9]);
+        const fullSpan = new Uint16Array([1]);
+        const fullSpanBytes = [...new Uint8Array(fullSpan.buffer)];
+        await db.insert(binaryTable, [
+          {
+            id: "a",
+            data: source.subarray(1, 3),
+            maybe: new DataView(source.buffer, 0, 1),
+            list: [fullSpan],
+          },
+        ]);
+        // The stored bytes are a copy, not the caller's buffer.
+        new Uint8Array(fullSpan.buffer).fill(0);
+
+        const [row] = await db.intervalScan(binaryTable, "byData", [
+          { eq: [{ col: "data", val: new Uint8Array([1, 2]).buffer }] },
+        ]);
+        expect(row?.data).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(row!.data)]).toEqual([1, 2]);
+        expect(row?.maybe).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(row!.maybe as ArrayBuffer)]).toEqual([9]);
+        expect(row?.list[0]).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(row!.list[0]!)]).toEqual(fullSpanBytes);
+      });
+
+      it("stores typed arrays inside lazy and object union members as ArrayBuffers", async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([binaryUnionTable]);
+        await db.insert(binaryUnionTable, [
+          {
+            id: "a",
+            lazy: new Uint8Array([1, 2]),
+            attachment: { kind: "file", bytes: new Uint8Array([3]) },
+          },
+          {
+            id: "b",
+            lazy: null,
+            attachment: { kind: "link", url: "https://example.com" },
+          },
+        ]);
+
+        const [a, b] = await db.intervalScan(binaryUnionTable, "byId", [
+          { eq: [{ col: "id", val: "a" }] },
+          { eq: [{ col: "id", val: "b" }] },
+        ]);
+        expect(a?.lazy).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(a!.lazy!)]).toEqual([1, 2]);
+        const attachment = a?.attachment as { bytes: ArrayBuffer };
+        expect(attachment.bytes).toBeInstanceOf(ArrayBuffer);
+        expect([...new Uint8Array(attachment.bytes)]).toEqual([3]);
+        expect(b).toEqual({
+          id: "b",
+          lazy: null,
+          attachment: { kind: "link", url: "https://example.com" },
+        });
       });
 
       it("orders encoded schemaless values before applying limit", async () => {

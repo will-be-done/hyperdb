@@ -364,6 +364,14 @@ export const isRowInRange = (
 
   const rowTuple = indexDef.cols.map((col) => row[col as string]) as Tuple;
 
+  return isTupleInBounds(rowTuple, { gte, lte, gt, lt });
+};
+
+/** Checks a tuple against bounds already passed through normalizeTupleBounds. */
+export const isTupleInBounds = (
+  rowTuple: Tuple,
+  { gte, lte, gt, lt }: TupleScanOptions,
+) => {
   // Check gte (greater than or equal)
   if (gte && compareTuple(rowTuple, gte) < 0) {
     return false;

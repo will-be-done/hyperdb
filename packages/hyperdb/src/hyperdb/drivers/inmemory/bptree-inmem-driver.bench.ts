@@ -143,6 +143,68 @@ describe("BptreeInmemDriver insert", () => {
   );
 });
 
+const scanRowCount = 10_000;
+const scanDriver = createLoadedDriver();
+runGenerator(
+  scanDriver.insert(tasksTable.tableName, makeRows(scanRowCount, 0)),
+);
+const twoProjectClauses: WhereClause[] = [
+  ...scanClauses,
+  {
+    eq: [
+      { col: "projectId", val: "project-2" },
+      { col: "state", val: "todo" },
+    ],
+  },
+];
+
+describe(`BptreeInmemDriver scan over ${scanRowCount} rows`, () => {
+  bench(
+    "one range, about 100 rows",
+    () => {
+      _driverSink = runGenerator(
+        scanDriver.intervalScan(
+          tasksTable.tableName,
+          "projectStateOrder",
+          scanClauses,
+          {},
+        ),
+      );
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    "one range, limit 10",
+    () => {
+      _driverSink = runGenerator(
+        scanDriver.intervalScan(
+          tasksTable.tableName,
+          "projectStateOrder",
+          scanClauses,
+          { limit: 10 },
+        ),
+      );
+    },
+    { time: 1000 },
+  );
+
+  bench(
+    "two ranges, about 200 rows",
+    () => {
+      _driverSink = runGenerator(
+        scanDriver.intervalScan(
+          tasksTable.tableName,
+          "projectStateOrder",
+          twoProjectClauses,
+          {},
+        ),
+      );
+    },
+    { time: 1000 },
+  );
+});
+
 describe("BptreeInmemDriver hash transaction index strategy", () => {
   bench(
     `legacy eager hash tx clone/write ${hashPreloadCount} buckets`,

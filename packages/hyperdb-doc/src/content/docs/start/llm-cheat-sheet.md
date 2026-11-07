@@ -126,6 +126,12 @@ Useful validators: `v.string()`, `v.number()`, `v.bigint()`, `v.boolean()`,
 `v.partial(...)`, `v.required(...)`, `v.lazy(...)`, `v.pass<T>()`, and
 `v.any()`.
 
+Validators have an output type (`Infer`, `ExtractSchema<typeof table>`) and an
+input type (`InferInput`, `ExtractSchemaInput<typeof table>`). They differ for
+`v.arrayBuffer()`, which accepts typed arrays and `DataView`s on writes and
+always returns an `ArrayBuffer`; `insert`/`upsert` take the input row type.
+Action and selector args use the output type.
+
 Stored rows cannot contain `undefined` except where optional object fields are
 omitted. Arrays and records cannot contain `undefined`.
 
@@ -282,7 +288,10 @@ Runtime errors extend `HyperDBError` with a stable `code` (definition mistakes,
 such as a blank action name or conflicting query conditions, throw plain
 `Error`); match on the code,
 not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
-across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),
+across duplicate package copies. Every driver reports primary-key collisions
+as `DuplicateIdError` (`id`), even when the row also breaks a `uniqhash`
+index; other engine errors, such as a `uniqhash` violation, pass through
+unchanged. Subclasses: `DuplicateIdError` (`id`),
 `ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
 `WRITES_DISALLOWED`, `TRANSACTION_FINISHED`, `READONLY_TRANSACTION`,
 `TABLE_NOT_FOUND`, `INDEX_NOT_FOUND`, `ASYNC_IN_SYNC_EXECUTION`,
@@ -385,7 +394,11 @@ console style, and `logAsyncSqlDriverDebugEvent` from
 SQLite `loadTables()` stores physical-layout signatures in the reserved
 `_hyperdb_schema_metadata` table. Unchanged definitions use a one-query fast
 path; a changed definition or SQLite `schema_version` triggers full
-transactional schema reconciliation.
+transactional schema reconciliation, which rebuilds any index whose columns,
+uniqueness, or sort order changed. Table names that differ only in case are
+rejected. One transaction runs at a time: while it is open, `SqlDriver` rejects
+other driver operations and `AsyncSqlDriver` queues them. Readonly SQLite
+transactions reject writes with `READONLY_TRANSACTION`.
 
 Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 `byId` index is a `uniqhash` index for exact id lookups. `SubscribableDB` adds

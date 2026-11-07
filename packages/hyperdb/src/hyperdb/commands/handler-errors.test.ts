@@ -127,11 +127,8 @@ describe.each(createDriverFactories())("handler errors on %s", (name, make) => {
       await asyncDispatch(db, swallow({}));
     }
     expect(await readUser(db, "c")).toBeUndefined();
-    // SQLite passes its own UNIQUE error through; the others report the id.
-    if (!name.includes("Sql")) {
-      expect(caught).toBeInstanceOf(DuplicateIdError);
-      expect((caught as DuplicateIdError).id).toBe("a");
-    }
+    expect(caught).toBeInstanceOf(DuplicateIdError);
+    expect((caught as DuplicateIdError).id).toBe("a");
   });
 
   it("runs the handler's finally block and rolls back an uncaught failure", async () => {

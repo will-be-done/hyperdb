@@ -1,50 +1,80 @@
+import type { Row, Tuple, TupleScanOptions } from "../../core/primitives";
 import type { Op } from "../../runtime/ops";
-import { isRowInRange } from "../../core/query/tuple";
+import { isTupleInBounds, normalizeTupleBounds } from "../../core/query/tuple";
 import { type SelectRangeCmd } from "./commands";
 
-type OpsByTable = { length: number; byTable: Map<string, Op[]> };
+type IndexCols = readonly PropertyKey[];
+
+// The rows an op can move in or out of a range, and their tuples per index,
+// built the first time a selector reading that index checks the op.
+type PreparedOp = { rows: Row[]; tuples: Map<IndexCols, Tuple[]> };
+
+type OpsByTable = { length: number; byTable: Map<string, PreparedOp[]> };
 
 const opsByTableCache = new WeakMap<Op[], OpsByTable>();
 
+const rowsOf = (op: Op): Row[] => {
+  switch (op.type) {
+    case "insert":
+      return [op.newValue];
+    case "upsert":
+      return op.oldValue === undefined
+        ? [op.newValue]
+        : [op.oldValue, op.newValue];
+    case "delete":
+      return [op.oldValue];
+  }
+};
+
 // Every subscriber of a commit receives the same ops array, so grouping it
-// once lets each selector skip ops on tables it never read. HyperDB never
-// changes the array after notifying, but a subscriber could, so a different
-// length forces a regroup. Groups are keyed by table name so equivalent table
-// definitions invalidate each other.
-const groupOpsByTable = (ops: Op[]): Map<string, Op[]> => {
+// once lets each selector skip ops on tables it never read, and lets all of
+// them share the row tuples. HyperDB never changes the array after notifying,
+// but a subscriber could, so a different length forces a regroup. Groups are
+// keyed by table name so equivalent table definitions invalidate each other.
+const groupOpsByTable = (ops: Op[]): Map<string, PreparedOp[]> => {
   const cached = opsByTableCache.get(ops);
   if (cached && cached.length === ops.length) return cached.byTable;
 
-  const byTable = new Map<string, Op[]>();
+  const byTable = new Map<string, PreparedOp[]>();
   for (const op of ops) {
     let tableOps = byTable.get(op.table.tableName);
     if (!tableOps) {
       tableOps = [];
       byTable.set(op.table.tableName, tableOps);
     }
-    tableOps.push(op);
+    tableOps.push({ rows: rowsOf(op), tuples: new Map() });
   }
   opsByTableCache.set(ops, { length: ops.length, byTable });
   return byTable;
 };
 
-const isOpInRange = (
-  op: Op,
-  cmd: SelectRangeCmd,
-  bound: SelectRangeCmd["bounds"][number],
-): boolean => {
-  switch (op.type) {
-    case "insert":
-      return isRowInRange(op.newValue, cmd.table, cmd.index, bound);
-    case "upsert":
-      return (
-        (op.oldValue !== undefined &&
-          isRowInRange(op.oldValue, cmd.table, cmd.index, bound)) ||
-        isRowInRange(op.newValue, cmd.table, cmd.index, bound)
-      );
-    case "delete":
-      return isRowInRange(op.oldValue, cmd.table, cmd.index, bound);
+const tuplesOf = (op: PreparedOp, cols: IndexCols): Tuple[] => {
+  let tuples = op.tuples.get(cols);
+  if (!tuples) {
+    tuples = op.rows.map(
+      (row) => cols.map((col) => row[col as string]) as Tuple,
+    );
+    op.tuples.set(cols, tuples);
   }
+  return tuples;
+};
+
+type NormalizedBound = { tupleCount: number; bounds: TupleScanOptions };
+
+// A cached selector keeps its range commands for its whole life and checks
+// them on every commit, so each bound is padded to the index width once.
+const normalizedBoundCache = new WeakMap<TupleScanOptions, NormalizedBound>();
+
+const normalizedBound = (
+  bound: TupleScanOptions,
+  tupleCount: number,
+): TupleScanOptions => {
+  const cached = normalizedBoundCache.get(bound);
+  if (cached && cached.tupleCount === tupleCount) return cached.bounds;
+
+  const bounds = normalizeTupleBounds(bound, tupleCount);
+  normalizedBoundCache.set(bound, { tupleCount, bounds });
+  return bounds;
 };
 
 // TODO: maybe range tree instead?
@@ -59,9 +89,13 @@ export const isNeedToRerunRange = (
     const tableOps = opsByTable.get(cmd.table.tableName);
     if (!tableOps) continue;
 
+    const cols = cmd.table.indexes[cmd.index].cols;
     for (const bound of cmd.bounds) {
+      const bounds = normalizedBound(bound, cols.length);
       for (const op of tableOps) {
-        if (isOpInRange(op, cmd, bound)) return true;
+        for (const tuple of tuplesOf(op, cols)) {
+          if (isTupleInBounds(tuple, bounds)) return true;
+        }
       }
     }
   }
