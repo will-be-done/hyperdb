@@ -15,6 +15,7 @@ import {
 import {
   getPersistentIndexPlan,
   isPrimaryKeyBackedIndex,
+  type PersistentPhysicalIndex,
 } from "../persistent-index-plan";
 import {
   encodeSqliteSortKeyTuple,
@@ -131,6 +132,64 @@ export function selectSqliteSchemaMetadataSQL(tableCount: number): string {
   return `SELECT metadata.table_name, metadata.signature, metadata.verified_schema_version, schema_state.schema_version FROM pragma_schema_version AS schema_state LEFT JOIN ${SQLITE_SCHEMA_METADATA_TABLE} AS metadata ON metadata.table_name IN (${placeholders})`;
 }
 
+export function selectSqliteTableSignatureSQL(): string {
+  return `SELECT signature FROM ${SQLITE_SCHEMA_METADATA_TABLE} WHERE table_name = ?`;
+}
+
+/**
+ * The physical indexes a stored table signature describes, keyed by index
+ * name. Undefined when the signature is missing or from another format, so
+ * nothing is known about how the existing sort keys were encoded.
+ */
+export function parseSqliteTableSignatureIndexes(
+  signature: unknown,
+): Map<string, string> | undefined {
+  if (typeof signature !== "string") return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(signature);
+  } catch {
+    return undefined;
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    !("version" in parsed) ||
+    parsed.version !== SQLITE_SCHEMA_SIGNATURE_VERSION ||
+    !("physicalIndexes" in parsed) ||
+    !Array.isArray(parsed.physicalIndexes)
+  ) {
+    return undefined;
+  }
+
+  const indexes = new Map<string, string>();
+  for (const physicalIndex of parsed.physicalIndexes as unknown[]) {
+    if (
+      typeof physicalIndex !== "object" ||
+      physicalIndex === null ||
+      !("name" in physicalIndex) ||
+      typeof physicalIndex.name !== "string"
+    ) {
+      return undefined;
+    }
+    indexes.set(physicalIndex.name, JSON.stringify(physicalIndex));
+  }
+  return indexes;
+}
+
+/**
+ * One index as `parseSqliteTableSignatureIndexes` returns it. The key order
+ * matches `createSqliteTableSchemaSignature`.
+ */
+export function sqlitePhysicalIndexSignature({
+  name,
+  sortColumns,
+  unique,
+  mode,
+}: PersistentPhysicalIndex): string {
+  return JSON.stringify({ name, sortColumns, unique, mode });
+}
+
 export function selectSqliteSchemaMetadataTableExistsSQL(): string {
   return `SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = '${SQLITE_SCHEMA_METADATA_TABLE}' COLLATE NOCASE LIMIT 1`;
 }
@@ -166,6 +225,32 @@ export function isSqliteDuplicateIdError(
     `UNIQUE constraint failed: ${tableName}\\.id(?![A-Za-z0-9_])`,
     "i",
   ).test(message);
+}
+
+/**
+ * True when `error` is any SQLite UNIQUE constraint failure in `tableName`:
+ * the primary key or a unique index. Engines do not agree on which one they
+ * report when a row breaks both.
+ */
+export function isSqliteUniqueConstraintError(
+  error: unknown,
+  tableName: string,
+): boolean {
+  assertSafeIdentifier("Table name", tableName);
+  const message = error instanceof Error ? error.message : String(error);
+  return new RegExp(`UNIQUE constraint failed: ${tableName}\\.`, "i").test(
+    message,
+  );
+}
+
+/**
+ * True when ROLLBACK failed because SQLite had already rolled the
+ * transaction back on its own, as it does after some errors (such as a full
+ * disk or an I/O error).
+ */
+export function isSqliteNoActiveTransactionError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no transaction is active/i.test(message);
 }
 
 /** Why the schema metadata could not be read. */

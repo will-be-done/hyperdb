@@ -289,8 +289,9 @@ such as a blank action name or conflicting query conditions, throw plain
 `Error`); match on the code,
 not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
 across duplicate package copies. Every driver reports primary-key collisions
-as `DuplicateIdError` (`id`); other engine errors, such as a `uniqhash`
-violation, pass through unchanged. Subclasses: `DuplicateIdError` (`id`),
+as `DuplicateIdError` (`id`), even when the row also breaks a `uniqhash`
+index; other engine errors, such as a `uniqhash` violation, pass through
+unchanged. Subclasses: `DuplicateIdError` (`id`),
 `ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
 `WRITES_DISALLOWED`, `TRANSACTION_FINISHED`, `READONLY_TRANSACTION`,
 `TABLE_NOT_FOUND`, `INDEX_NOT_FOUND`, `ASYNC_IN_SYNC_EXECUTION`,
@@ -393,7 +394,11 @@ console style, and `logAsyncSqlDriverDebugEvent` from
 SQLite `loadTables()` stores physical-layout signatures in the reserved
 `_hyperdb_schema_metadata` table. Unchanged definitions use a one-query fast
 path; a changed definition or SQLite `schema_version` triggers full
-transactional schema reconciliation.
+transactional schema reconciliation, which rebuilds any index whose columns,
+uniqueness, or sort order changed. Table names that differ only in case are
+rejected. One transaction runs at a time: while it is open, `SqlDriver` rejects
+other driver operations and `AsyncSqlDriver` queues them. Readonly SQLite
+transactions reject writes with `READONLY_TRANSACTION`.
 
 Use a B-tree full-scan index such as `byIds` for `preloadTables`; the built-in
 `byId` index is a `uniqhash` index for exact id lookups. `SubscribableDB` adds

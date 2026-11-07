@@ -83,6 +83,19 @@ function summarizeSqlParams(params?: BindParams) {
   };
 }
 
+// The statement has already run, so a throwing hook must not turn its result
+// into a failure (a COMMIT would look failed after it applied).
+function report(
+  debug: AsyncSqlDriverDebug,
+  event: AsyncSqlDriverDebugEvent,
+): void {
+  try {
+    debug(event);
+  } catch (error) {
+    console.error("AsyncSqlDriver debug hook threw", error);
+  }
+}
+
 class AsyncConnection implements SqliteConnection {
   private db: AsyncSQLiteDB;
   private debug: AsyncSqlDriverDebug | undefined;
@@ -155,11 +168,11 @@ class AsyncConnection implements SqliteConnection {
       rowCount = await run();
     } catch (error) {
       if (!info.expectedError?.(error)) {
-        debug({ ...event(info.rowCount), status: "error", error });
+        report(debug, { ...event(info.rowCount), status: "error", error });
       }
       throw error;
     }
-    debug({ ...event(rowCount), status: "success" });
+    report(debug, { ...event(rowCount), status: "success" });
   }
 }
 

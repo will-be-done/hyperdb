@@ -392,6 +392,43 @@ describe("db", async () => {
       ).toEqual([]);
     });
 
+    it("keeps statement results when the debug hook throws", async () => {
+      const errorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      try {
+        const db = new DB(
+          await driver({
+            debug() {
+              throw new Error("hook failed");
+            },
+          }),
+        );
+        const task = {
+          id: "task-1",
+          title: "Task 1",
+          state: "done",
+          projectId: "1",
+          orderToken: "b",
+          type: "task",
+          lastToggledAt: 0,
+        } as const;
+
+        await execAsync(db.loadTables([tasksTable]));
+        await execAsync(db.insert(tasksTable, [task]));
+
+        await expect(
+          execAsync(db.intervalScan(tasksTable, "ids", [{}])),
+        ).resolves.toEqual([task]);
+        expect(errorSpy).toHaveBeenCalledWith(
+          "AsyncSqlDriver debug hook threw",
+          expect.objectContaining({ message: "hook failed" }),
+        );
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it("formats SQL diagnostics as one-line console messages", () => {
       expect(
         formatAsyncSqlDriverDebugEvent({

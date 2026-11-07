@@ -92,17 +92,84 @@ function sanitizeAny(
   return fail(`unsupported value type ${typeof value}`, path);
 }
 
-function acceptsArrayBuffer(validator: Validator<unknown>): boolean {
+// Lazy validators may build a fresh validator on every call, so walking them
+// is bounded as well as checked for cycles.
+const MAX_VALIDATOR_WALK = 1000;
+
+// Whether the value itself may be an ArrayBuffer.
+function acceptsArrayBuffer(
+  validator: Validator<unknown>,
+  seen = new Set<Validator<unknown>>(),
+): boolean {
+  if (seen.has(validator) || seen.size >= MAX_VALIDATOR_WALK) return false;
+  seen.add(validator);
   switch (validator.kind) {
     case "arrayBuffer":
       return true;
     case "union":
-      return validator.validators.some(acceptsArrayBuffer);
+      return validator.validators.some((variant) =>
+        acceptsArrayBuffer(variant, seen),
+      );
     case "optional":
-      return acceptsArrayBuffer(validator.inner);
+      return acceptsArrayBuffer(validator.inner, seen);
+    case "lazy":
+      return acceptsArrayBuffer(validator.getValidator(), seen);
     default:
       return false;
   }
+}
+
+const containsArrayBufferCache = new WeakMap<Validator<unknown>, boolean>();
+
+// Whether an ArrayBuffer may appear anywhere inside the value. A walk too
+// large to finish answers yes, which only costs the union check below.
+function containsArrayBuffer(validator: Validator<unknown>): boolean {
+  let result = containsArrayBufferCache.get(validator);
+  if (result === undefined) {
+    const seen = new Set<Validator<unknown>>();
+    result = walkForArrayBuffer(validator, seen);
+    containsArrayBufferCache.set(validator, result);
+  }
+  return result;
+}
+
+function walkForArrayBuffer(
+  validator: Validator<unknown>,
+  seen: Set<Validator<unknown>>,
+): boolean {
+  if (seen.has(validator)) return false;
+  if (seen.size >= MAX_VALIDATOR_WALK) return true;
+  seen.add(validator);
+  switch (validator.kind) {
+    case "arrayBuffer":
+      return true;
+    case "union":
+      return validator.validators.some((variant) =>
+        walkForArrayBuffer(variant, seen),
+      );
+    case "optional":
+      return walkForArrayBuffer(validator.inner, seen);
+    case "lazy":
+      return walkForArrayBuffer(validator.getValidator(), seen);
+    case "array":
+      return walkForArrayBuffer(validator.item, seen);
+    case "record":
+      return walkForArrayBuffer(validator.valueValidator, seen);
+    case "object":
+      return Object.values(validator.fields).some((field) =>
+        walkForArrayBuffer(field, seen),
+      );
+    default:
+      return false;
+  }
+}
+
+/** Whether rows of `table` may hold binary values the codec converts. */
+export function tableStoresArrayBuffers(table: TableDefinition): boolean {
+  return (
+    table.schemaValidator !== undefined &&
+    containsArrayBuffer(table.schemaValidator)
+  );
 }
 
 function sanitizeWithValidatorShape(
@@ -133,6 +200,17 @@ function sanitizeWithValidatorShape(
   // columns store an ArrayBuffer even when given a typed array or DataView.
   if (ArrayBuffer.isView(value) && acceptsArrayBuffer(validator)) {
     return v.arrayBuffer().normalize(value, path);
+  }
+
+  // Shapes alone cannot tell union variants apart, so the first variant that
+  // validates picks the shape. Only unions that can hold binary values pay
+  // for this.
+  if (validator.kind === "union" && containsArrayBuffer(validator)) {
+    for (const variant of validator.validators) {
+      if (!isNormalizeFailure(variant.normalize(value, path))) {
+        return sanitizeWithValidatorShape(variant, value, path);
+      }
+    }
   }
 
   if (validator.kind === "object" && isPlainObject(value)) {

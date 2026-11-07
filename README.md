@@ -100,7 +100,12 @@ npm install @will-be-done/hyperdb-devtool
 
 ```ts
 // 1. Define a typed table (id + query indexes)
-import { defineTable, v, type ExtractSchema } from "@will-be-done/hyperdb";
+import {
+  defineTable,
+  v,
+  type ExtractSchema,
+  type ExtractSchemaInput,
+} from "@will-be-done/hyperdb";
 
 export const tasksTable = defineTable("tasks", {
   id: v.string(),
@@ -113,8 +118,13 @@ export const tasksTable = defineTable("tasks", {
   .index("bySlug", ["slug"], { type: "uniqhash" })
   .index("byIds", ["id"]);
 
-export type Task = ExtractSchema<typeof tasksTable>;
+export type Task = ExtractSchema<typeof tasksTable>; // what reads return
+export type NewTask = ExtractSchemaInput<typeof tasksTable>; // what writes accept
 ```
+
+`ExtractSchema` and `ExtractSchemaInput` differ only where a validator accepts
+more than it stores: a `v.arrayBuffer()` column accepts any typed array or
+`DataView` on write and always reads back as an `ArrayBuffer`.
 
 ```ts
 // 2. Create shared builders
@@ -341,6 +351,12 @@ how tables, actions, or queries are defined (such as a blank action name or
 conflicting query conditions) throw a plain `Error`, for which `isHyperDBError`
 returns `false`. HyperDB does not log the errors it throws.
 
+Every driver, SQLite included, reports a write that reuses an existing id (or
+repeats one inside a batch) as `DuplicateIdError` with code `DUPLICATE_ID` and
+the colliding `id`. A `uniqhash` violation is a different error: the storage
+engine's own error passes through unchanged, for SQLite a
+`UNIQUE constraint failed` error.
+
 Use `dispatchMaybeAsync(db, action(args))` when you want a synchronous result
 whenever no step had to wait. Close a runtime with `await execAsync(db.close())`:
 it flushes hybrid persistence, releases driver-owned resources, clears
@@ -358,6 +374,17 @@ subscribers, and unregisters the DB from devtools.
 | `@will-be-done/hyperdb/drivers/sqlite`   | `SqlDriver`, `AsyncSqlDriver`                                                                             |
 | `@will-be-done/hyperdb/drivers/idb`      | `openIndexedDBDriver`, `IdbDriver`                                                                        |
 | `@will-be-done/hyperdb-devtool/react`    | `HyperDBDevtools`, `HyperDBDevtoolsPanel` (separate package)                                              |
+
+## Development
+
+```sh
+pnpm install
+pnpm run test           # hyperdb and devtool suites (browser mode, Chromium)
+pnpm run test:coverage  # same, with a coverage report for @will-be-done/hyperdb
+```
+
+The coverage report is written to `packages/hyperdb/coverage/`; open
+`index.html` there for the HTML view.
 
 ## Learn more
 

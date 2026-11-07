@@ -640,6 +640,42 @@ describe("SubscribableDB", async () => {
         ]);
       });
 
+      it("passes binary values to hooks and subscribers as stored", async () => {
+        const filesTable = defineTable("subscribableFiles", {
+          id: v.string(),
+          data: v.arrayBuffer(),
+        });
+        const subscribableDB = new SubscribableDB(new DB(await createDriver()));
+        const hookValues: unknown[] = [];
+        subscribableDB.afterChange(function* (_db, _table, _traits, ops) {
+          for (const op of ops) {
+            if (op.type !== "delete") hookValues.push(op.newValue.data);
+          }
+        });
+        const subscribedValues: unknown[] = [];
+        subscribableDB.subscribe((ops) => {
+          for (const op of ops) {
+            if (op.type !== "delete") subscribedValues.push(op.newValue.data);
+          }
+        });
+        const asyncDB = new AsyncDB(subscribableDB);
+        await asyncDB.loadTables([filesTable]);
+
+        await asyncDB.insert(filesTable, [
+          { id: "a", data: new Uint8Array([1]) },
+        ]);
+        await asyncDB.upsert(filesTable, [
+          { id: "a", data: new DataView(new Uint8Array([2]).buffer) },
+        ]);
+
+        for (const values of [hookValues, subscribedValues]) {
+          expect(values).toHaveLength(2);
+          for (const value of values) {
+            expect(value).toBeInstanceOf(ArrayBuffer);
+          }
+        }
+      });
+
       it("should allow after callbacks to use action commands", async () => {
         const db = new DB(await createDriver());
         const subscribableDB = new SubscribableDB(db);

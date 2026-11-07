@@ -654,6 +654,12 @@ describe("InMemoryBinaryPlusTree", () => {
       () => new InMemoryBinaryPlusTree(1.5, 4),
       "Invalid tree size.",
     );
+    for (const maxSize of [Number.NaN, Number.POSITIVE_INFINITY, 4.5]) {
+      assert.throws(
+        () => new InMemoryBinaryPlusTree(2, maxSize),
+        "Invalid tree size.",
+      );
+    }
     // minSize may equal maxSize / 2.
     new InMemoryBinaryPlusTree(2, 4);
   });
@@ -694,6 +700,19 @@ describe("InMemoryBinaryPlusTree", () => {
             [...remaining].sort((a, b) => a - b),
             `after deleting ${key}`,
           );
+          // A stale separator can misroute lookups and bounded scans even
+          // when the full list is right.
+          const sorted = [...remaining].sort((a, b) => a - b);
+          for (const survivingKey of sorted) {
+            assert.equal(tree.get(survivingKey), survivingKey);
+            assert.deepEqual(
+              tree
+                .list({ lte: survivingKey, reverse: true })
+                .map(({ key }) => key),
+              sorted.filter((other) => other <= survivingKey).reverse(),
+              `reverse scan through ${survivingKey} after deleting ${key}`,
+            );
+          }
         }
         assert.deepEqual(tree.list(), []);
       }

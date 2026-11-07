@@ -116,7 +116,8 @@ operation, status, SQL text, duration, optional table/index names, row counts,
 parameter summaries, and errors. When no callback is configured, the driver does
 not prepare or emit SQL diagnostic events. Use
 `formatAsyncSqlDriverDebugEvent(event)` when you want the old one-line message
-but need to send it to a custom logger.
+but need to send it to a custom logger. If the callback throws, the driver logs
+that error with `console.error` and the statement's result is unaffected.
 
 HyperDB's shared driver conformance suite runs `AsyncSqlDriver` against the
 browser build of Turso Database (`@tursodatabase/database-wasm`) in Chromium,
@@ -129,13 +130,28 @@ typed-array/data-view values around JSON storage so they round-trip exactly.
 same primary keys first and then insert the new rows, so a secondary unique
 conflict throws instead of replacing a different row.
 
+A SQLite driver runs one transaction at a time. While a transaction is open,
+`SqlDriver` rejects other operations on the driver, and `AsyncSqlDriver` makes
+them wait until the transaction ends. A readonly transaction
+(`beginTx("readonly")`) rejects writes with `READONLY_TRANSACTION`. After some
+errors, such as a full disk, SQLite rolls the transaction back on its own;
+calling `rollback()` afterwards still frees the driver. If a rollback itself
+fails, the connection may still be inside the transaction, so the driver
+rejects every later operation. Open a new driver on a fresh connection to
+continue.
+
+SQLite compares table names without regard to case, so `loadTables()` rejects
+two tables whose names differ only in case.
+
 The SQLite drivers persist each table's physical-layout signature in the
 reserved `_hyperdb_schema_metadata` table. After the first successful
 `loadTables()` reconciliation, loading unchanged definitions takes one metadata
 read instead of inspecting and rebuilding every table and index. The stored
 signature is tied to SQLite's `schema_version`, so external schema changes make
 the next load run the full transactional reconciliation and refresh the
-metadata only after it succeeds.
+metadata only after it succeeds. When an index keeps its name but its columns,
+uniqueness, or sort order change, reconciliation rebuilds that index for every
+existing row.
 
 ## SQLite Recipes
 

@@ -86,7 +86,12 @@ export class InMemoryBinaryPlusTree<K = any, V = any> {
     this.maxSize = maxSize;
     this.compareKey = compareKey;
 
-    if (!Number.isInteger(minSize) || minSize < 2 || minSize > maxSize / 2) {
+    if (
+      !Number.isInteger(minSize) ||
+      !Number.isInteger(maxSize) ||
+      minSize < 2 ||
+      minSize > maxSize / 2
+    ) {
       throw new Error("Invalid tree size.");
     }
   }
