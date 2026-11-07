@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import {
   type Infer,
+  type InferInput,
   type InferObject,
+  type InferObjectInput,
   type ObjectValidator,
   type Validator,
   isIndexableValueValidator,
@@ -69,14 +71,22 @@ export type ValidatorSchemaWithId = ValidatorSchema & { id: Validator<string> };
 export type InferTableSchema<TSchema extends ValidatorSchema> =
   InferObject<TSchema>;
 
+export type InferTableSchemaInput<TSchema extends ValidatorSchema> =
+  InferObjectInput<TSchema>;
+
+/**
+ * `T` is the stored row, as reads return it. `TInput` is what writes accept,
+ * which differs when a validator converts (see `InferInput`).
+ */
 export interface TableDefinition<
   T = any,
   I extends AnyIndexDefinitions = AnyIndexDefinitions,
   TSchema = undefined,
+  TInput = T,
 > {
   tableName: string;
   schema: T;
-  schemaValidator?: Validator<T>;
+  schemaValidator?: Validator<T, TInput>;
   schemaFields?: ValidatorSchema;
   indexes: I;
   idIndexName: string;
@@ -85,10 +95,10 @@ export interface TableDefinition<
   /** Column annotations by field name; columns without any are absent. */
   readonly fieldAnnotations: Readonly<Record<string, readonly Annotation[]>>;
   /** Returns a copy carrying the annotations, for plugins to read. */
-  with(...annotations: Annotation[]): TableDefinition<T, I, TSchema>;
+  with(...annotations: Annotation[]): TableDefinition<T, I, TSchema, TInput>;
   v(): TSchema extends ValidatorSchema
     ? ObjectValidator<TSchema>
-    : Validator<T>;
+    : Validator<T, TInput>;
   index<
     const TName extends string,
     const TCols extends readonly IndexableColumn<T>[],
@@ -103,7 +113,8 @@ export interface TableDefinition<
         cols: TCols;
       };
     },
-    TSchema
+    TSchema,
+    TInput
   >;
   index<
     const TName extends string,
@@ -120,7 +131,8 @@ export interface TableDefinition<
         cols: TCols;
       };
     },
-    TSchema
+    TSchema,
+    TInput
   >;
   index<const TName extends string, const TCol extends IndexableColumn<T>>(
     name: TName,
@@ -134,7 +146,8 @@ export interface TableDefinition<
         cols: readonly [TCol];
       };
     },
-    TSchema
+    TSchema,
+    TInput
   >;
   index<const TName extends string, const TCol extends IndexableColumn<T>>(
     name: TName,
@@ -148,17 +161,23 @@ export interface TableDefinition<
         cols: readonly [TCol];
       };
     },
-    TSchema
+    TSchema,
+    TInput
   >;
 }
 
 export type AnyTableDefinition = TableDefinition<any, AnyIndexDefinitions, any>;
 
+/** The row type reads return. */
 export type ExtractSchema<TTable> =
-  TTable extends TableDefinition<infer T, any, any> ? T : never;
+  TTable extends TableDefinition<infer T, any, any, any> ? T : never;
+
+/** The row type `insert` and `upsert` accept. */
+export type ExtractSchemaInput<TTable> =
+  TTable extends TableDefinition<any, any, any, infer TInput> ? TInput : never;
 
 export type ExtractIndexes<TTable> =
-  TTable extends TableDefinition<any, infer I, any> ? I : never;
+  TTable extends TableDefinition<any, infer I, any, any> ? I : never;
 
 function validateKey(key: string, kind: string, tableName: string): void {
   if (key === "" || key.startsWith("$")) {
@@ -264,9 +283,17 @@ export function validateIndexes(
   }
 }
 
-function addIndexMethod<T, I extends AnyIndexDefinitions, TSchema = undefined>(
-  tableDef: Omit<TableDefinition<T, I, TSchema>, "index" | "v" | "with">,
-): TableDefinition<T, I, TSchema> {
+function addIndexMethod<
+  T,
+  I extends AnyIndexDefinitions,
+  TSchema = undefined,
+  TInput = T,
+>(
+  tableDef: Omit<
+    TableDefinition<T, I, TSchema, TInput>,
+    "index" | "v" | "with"
+  >,
+): TableDefinition<T, I, TSchema, TInput> {
   return {
     ...tableDef,
     with(...annotations: Annotation[]) {
@@ -444,11 +471,13 @@ function normalizeSchemaInput(
     };
   }
 
-  validateSchemaFields(tableName, schemaOrValidator);
+  // The guard above does not narrow this union reliably.
+  const schemaFields = schemaOrValidator as ValidatorSchemaWithId;
+  validateSchemaFields(tableName, schemaFields);
 
   return {
-    schemaValidator: v.object(schemaOrValidator),
-    schemaFields: schemaOrValidator,
+    schemaValidator: v.object(schemaFields),
+    schemaFields,
   };
 }
 
@@ -463,7 +492,8 @@ export function defineTable<const TSchema extends ValidatorSchemaWithId>(
       cols: readonly ["id"];
     };
   },
-  TSchema
+  TSchema,
+  InferTableSchemaInput<TSchema>
 >;
 export function defineTable<const TValidator extends Validator<{ id: string }>>(
   tableName: string,
@@ -475,7 +505,9 @@ export function defineTable<const TValidator extends Validator<{ id: string }>>(
       type: "uniqhash";
       cols: readonly ["id"];
     };
-  }
+  },
+  undefined,
+  InferInput<TValidator>
 >;
 export function defineTable(
   tableName: string,

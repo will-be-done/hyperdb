@@ -23,6 +23,7 @@ import { DEFAULT_CODEC_OPTIONS, type CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import AwaitLock from "../utils/await-lock";
@@ -423,7 +424,7 @@ export class HybridDB implements HyperDB {
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfCrashed();
     const { cache, primary } = this;
@@ -443,7 +444,7 @@ export class HybridDB implements HyperDB {
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfCrashed();
     const { cache, primary } = this;
@@ -795,7 +796,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition>(
     _table: TTable,
-    _records: ExtractSchema<TTable>[],
+    _records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     throw new HyperDBError(
       "READONLY_TRANSACTION",
@@ -805,7 +806,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition>(
     _table: TTable,
-    _records: ExtractSchema<TTable>[],
+    _records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     throw new HyperDBError(
       "READONLY_TRANSACTION",
@@ -980,7 +981,7 @@ class HybridDBTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();
@@ -1003,7 +1004,7 @@ class HybridDBTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.hybridDB.throwIfCrashed();

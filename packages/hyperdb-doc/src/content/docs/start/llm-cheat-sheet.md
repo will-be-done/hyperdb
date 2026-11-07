@@ -126,6 +126,12 @@ Useful validators: `v.string()`, `v.number()`, `v.bigint()`, `v.boolean()`,
 `v.partial(...)`, `v.required(...)`, `v.lazy(...)`, `v.pass<T>()`, and
 `v.any()`.
 
+Validators have an output type (`Infer`, `ExtractSchema<typeof table>`) and an
+input type (`InferInput`, `ExtractSchemaInput<typeof table>`). They differ for
+`v.arrayBuffer()`, which accepts typed arrays and `DataView`s on writes and
+always returns an `ArrayBuffer`; `insert`/`upsert` take the input row type.
+Action and selector args use the output type.
+
 Stored rows cannot contain `undefined` except where optional object fields are
 omitted. Arrays and records cannot contain `undefined`.
 

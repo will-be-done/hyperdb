@@ -4,6 +4,7 @@ import type { CodecOptions } from "../storage/codec";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import type { SelectOptions, Trait, WhereClause } from "./primitives";
@@ -48,11 +49,11 @@ export interface HyperDB {
   ): Generator<DBCmd, ExtractSchema<TTable>[]>;
   insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void>;
   upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void>;
   delete<TTable extends TableDefinition>(
     table: TTable,

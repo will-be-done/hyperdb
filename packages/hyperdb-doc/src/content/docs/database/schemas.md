@@ -109,6 +109,42 @@ type Filter = Infer<typeof filterSchema>;
 // { projectId: string; state?: "todo" | "done" }
 ```
 
+### Input and output types
+
+A validator can accept more than it produces. `v.arrayBuffer()` accepts typed
+arrays and `DataView`s and produces an `ArrayBuffer`, so its input type is
+`ArrayBuffer | ArrayBufferView` while `Infer` gives `ArrayBuffer`. Composite
+validators carry both through. `InferInput` gives the input type, and
+`ExtractSchemaInput` gives the row type that `insert` and `upsert` accept:
+
+```ts
+import {
+  defineTable,
+  insert,
+  v,
+  type ExtractSchema,
+  type ExtractSchemaInput,
+} from "@will-be-done/hyperdb";
+
+const filesTable = defineTable("files", {
+  id: v.string(),
+  data: v.arrayBuffer(),
+});
+
+type FileRow = ExtractSchema<typeof filesTable>; // data: ArrayBuffer
+type NewFile = ExtractSchemaInput<typeof filesTable>; // data: ArrayBuffer | ArrayBufferView
+
+// No cast needed; reads still return an ArrayBuffer.
+function* saveFile(id: string) {
+  yield* insert(filesTable, [{ id, data: new Uint8Array([1, 2]) }]);
+}
+```
+
+When you annotate a validator by hand, give both types:
+`Validator<ArrayBuffer, ArrayBuffer | ArrayBufferView>`. Action and selector
+args stay typed by `Infer`, because args reach the handler unnormalized unless
+`validateArgs` is on.
+
 ## Tagged unions
 
 `defineTable` also accepts a standalone object or union validator instead of a
@@ -227,9 +263,12 @@ omitted entirely, and `{ field: undefined }` is normalized to "missing". But
 
 ## Type helpers reference
 
-| Helper                         | Purpose                                |
-| ------------------------------ | -------------------------------------- |
-| `ExtractSchema<typeof table>`  | Row type of a table                    |
-| `ExtractIndexes<typeof table>` | Index definitions of a table           |
-| `Infer<typeof validator>`      | TypeScript type of any validator       |
-| `InferObject<fields>`          | TypeScript type of an object field map |
+| Helper                             | Purpose                                    |
+| ---------------------------------- | ------------------------------------------ |
+| `ExtractSchema<typeof table>`      | Row type of a table, as reads return it    |
+| `ExtractSchemaInput<typeof table>` | Row type that `insert` and `upsert` accept |
+| `ExtractIndexes<typeof table>`     | Index definitions of a table               |
+| `Infer<typeof validator>`          | TypeScript type a validator produces       |
+| `InferInput<typeof validator>`     | TypeScript type a validator accepts        |
+| `InferObject<fields>`              | Produced type of an object field map       |
+| `InferObjectInput<fields>`         | Accepted type of an object field map       |

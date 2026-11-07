@@ -17,6 +17,10 @@ export type NormalizeResult<T> =
   | { ok: true; omitted: true }
   | { ok: false; message: string; path: ValidationPath };
 
+// Type-only key for a validator's input type. Nothing is stored under it.
+declare const validatorInput: unique symbol;
+
+/** The value a validator produces: what reads and handlers receive. */
 export type Infer<TValidator> = TValidator extends {
   normalize(
     value: unknown,
@@ -24,6 +28,17 @@ export type Infer<TValidator> = TValidator extends {
   ): NormalizeResult<infer TValue>;
 }
   ? TValue
+  : never;
+
+/**
+ * The value a validator accepts: what writes may pass. It differs from
+ * `Infer` when normalization converts, e.g. `v.arrayBuffer()` accepts typed
+ * arrays and produces an `ArrayBuffer`.
+ */
+export type InferInput<TValidator> = TValidator extends {
+  readonly [validatorInput]?: () => infer TInput;
+}
+  ? TInput
   : never;
 
 type OptionalKeys<TFields extends Record<string, Validator<any>>> = {
@@ -36,7 +51,10 @@ type RequiredKeys<TFields extends Record<string, Validator<any>>> = Exclude<
 >;
 
 type PartialFields<TFields extends Record<string, Validator<any>>> = {
-  [K in keyof TFields]: OptionalValidator<Infer<TFields[K]>>;
+  [K in keyof TFields]: OptionalValidator<
+    Infer<TFields[K]>,
+    InferInput<TFields[K]>
+  >;
 };
 
 type RequiredFields<
@@ -44,8 +62,8 @@ type RequiredFields<
   TKeys extends keyof TFields,
 > = {
   [K in keyof TFields]: K extends TKeys
-    ? TFields[K] extends OptionalValidator<infer T>
-      ? Validator<T>
+    ? TFields[K] extends OptionalValidator<infer T, infer TInput>
+      ? Validator<T, TInput>
       : TFields[K]
     : TFields[K];
 };
@@ -53,8 +71,22 @@ type RequiredFields<
 export type InferObject<TFields extends Record<string, Validator<any>>> = {
   [K in RequiredKeys<TFields>]: Infer<TFields[K]>;
 } & {
-  [K in OptionalKeys<TFields>]?: TFields[K] extends OptionalValidator<infer T>
+  [K in OptionalKeys<TFields>]?: TFields[K] extends OptionalValidator<
+    infer T,
+    any
+  >
     ? T
+    : never;
+};
+
+export type InferObjectInput<TFields extends Record<string, Validator<any>>> = {
+  [K in RequiredKeys<TFields>]: InferInput<TFields[K]>;
+} & {
+  [K in OptionalKeys<TFields>]?: TFields[K] extends OptionalValidator<
+    any,
+    infer TInput
+  >
+    ? TInput
     : never;
 };
 
@@ -77,14 +109,21 @@ type ValidatorKind =
   | "pass"
   | "any";
 
-interface ValidatorOutput<T> {
+interface ValidatorOutput<T, TInput = T> {
   normalize(value: unknown, path?: ValidationPath): NormalizeResult<T>;
+  /**
+   * Type-only, see `InferInput`. A function type so that, like `normalize`,
+   * the intersections in `Validator<T, TInput>` resolve to their last member
+   * instead of intersecting input types.
+   */
+  readonly [validatorInput]?: () => TInput;
 }
 
 interface BaseValidator<
   T,
   TKind extends ValidatorKind,
-> extends ValidatorOutput<T> {
+  TInput = T,
+> extends ValidatorOutput<T, TInput> {
   readonly kind: TKind;
   readonly annotations: readonly Annotation[];
   /** Returns a copy carrying the annotations, for plugins to read. */
@@ -101,29 +140,50 @@ export type NumberValidator = PrimitiveValidator<number, "number">;
 export type BigIntValidator = PrimitiveValidator<bigint, "bigint">;
 export type BooleanValidator = PrimitiveValidator<boolean, "boolean">;
 export type NullValidator = PrimitiveValidator<null, "null">;
-export type ArrayBufferValidator = BaseValidator<ArrayBuffer, "arrayBuffer">;
+export type ArrayBufferValidator = BaseValidator<
+  ArrayBuffer,
+  "arrayBuffer",
+  ArrayBuffer | ArrayBufferView
+>;
 
-export interface ArrayValidator<T> extends BaseValidator<T[], "array"> {
-  readonly item: Validator<T>;
+export interface ArrayValidator<T, TInput = T> extends BaseValidator<
+  T[],
+  "array",
+  TInput[]
+> {
+  readonly item: Validator<T, TInput>;
 }
 
 export interface ObjectValidator<
   TFields extends Record<string, Validator<any>>,
-> extends BaseValidator<InferObject<TFields>, "object"> {
+> extends BaseValidator<
+  InferObject<TFields>,
+  "object",
+  InferObjectInput<TFields>
+> {
   readonly fields: TFields;
 }
 
 export interface RecordValidator<
   TKey extends string,
   TValue,
-> extends BaseValidator<Record<TKey, TValue>, "record"> {
-  readonly keyValidator: Validator<TKey>;
-  readonly valueValidator: Validator<TValue>;
+  TValueInput = TValue,
+> extends BaseValidator<
+  Record<TKey, TValue>,
+  "record",
+  Record<TKey, TValueInput>
+> {
+  readonly keyValidator: Validator<TKey, any>;
+  readonly valueValidator: Validator<TValue, TValueInput>;
 }
 
 export interface UnionValidator<
   TValidators extends readonly Validator<any>[],
-> extends BaseValidator<Infer<TValidators[number]>, "union"> {
+> extends BaseValidator<
+  Infer<TValidators[number]>,
+  "union",
+  InferInput<TValidators[number]>
+> {
   readonly validators: TValidators;
 }
 
@@ -133,22 +193,27 @@ export interface LiteralValidator<
   readonly literalValue: T;
 }
 
-export interface OptionalValidator<T> extends BaseValidator<
+export interface OptionalValidator<T, TInput = T> extends BaseValidator<
   T | undefined,
-  "optional"
+  "optional",
+  TInput | undefined
 > {
   readonly isOptional: true;
-  readonly inner: Validator<T>;
+  readonly inner: Validator<T, TInput>;
 }
 
-export interface LazyValidator<T> extends BaseValidator<T, "lazy"> {
-  readonly getValidator: () => Validator<T>;
+export interface LazyValidator<T, TInput = T> extends BaseValidator<
+  T,
+  "lazy",
+  TInput
+> {
+  readonly getValidator: () => Validator<T, TInput>;
 }
 
 export type PassValidator<T> = BaseValidator<T, "pass">;
 export type AnyValidator = BaseValidator<any, "any">;
 
-export type Validator<T> = (
+export type Validator<T, TInput = T> = (
   | StringValidator
   | NumberValidator
   | BigIntValidator
@@ -165,7 +230,7 @@ export type Validator<T> = (
   | PassValidator<any>
   | AnyValidator
 ) &
-  ValidatorOutput<T>;
+  ValidatorOutput<T, TInput>;
 
 export function isOptionalValidator(
   validator: Validator<any>,
@@ -312,7 +377,10 @@ function primitive<T, TKind extends PrimitiveValidatorKind>(
   });
 }
 
-export function assertValid<T>(validator: Validator<T>, value: unknown): T {
+export function assertValid<T>(
+  validator: Validator<T, any>,
+  value: unknown,
+): T {
   const result = validator.normalize(value);
   if (isNormalizeFailure(result)) {
     throw new ValidationError(
@@ -326,7 +394,7 @@ export function assertValid<T>(validator: Validator<T>, value: unknown): T {
 }
 
 export function isIndexableValueValidator(
-  validator: Validator<unknown>,
+  validator: Validator<unknown, unknown>,
 ): boolean {
   switch (validator.kind) {
     case "string":
@@ -411,7 +479,7 @@ export const v = {
     });
   },
 
-  array<T>(item: Validator<T>): ArrayValidator<T> {
+  array<T, TInput = T>(item: Validator<T, TInput>): ArrayValidator<T, TInput> {
     return annotatable({
       kind: "array",
       item,
@@ -492,10 +560,10 @@ export const v = {
     });
   },
 
-  record<TKey extends string, TValue>(
-    keyValidator: Validator<TKey>,
-    valueValidator: Validator<TValue>,
-  ): RecordValidator<TKey, TValue> {
+  record<TKey extends string, TValue, TValueInput = TValue>(
+    keyValidator: Validator<TKey, any>,
+    valueValidator: Validator<TValue, TValueInput>,
+  ): RecordValidator<TKey, TValue, TValueInput> {
     return annotatable({
       kind: "record",
       keyValidator,
@@ -574,7 +642,9 @@ export const v = {
     });
   },
 
-  optional<T>(inner: Validator<T>): OptionalValidator<T> {
+  optional<T, TInput = T>(
+    inner: Validator<T, TInput>,
+  ): OptionalValidator<T, TInput> {
     return annotatable({
       kind: "optional",
       isOptional: true,
@@ -621,7 +691,9 @@ export const v = {
     return v.object(newFields).with(...validator.annotations);
   },
 
-  lazy<T>(getValidator: () => Validator<T>): LazyValidator<T> {
+  lazy<T, TInput = T>(
+    getValidator: () => Validator<T, TInput>,
+  ): LazyValidator<T, TInput> {
     return annotatable({
       kind: "lazy",
       getValidator,

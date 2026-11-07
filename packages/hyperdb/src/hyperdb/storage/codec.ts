@@ -10,6 +10,7 @@ import {
   type NormalizeResult,
   type ValidationPath,
   type Validator,
+  v,
 } from "../schema/values";
 import {
   fail,
@@ -91,6 +92,19 @@ function sanitizeAny(
   return fail(`unsupported value type ${typeof value}`, path);
 }
 
+function acceptsArrayBuffer(validator: Validator<unknown>): boolean {
+  switch (validator.kind) {
+    case "arrayBuffer":
+      return true;
+    case "union":
+      return validator.validators.some(acceptsArrayBuffer);
+    case "optional":
+      return acceptsArrayBuffer(validator.inner);
+    default:
+      return false;
+  }
+}
+
 function sanitizeWithValidatorShape(
   validator: Validator<unknown>,
   value: unknown,
@@ -109,6 +123,16 @@ function sanitizeWithValidatorShape(
 
   if (value === undefined) {
     return fail("undefined is not a valid stored value", path);
+  }
+
+  if (validator.kind === "lazy") {
+    return sanitizeWithValidatorShape(validator.getValidator(), value, path);
+  }
+
+  // Not validation, but a conversion the output type promises: binary
+  // columns store an ArrayBuffer even when given a typed array or DataView.
+  if (ArrayBuffer.isView(value) && acceptsArrayBuffer(validator)) {
+    return v.arrayBuffer().normalize(value, path);
   }
 
   if (validator.kind === "object" && isPlainObject(value)) {

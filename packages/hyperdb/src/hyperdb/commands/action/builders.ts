@@ -16,7 +16,7 @@ import {
   type InferObject,
   type Validator,
 } from "../../schema/values";
-import type { ExtractSchema, TableDefinition } from "../../schema/table";
+import type { ExtractSchemaInput, TableDefinition } from "../../schema/table";
 import {
   getGeneratorTraceMeta,
   wrapGeneratorWithTraceMeta,
@@ -127,7 +127,7 @@ export function createAction(
 
 export function* insert<TTable extends TableDefinition<any, any>>(
   table: TTable,
-  values: ExtractSchema<TTable>[],
+  values: ExtractSchemaInput<TTable>[],
 ): Generator<InsertActionCmd, void, unknown> {
   yield {
     [commandBrand]: true,
@@ -139,7 +139,7 @@ export function* insert<TTable extends TableDefinition<any, any>>(
 
 export function* upsert<TTable extends TableDefinition<any, any>>(
   table: TTable,
-  values: ExtractSchema<TTable>[],
+  values: ExtractSchemaInput<TTable>[],
 ): Generator<UpsertActionCmd, void, unknown> {
   yield {
     [commandBrand]: true,

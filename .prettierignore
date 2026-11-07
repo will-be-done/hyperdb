@@ -6,4 +6,5 @@ test-results/
 pnpm-lock.yaml
 
 packages/hyperdb/dist/
+packages/hyperdb/coverage/
 packages/hyperdb-doc/dist/

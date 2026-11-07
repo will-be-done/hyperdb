@@ -20,6 +20,7 @@ import type { DBTransactionMode } from "../core/driver";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import {
@@ -328,7 +329,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     if (records.length === 0) return;
@@ -392,7 +393,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     if (records.length === 0) return;
@@ -861,7 +862,7 @@ export class SubscribableDB implements HyperDB {
 
   *insert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     if (records.length === 0) return;
 
@@ -873,7 +874,7 @@ export class SubscribableDB implements HyperDB {
 
   *upsert<TTable extends TableDefinition<any>>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ) {
     if (records.length === 0) return;
 

@@ -29,6 +29,7 @@ import {
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import { refVar, type RefVar } from "../utils";
@@ -258,7 +259,7 @@ export class DBTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd> {
     if (this.isFinished.val) {
       throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");
@@ -271,7 +272,7 @@ export class DBTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd> {
     if (this.isFinished.val) {
       throw new HyperDBError("TRANSACTION_FINISHED", "Transaction is finished");

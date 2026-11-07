@@ -23,6 +23,7 @@ import {
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import {
@@ -468,7 +469,7 @@ export class PreloadedHybridDB implements HyperDB {
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     const tx = yield* this.beginTx();
     try {
@@ -482,7 +483,7 @@ export class PreloadedHybridDB implements HyperDB {
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     const tx = yield* this.beginTx();
     try {
@@ -702,7 +703,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
 
   *insert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     this.throwIfDone();
     this.throwIfReadonly();
@@ -725,14 +726,14 @@ class PreloadedHybridDBTx implements HyperDBTx {
 
   *upsert<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
   ): Generator<DBCmd, void> {
     yield* this.writeRows(table, records, false);
   }
 
   private *writeRows<TTable extends TableDefinition>(
     table: TTable,
-    records: ExtractSchema<TTable>[],
+    records: ExtractSchemaInput<TTable>[],
     insertOnly: boolean,
   ): Generator<DBCmd, void> {
     this.throwIfDone();

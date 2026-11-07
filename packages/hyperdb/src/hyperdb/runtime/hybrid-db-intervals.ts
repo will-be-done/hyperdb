@@ -16,6 +16,7 @@ import type { SelectCommandEvent, SelectScanSource } from "../core/tracer";
 import type {
   ExtractIndexes,
   ExtractSchema,
+  ExtractSchemaInput,
   TableDefinition,
 } from "../schema/table";
 import { HyperDBError } from "../core/errors";
@@ -600,7 +601,8 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
     options.filterPersistentRows?.(target, persistentRows) ?? persistentRows;
 
   if (primaryRows.length > 0) {
-    yield* cache.upsert(table, primaryRows);
+    // Stored rows are valid write input.
+    yield* cache.upsert(table, primaryRows as ExtractSchemaInput<TTable>[]);
     mergeExactUniqhashCoverageForRows(
       cachedIntervals,
       table,
