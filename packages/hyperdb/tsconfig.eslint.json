@@ -2,7 +2,13 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "emitDeclarationOnly": false,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      // The package ships these types but its exports map omits them.
+      "@tursodatabase/database-wasm/bundle": [
+        "./node_modules/@tursodatabase/database-wasm/dist/promise-bundle.d.ts"
+      ]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": []

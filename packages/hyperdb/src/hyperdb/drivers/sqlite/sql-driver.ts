@@ -30,7 +30,11 @@ import {
   selectSqliteSchemaMetadataSQL,
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
-  isMissingSqliteSchemaMetadataError,
+  sqliteSchemaMetadataMatches,
+  sqliteWriteNeedsSavepoint,
+  SQLITE_WRITE_SAVEPOINT,
+  toSqliteSchemaMetadataReadError,
+  type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
@@ -38,6 +42,14 @@ import {
   type SqlValue,
   type BindParams,
 } from "./sqlite-common";
+import { HyperDBError } from "../../core/errors";
+import {
+  err,
+  fromThrowable,
+  ok,
+  unwrapOrThrow,
+  type Result,
+} from "../../utils/result";
 
 export interface SQLStatement {
   values(values: SqlValue[]): SqlValue[][];
@@ -109,7 +121,7 @@ function performScanOperation(
 ): unknown[] {
   const tableDef = tableDefinitions.get(table);
   if (!tableDef) {
-    throw new Error(`Table ${table} not found`);
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${table} not found`);
   }
 
   const { where, params } = buildSortKeyWhereClause(
@@ -162,11 +174,58 @@ function rollbackQuietly(db: SQLiteDB): void {
   }
 }
 
+// If the savepoint cannot be rolled back or released, part of the write may
+// still be applied, so `poison` marks the transaction as unable to commit.
+function inWriteSavepoint(
+  db: SQLiteDB,
+  run: () => void,
+  poison: (error: unknown) => void,
+): void {
+  db.exec(`SAVEPOINT ${SQLITE_WRITE_SAVEPOINT}`);
+  try {
+    run();
+  } catch (error) {
+    try {
+      db.exec(`ROLLBACK TO ${SQLITE_WRITE_SAVEPOINT}`);
+      db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+    } catch {
+      poison(error);
+    }
+    throw error;
+  }
+  try {
+    db.exec(`RELEASE ${SQLITE_WRITE_SAVEPOINT}`);
+  } catch (error) {
+    poison(error);
+    throw error;
+  }
+}
+
+function performTxWrite(
+  db: SQLiteDB,
+  kind: "insert" | "upsert" | "delete",
+  tableDef: TableDefinition,
+  count: number,
+  run: () => void,
+  poison: (error: unknown) => void,
+): void {
+  if (sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
+    inWriteSavepoint(db, run, poison);
+  } else {
+    run();
+  }
+}
+
 class SqlDriverTx implements DBDriverTX {
   private db: SQLiteDB;
   private tableDefinitions: Map<string, TableDefinition>;
   private committed = false;
   private rolledback = false;
+  // Set when a write's savepoint could not be cleaned up; commit refuses.
+  private poisonedBy: { error: unknown } | undefined;
+  private readonly poison = (error: unknown) => {
+    this.poisonedBy ??= { error };
+  };
   private onFinish: () => void;
 
   constructor(
@@ -182,8 +241,12 @@ class SqlDriverTx implements DBDriverTX {
 
   *commit(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
+    if (this.poisonedBy) throw this.poisonedBy.error;
     this.db.exec("COMMIT");
     this.committed = true;
     this.onFinish();
@@ -191,7 +254,10 @@ class SqlDriverTx implements DBDriverTX {
 
   *rollback(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     this.db.exec("ROLLBACK");
     this.rolledback = true;
@@ -203,29 +269,62 @@ class SqlDriverTx implements DBDriverTX {
     values: Record<string, unknown>[],
   ): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
-    performInsertOperation(this.db, tableDef, values as Row[]);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
+    performTxWrite(
+      this.db,
+      "insert",
+      tableDef,
+      values.length,
+      () => performInsertOperation(this.db, tableDef, values as Row[]),
+      this.poison,
+    );
   }
 
   *upsert(tableName: string, values: Row[]): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
-    performUpsertOperation(this.db, tableDef, values);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
+    performTxWrite(
+      this.db,
+      "upsert",
+      tableDef,
+      values.length,
+      () => performUpsertOperation(this.db, tableDef, values),
+      this.poison,
+    );
   }
 
   *delete(tableName: string, values: string[]): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
-    performDeleteOperation(this.db, tableDef, values);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
+    performTxWrite(
+      this.db,
+      "delete",
+      tableDef,
+      values.length,
+      () => performDeleteOperation(this.db, tableDef, values),
+      this.poison,
+    );
   }
 
   *intervalScan(
@@ -235,7 +334,10 @@ class SqlDriverTx implements DBDriverTX {
     selectOptions: SelectOptions,
   ): Generator<DBCmd, unknown[]> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
     return performScanOperation(
@@ -287,7 +389,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performInsertOperation(this.db, tableDef, values as Row[]);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -305,7 +411,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performUpsertOperation(this.db, tableDef, values);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -323,7 +433,11 @@ export class SqlDriver implements DBDriver {
     this.db.exec("BEGIN TRANSACTION");
     try {
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
       performDeleteOperation(this.db, tableDef, values);
       this.db.exec("COMMIT");
     } catch (error) {
@@ -357,7 +471,7 @@ export class SqlDriver implements DBDriver {
       throw new Error("can't run while transaction is in progress");
     }
     if (!this.tableDefinitions.has(tableName)) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
     return performScanAllOperation(this.db, tableName);
   }
@@ -409,50 +523,42 @@ export class SqlDriver implements DBDriver {
   private schemaMetadataMatches(
     tableDefinitions: TableDefinition<any>[],
   ): boolean {
-    const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
-    let statement: SQLStatement | undefined;
+    return unwrapOrThrow(
+      this.readSchemaMetadata(tableDefinitions)
+        .map((rows) => sqliteSchemaMetadataMatches(tableDefinitions, rows))
+        .orElse((error) => this.recoverSchemaMetadataRead(error)),
+    );
+  }
 
-    try {
-      statement = this.db.prepare(sql);
-      const rows = statement.values(
-        tableDefinitions.map((tableDef) => tableDef.tableName),
+  private readSchemaMetadata(
+    tableDefinitions: TableDefinition<any>[],
+  ): Result<SqlValue[][], SqliteSchemaMetadataReadError> {
+    return fromThrowable(() => {
+      const statement = this.db.prepare(
+        selectSqliteSchemaMetadataSQL(tableDefinitions.length),
       );
-      const schemaVersion = Number(rows[0]?.[3]);
-      if (!Number.isInteger(schemaVersion)) return false;
-
-      const metadataByTable = new Map(
-        rows
-          .filter((row) => typeof row[0] === "string")
-          .map((row) => [
-            String(row[0]),
-            {
-              signature: String(row[1]),
-              verifiedSchemaVersion: Number(row[2]),
-            },
-          ]),
-      );
-
-      return tableDefinitions.every((tableDef) => {
-        const metadata = metadataByTable.get(tableDef.tableName);
-        return (
-          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
-          metadata.verifiedSchemaVersion === schemaVersion
-        );
-      });
-    } catch (error) {
-      if (isMissingSqliteSchemaMetadataError(error)) return false;
-      statement?.finalize();
-      statement = undefined;
       try {
-        if (!this.schemaMetadataTableExists()) return false;
-      } catch {
-        // Preserve the original metadata-read error when even the fallback
-        // schema inspection cannot run.
+        return statement.values(
+          tableDefinitions.map((tableDef) => tableDef.tableName),
+        );
+      } finally {
+        statement.finalize();
       }
-      throw error;
-    } finally {
-      statement?.finalize();
-    }
+    }, toSqliteSchemaMetadataReadError)();
+  }
+
+  // A metadata table that does not exist yet means the schema must be
+  // reconciled. Any other read failure is rethrown.
+  private recoverSchemaMetadataRead(
+    error: SqliteSchemaMetadataReadError,
+  ): Result<boolean, unknown> {
+    if (error.kind === "missing") return ok(false);
+    // Preserve the original metadata-read error when even the fallback
+    // schema inspection cannot run.
+    const exists = fromThrowable(() =>
+      this.schemaMetadataTableExists(),
+    )().unwrapOr(true);
+    return exists ? err(error.cause) : ok(false);
   }
 
   private schemaMetadataTableExists(): boolean {

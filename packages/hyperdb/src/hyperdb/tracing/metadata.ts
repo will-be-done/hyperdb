@@ -43,29 +43,30 @@ const annotateCommand = (cmd: unknown, meta: TraceFrameMeta): unknown => {
   return cmd;
 };
 
-export const wrapGeneratorWithExistingTraceMeta = <TReturn>(
-  gen: Generator<unknown, TReturn, unknown>,
+export const wrapGeneratorWithExistingTraceMeta = <TYield, TReturn>(
+  gen: Generator<TYield, TReturn, unknown>,
   meta: TraceFrameMeta,
-): Generator<unknown, TReturn, unknown> => {
+): Generator<TYield, TReturn, unknown> => {
+  // annotateCommand returns the same command object, so the yield type holds.
   const annotateResult = (
-    result: IteratorResult<unknown, TReturn>,
-  ): IteratorResult<unknown, TReturn> =>
+    result: IteratorResult<TYield, TReturn>,
+  ): IteratorResult<TYield, TReturn> =>
     result.done
       ? result
       : {
           done: false,
-          value: annotateCommand(result.value, meta),
+          value: annotateCommand(result.value, meta) as TYield,
         };
 
   const traced = {
-    next(value?: unknown): IteratorResult<unknown, TReturn> {
+    next(value?: unknown): IteratorResult<TYield, TReturn> {
       return annotateResult(gen.next(value));
     },
-    throw(error?: unknown): IteratorResult<unknown, TReturn> {
+    throw(error?: unknown): IteratorResult<TYield, TReturn> {
       if (!gen.throw) throw error;
       return annotateResult(gen.throw(error));
     },
-    return(value?: TReturn): IteratorResult<unknown, TReturn> {
+    return(value?: TReturn): IteratorResult<TYield, TReturn> {
       if (!gen.return) {
         return { done: true, value: value as TReturn };
       }
@@ -75,7 +76,7 @@ export const wrapGeneratorWithExistingTraceMeta = <TReturn>(
     [Symbol.iterator]() {
       return this;
     },
-  } as TraceableGenerator<TReturn>;
+  } as Generator<TYield, TReturn, unknown> & TraceableGenerator<TReturn>;
 
   Object.defineProperty(traced, generatorTraceMetaKey, {
     value: meta,
@@ -86,10 +87,10 @@ export const wrapGeneratorWithExistingTraceMeta = <TReturn>(
   return traced;
 };
 
-export const wrapGeneratorWithExistingTracePath = <TReturn>(
-  gen: Generator<unknown, TReturn, unknown>,
+export const wrapGeneratorWithExistingTracePath = <TYield, TReturn>(
+  gen: Generator<TYield, TReturn, unknown>,
   path: TraceFrameMeta[],
-): Generator<unknown, TReturn, unknown> => {
+): Generator<TYield, TReturn, unknown> => {
   let traced = gen;
   for (let index = path.length - 1; index >= 0; index -= 1) {
     traced = wrapGeneratorWithExistingTraceMeta(traced, path[index]!);
@@ -97,8 +98,8 @@ export const wrapGeneratorWithExistingTracePath = <TReturn>(
   return traced;
 };
 
-export const wrapGeneratorWithTraceMeta = <TReturn>(
-  gen: Generator<unknown, TReturn, unknown>,
+export const wrapGeneratorWithTraceMeta = <TYield, TReturn>(
+  gen: Generator<TYield, TReturn, unknown>,
   kind: TraceKind,
   name: string,
   arg: unknown,
@@ -106,7 +107,7 @@ export const wrapGeneratorWithTraceMeta = <TReturn>(
     TraceFrameMeta,
     "trace" | "skipRootTrace" | "skipChildTrace"
   > = {},
-): Generator<unknown, TReturn, unknown> =>
+): Generator<TYield, TReturn, unknown> =>
   wrapGeneratorWithExistingTraceMeta(
     gen,
     createTraceFrameMeta(kind, name, arg, options),

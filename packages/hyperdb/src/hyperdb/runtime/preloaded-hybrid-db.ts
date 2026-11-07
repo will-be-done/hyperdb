@@ -48,6 +48,7 @@ import {
   hashScanValues,
   PreloadedTableIndexes,
 } from "./preloaded-hybrid-db-indexes";
+import { DuplicateIdError, HyperDBError } from "../core/errors";
 
 const entityLoadBatchSize = 500;
 
@@ -107,7 +108,11 @@ class PreloadedHybridData {
 
   get(table: TableDefinition): PreloadedTableState {
     const state = this.tables.get(table.tableName);
-    if (!state) throw new Error(`Table ${table.tableName} not found`);
+    if (!state)
+      throw new HyperDBError(
+        "TABLE_NOT_FOUND",
+        `Table ${table.tableName} not found`,
+      );
     return state;
   }
 
@@ -333,7 +338,7 @@ export class PreloadedHybridDB implements HyperDB {
     this.state = createState();
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = new PreloadedHybridDB(this.primary, {
       traits: [...this.traits, ...traits],
       preloadConcurrency: this.preloadConcurrency,
@@ -529,6 +534,25 @@ export class PreloadedHybridDB implements HyperDB {
     yield* this.state.persistence.waitForPersistence();
   }
 
+  get isClosed(): boolean {
+    const { persistence } = this.state;
+    return persistence.isClosing || persistence.isClosed;
+  }
+
+  *close(): Generator<DBCmd, void> {
+    const { persistence } = this.state;
+    if (persistence.isClosed) return;
+    // Refuse new commits first; commits that passed the gate enqueue
+    // synchronously, so settle() drains them before the primary closes.
+    persistence.isClosing = true;
+    yield* persistence.settle();
+    yield* this.primary.close();
+    // Every operation now fails with DB_CLOSED, so release the preloaded
+    // indexes and rows; withTraits() views share this state.
+    this.state.data = new PreloadedHybridData();
+    persistence.isClosed = true;
+  }
+
   enqueuePersistence(writes: HybridPendingWrite[], primary: HyperDB): void {
     this.state.persistence.enqueue(primary, writes);
   }
@@ -580,7 +604,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
     };
   }
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new PreloadedHybridDBTx(
       this.owner,
       this.data,
@@ -691,9 +715,7 @@ class PreloadedHybridDBTx implements HyperDBTx {
           ids.has(row.id) ||
           (entry && (!entry.loaded || entry.row !== null))
         ) {
-          throw new Error(
-            `Record ${row.id} already exists in ${table.tableName}`,
-          );
+          throw new DuplicateIdError(row.id);
         }
         ids.add(row.id);
       }
@@ -783,7 +805,10 @@ class PreloadedHybridDBTx implements HyperDBTx {
   *rollback(): Generator<DBCmd, void> {
     if (this.state.rollbacked.val) return;
     if (this.state.committed.val)
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     let rollbackFailed = false;
     let rollbackError: unknown;
     try {
@@ -802,13 +827,19 @@ class PreloadedHybridDBTx implements HyperDBTx {
   private throwIfDone(): void {
     this.owner.throwIfCrashed();
     if (this.state.committed.val || this.state.rollbacked.val) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
   }
 
   private throwIfReadonly(): void {
     if (this.mode === "readonly") {
-      throw new Error("Cannot write through a readonly transaction");
+      throw new HyperDBError(
+        "READONLY_TRANSACTION",
+        "Cannot write through a readonly transaction",
+      );
     }
   }
 }

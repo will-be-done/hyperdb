@@ -147,8 +147,21 @@ Inside React use [`useSyncDispatch` / `useAsyncDispatch`](/integrations/react/),
 which bind the dispatcher to the database from context.
 
 `asyncDispatch` returns a promise, but runs cached operations and notifies
-subscribers before returning. Execution suspends for database I/O, a busy
-transaction lock, or an unresolved promise yielded by the action.
+subscribers before returning. Execution suspends only for database I/O or a
+busy transaction lock. Handlers cannot await other promises: fetch data or
+generate ids outside the action and pass them in as args.
+
+`dispatchMaybeAsync` runs the same transaction but returns the result directly
+when nothing had to wait, and a promise only when a step suspended. Use it when
+an integration wants to keep a synchronous fast path, for example a `HybridDB`
+write served entirely by the in-memory cache:
+
+```ts
+import { dispatchMaybeAsync } from "@will-be-done/hyperdb";
+
+const result = dispatchMaybeAsync(db, createTask(args));
+const value = result instanceof Promise ? await result : result;
+```
 
 With `HybridDB` or `PreloadedHybridDB`, transactions publish memory changes
 before the primary store saves them. To wait for all transactions committed
@@ -159,10 +172,87 @@ for retry and recovery behavior.
 
 ## Selectors can't write
 
-The command runner only permits mutations while dispatching an action. If a
-selector emits `insert`, `upsert`, or `deleteRows`, the runtime throws
-(`Writes are disallowed for command: insert`). This keeps reads pure and is what
-makes selector caching safe.
+Selector handlers are typed to yield only read commands, so calling `insert`,
+`upsert`, `deleteRows`, or an action inside a selector is a TypeScript error.
+The runtime enforces the same rule for untyped code: a selector cannot write,
+even when an action runs it, and a write from a selector throws a `HyperDBError`
+with code `WRITES_DISALLOWED`. This keeps reads pure and is what makes selector
+caching safe.
+
+## Typing reusable helpers
+
+Plain generator helpers compose with `yield*` like selectors and actions do.
+Inferred return types work as is. When you annotate a helper, use
+`SelectorGenerator<T>` for reads (usable in selectors and actions) or
+`ActionGenerator<T>` for helpers that may write (usable only in actions):
+
+```ts
+import {
+  selectFrom,
+  upsert,
+  type ActionGenerator,
+  type SelectorGenerator,
+} from "@will-be-done/hyperdb";
+import { tasksTable, type Task } from "./schema";
+
+function* findTask(id: string): SelectorGenerator<Task | undefined> {
+  return yield* selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", id))
+    .first();
+}
+
+function* saveTask(task: Task): ActionGenerator<void> {
+  yield* upsert(tasksTable, [task]);
+}
+```
+
+A helper annotated as `Generator<unknown, T>` no longer type-checks inside a
+handler; switch it to one of the types above. Handlers may only yield HyperDB
+commands, so a stray `yield value` is also a type error. The yield unions
+themselves are exported as `SelectorCommand` and `ActionCommand`.
+
+## Errors
+
+Runtime errors extend `HyperDBError` and carry a stable `code`. Match on the
+code rather than the message text. `isHyperDBError(error, code)` narrows the
+error and also recognizes errors raised by another copy of the package in the
+same bundle. Mistakes in how tables, actions, or queries are defined (such as a
+blank action name, an invalid index, or conflicting query conditions) throw a
+plain `Error`, for which `isHyperDBError` returns `false`.
+
+```ts
+import { DuplicateIdError, isHyperDBError } from "@will-be-done/hyperdb";
+
+try {
+  await asyncDispatch(db, createTask(args));
+} catch (error) {
+  if (error instanceof DuplicateIdError) console.warn("exists:", error.id);
+  else if (isHyperDBError(error, "VALIDATION")) showFormError(error.message);
+  else throw error;
+}
+```
+
+| Code                      | Raised when                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| `DUPLICATE_ID`            | `insert` hits an existing id (`DuplicateIdError`, with `id`)                 |
+| `VALIDATION`              | Args or rows fail their validators (`ValidationError`)                       |
+| `WRITES_DISALLOWED`       | A selector tries to write                                                    |
+| `TRANSACTION_FINISHED`    | A transaction is used after commit or rollback                               |
+| `READONLY_TRANSACTION`    | A write goes through a readonly transaction                                  |
+| `TABLE_NOT_FOUND`         | A table was not passed to `loadTables`                                       |
+| `INDEX_NOT_FOUND`         | A query names an index the table does not declare                            |
+| `ASYNC_IN_SYNC_EXECUTION` | A sync helper (`execSync`, `syncDispatch`, `selectSync`) meets async storage |
+| `UNSUPPORTED_COMMAND`     | A handler yields something that is not a HyperDB command                     |
+| `PERSISTENCE_QUEUE_FULL`  | Hybrid persistence is at capacity; await `waitForPersistence()` and retry    |
+| `HYBRID_DB_CRASHED`       | Background persistence failed permanently (`HybridDBCrashedError`)           |
+| `UNDO_CONFLICT`           | Undo/redo would overwrite a newer change (`UndoConflictError`)               |
+| `DB_CLOSED`               | The runtime was closed with `close()`                                        |
+
+HyperDB does not log errors it throws; they reach the caller of the dispatch or
+select helper, or the `error` state of async selector stores and
+`useAsyncSelector`.
+SQLite engine errors (for example a `UNIQUE` constraint on a plain `SqlDriver`)
+are passed through unchanged.
 
 ## Transactions
 
@@ -184,6 +274,42 @@ export const moveTask = action({
   },
 });
 ```
+
+### Handling failed commands
+
+When a read or write fails, its error is raised at the handler's `yield*`, so
+ordinary `try` / `catch` / `finally` works inside actions and selectors. An
+error the handler does not catch rolls the transaction back.
+
+```ts
+import { DuplicateIdError, insert, upsert, v } from "@will-be-done/hyperdb";
+
+export const ensureTask = action({
+  name: "ensureTask",
+  args: { task: v.pass<Task>() },
+  handler: function* ({ task }) {
+    try {
+      yield* insert(tasksTable, [task]);
+    } catch (error) {
+      if (!(error instanceof DuplicateIdError)) throw error;
+      yield* upsert(tasksTable, [task]); // already exists: update instead
+    }
+  },
+});
+```
+
+A failed write has no partial effect, so the action can continue after catching
+it. Two cases still end the transaction:
+
+- A failed IndexedDB request aborts the whole browser transaction, so the
+  dispatch rejects even if the handler caught the error, and nothing is
+  committed. Duplicate ids are still reported as `DuplicateIdError`. With
+  `HybridDB`, writes are checked against the in-memory cache first, so
+  duplicates and constraint errors can be handled.
+- Mutation hooks (`afterInsert`, `afterChange`, ...) run after their write is
+  applied. If one fails, the handler sees the error, but the transaction can no
+  longer commit: the dispatch rejects with the hook's error, nothing is written,
+  and subscribers are not notified.
 
 When you dispatch against a [`SubscribableDB`](/runtime/db/), the commit bumps a
 revision and notifies subscribers with the exact rows that changed. This is what

@@ -2,40 +2,66 @@ import type { Op } from "../../runtime/ops";
 import { isRowInRange } from "../../core/query/tuple";
 import { type SelectRangeCmd } from "./commands";
 
+type OpsByTable = { length: number; byTable: Map<string, Op[]> };
+
+const opsByTableCache = new WeakMap<Op[], OpsByTable>();
+
+// Every subscriber of a commit receives the same ops array, so grouping it
+// once lets each selector skip ops on tables it never read. HyperDB never
+// changes the array after notifying, but a subscriber could, so a different
+// length forces a regroup. Groups are keyed by table name so equivalent table
+// definitions invalidate each other.
+const groupOpsByTable = (ops: Op[]): Map<string, Op[]> => {
+  const cached = opsByTableCache.get(ops);
+  if (cached && cached.length === ops.length) return cached.byTable;
+
+  const byTable = new Map<string, Op[]>();
+  for (const op of ops) {
+    let tableOps = byTable.get(op.table.tableName);
+    if (!tableOps) {
+      tableOps = [];
+      byTable.set(op.table.tableName, tableOps);
+    }
+    tableOps.push(op);
+  }
+  opsByTableCache.set(ops, { length: ops.length, byTable });
+  return byTable;
+};
+
+const isOpInRange = (
+  op: Op,
+  cmd: SelectRangeCmd,
+  bound: SelectRangeCmd["bounds"][number],
+): boolean => {
+  switch (op.type) {
+    case "insert":
+      return isRowInRange(op.newValue, cmd.table, cmd.index, bound);
+    case "upsert":
+      return (
+        (op.oldValue !== undefined &&
+          isRowInRange(op.oldValue, cmd.table, cmd.index, bound)) ||
+        isRowInRange(op.newValue, cmd.table, cmd.index, bound)
+      );
+    case "delete":
+      return isRowInRange(op.oldValue, cmd.table, cmd.index, bound);
+  }
+};
+
 // TODO: maybe range tree instead?
 export const isNeedToRerunRange = (
   cmds: SelectRangeCmd[],
   ops: Op[],
 ): boolean => {
+  if (cmds.length === 0 || ops.length === 0) return false;
+  const opsByTable = groupOpsByTable(ops);
+
   for (const cmd of cmds) {
+    const tableOps = opsByTable.get(cmd.table.tableName);
+    if (!tableOps) continue;
+
     for (const bound of cmd.bounds) {
-      for (const op of ops) {
-        if (op.table !== cmd.table) continue;
-
-        if (op.type === "insert") {
-          if (isRowInRange(op.newValue, cmd.table, cmd.index, bound)) {
-            return true;
-          }
-        }
-
-        if (op.type === "upsert") {
-          if (
-            op.oldValue &&
-            isRowInRange(op.oldValue, cmd.table, cmd.index, bound)
-          ) {
-            return true;
-          }
-
-          if (isRowInRange(op.newValue, cmd.table, cmd.index, bound)) {
-            return true;
-          }
-        }
-
-        if (op.type === "delete") {
-          if (isRowInRange(op.oldValue, cmd.table, cmd.index, bound)) {
-            return true;
-          }
-        }
+      for (const op of tableOps) {
+        if (isOpInRange(op, cmd, bound)) return true;
       }
     }
   }

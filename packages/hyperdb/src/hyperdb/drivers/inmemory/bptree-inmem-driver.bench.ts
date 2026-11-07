@@ -230,3 +230,6 @@ describe("BptreeInmemDriver transaction index strategy", () => {
     { time: 1000 },
   );
 });
+
+// Results go to the sink so the measured work stays observable.
+export const readBenchSink = () => _driverSink;

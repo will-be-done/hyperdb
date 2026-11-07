@@ -4,6 +4,7 @@ import type { HyperDB } from "../core/contracts";
 import { execAsync } from "../core/executor";
 import type { Row } from "../core/primitives";
 import type { TableDefinition } from "../schema/table";
+import { HyperDBError } from "../core/errors";
 
 /**
  * Thrown by every HybridDB read/write once background persistence has
@@ -12,9 +13,10 @@ import type { TableDefinition } from "../schema/table";
  * operations rather than serving stale in-memory data. The underlying
  * persistence error is available via `cause`.
  */
-export class HybridDBCrashedError extends Error {
+export class HybridDBCrashedError extends HyperDBError {
   constructor(cause: unknown) {
     super(
+      "HYBRID_DB_CRASHED",
       "HybridDB is in a crashed state after background persistence permanently failed. " +
         "No further reads or writes are allowed.",
       { cause },
@@ -160,20 +162,69 @@ export class HybridPersistenceQueue {
   private tail = Promise.resolve();
   private nextBatchId = 1;
   isCrashed = false;
+  // Set when close() starts: new commits are refused, accepted ones drain.
+  isClosing = false;
+  isClosed = false;
   private crashError: unknown;
+  private acceptedCommits = 0;
+  private idleWaiters: (() => void)[] = [];
 
   throwIfCrashed(): void {
+    if (this.isClosing || this.isClosed) {
+      throw new HyperDBError("DB_CLOSED", "DB is closed");
+    }
     if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
   }
 
-  // Call before publishing cache changes; enqueue also checks direct callers.
+  /**
+   * Registers a commit that passed the gate but has not enqueued its batch
+   * yet, so close() waits for it. Returns the release function.
+   */
+  acceptCommit(): () => void {
+    this.acceptedCommits++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.acceptedCommits--;
+      this.notifyIfIdle();
+    };
+  }
+
+  /**
+   * Waits until every accepted commit has enqueued and every batch settled,
+   * ignoring a crash; the owner is shutting down.
+   */
+  *settle(): Generator<DBCmd, void> {
+    while (this.acceptedCommits > 0 || this.pending.size > 0) {
+      yield* unwrap(
+        new Promise<void>((resolve) => this.idleWaiters.push(resolve)),
+      );
+    }
+  }
+
+  private notifyIfIdle(): void {
+    if (this.acceptedCommits > 0 || this.pending.size > 0) return;
+    const waiters = this.idleWaiters;
+    this.idleWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  // Call before publishing cache changes.
   throwIfFull(writes: HybridPendingWrite[]): void {
     this.throwIfCrashed();
+    this.throwIfAtCapacity(writes);
+  }
+
+  // A commit that already passed throwIfFull() may enqueue while closing.
+  private throwIfAtCapacity(writes: HybridPendingWrite[]): void {
+    if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
     if (
       writes.length > 0 &&
       this.pending.size >= HybridPersistenceQueue.maxPendingBatches
     ) {
-      throw new Error(
+      throw new HyperDBError(
+        "PERSISTENCE_QUEUE_FULL",
         "Hybrid persistence queue is full. Await waitForPersistence() before retrying the transaction.",
       );
     }
@@ -184,7 +235,7 @@ export class HybridPersistenceQueue {
     writes: HybridPendingWrite[],
     onFailure?: (batchId: number, failure: HybridPersistenceFailure) => void,
   ): void {
-    this.throwIfFull(writes);
+    this.throwIfAtCapacity(writes);
     if (writes.length === 0) return;
     const batchId = this.nextBatchId++;
     const persistWithRetry = (attempt: number): Promise<void> =>
@@ -212,20 +263,18 @@ export class HybridPersistenceQueue {
         );
       });
     const promise = this.tail.then(() => {
-      this.throwIfCrashed();
+      // Only a crash stops queued batches; close() waits for them to drain.
+      if (this.isCrashed) throw new HybridDBCrashedError(this.crashError);
       return persistWithRetry(1);
     });
     const batch = { id: batchId, writes, promise };
     this.pending.add(batch);
     this.tail = promise.catch(() => {});
-    void promise.then(
-      () => {
-        this.pending.delete(batch);
-      },
-      () => {
-        this.pending.delete(batch);
-      },
-    );
+    const settled = () => {
+      this.pending.delete(batch);
+      this.notifyIfIdle();
+    };
+    void promise.then(settled, settled);
   }
 
   *waitForPersistence(): Generator<DBCmd, void> {

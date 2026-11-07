@@ -4,6 +4,11 @@ import {
   isInsertActionCmd,
   isUpsertActionCmd,
   isRunWithTraitsCmd,
+  type DeleteActionCmd,
+  type GetCurrentTraitsCmd,
+  type InsertActionCmd,
+  type RunWithTraitsCmd,
+  type UpsertActionCmd,
 } from "./action/commands";
 import type { HyperDB } from "../core/contracts";
 import { deepFreeze } from "../deep-freeze";
@@ -11,6 +16,7 @@ import { isNoopCmd, isUnwrapCmd, type DBCmd } from "./async";
 import {
   isRunSelectorCmd,
   isSelectRangeCmd,
+  type RunSelectorCmd,
   type SelectRangeCmd,
 } from "./selector/commands";
 import {
@@ -26,6 +32,7 @@ import {
   withCurrentSelectEventTrait,
   withDriverTraceContextTrait,
   withTraceContextTrait,
+  withoutInternalTraits,
   type HyperDBTracer,
   type TraceContext,
   type TraceFrame,
@@ -35,6 +42,7 @@ import {
   getGeneratorTraceMeta,
   wrapGeneratorWithExistingTracePath,
 } from "../tracing/metadata";
+import { HyperDBError } from "../core/errors";
 
 export type ChildMemoEntry = {
   selectRangeCmds: SelectRangeCmd[];
@@ -210,6 +218,274 @@ function* runMutationCommand(
   }
 }
 
+type CommandContext = {
+  // The DB the runner was started with; nested selectors restart from it.
+  db: HyperDB;
+  // `db` scoped with the active trace contexts; commands run through it.
+  scopedDB: HyperDB;
+  options: CommandRunnerOptions;
+  tracer: HyperDBTracer | undefined;
+  traceContext: TraceContext | undefined;
+  traceFrame: TraceFrame | undefined;
+};
+
+// Runs one command and returns the value to resume the handler with.
+type CommandHandler<TCmd> = (
+  cmd: TCmd,
+  ctx: CommandContext,
+) => Generator<DBCmd, unknown, unknown>;
+
+function* runSelectRange(
+  cmd: SelectRangeCmd,
+  { scopedDB, options, tracer, traceContext, traceFrame }: CommandContext,
+): Generator<DBCmd, unknown, unknown> {
+  const { table, index, selectQuery } = cmd;
+
+  options.selectRangeCmds?.push(cmd);
+  const selectEvent =
+    traceContext && tracer && traceFrame
+      ? tracer.beginSelectEvent(traceContext, traceFrame, {
+          tableName: table.tableName,
+          index,
+          where: selectQuery.where,
+          bounds: cmd.bounds,
+          limit: selectQuery.limit,
+          order: selectQuery.order,
+        })
+      : undefined;
+
+  try {
+    const selectDB = selectEvent
+      ? withCurrentSelectEventTrait(scopedDB, selectEvent)
+      : scopedDB;
+    const rows = yield* selectDB.intervalScan(table, index, selectQuery.where, {
+      limit: selectQuery.limit,
+      order: selectQuery.order,
+    });
+    if (traceContext && tracer && selectEvent) {
+      tracer.endSelectEventSuccess(traceContext, selectEvent, rows);
+    }
+    return rows;
+  } catch (error) {
+    if (traceContext && tracer && selectEvent) {
+      tracer.endSelectEventError(traceContext, selectEvent, error);
+    }
+    throw error;
+  }
+}
+
+function* runSelector(
+  cmd: RunSelectorCmd,
+  { db, options, tracer, traceContext, traceFrame }: CommandContext,
+): Generator<DBCmd, unknown, unknown> {
+  const memoizesSelf = cmd.memoization?.selfChild === true;
+  const argsKey =
+    options.childMemo !== undefined && memoizesSelf
+      ? argsKeyOf(cmd.args)
+      : undefined;
+  if (db.getOptions?.().freezeArgs) {
+    deepFreeze(cmd.args);
+  }
+  if (argsKey != null) {
+    recordVisited(options.visited, cmd.selector, argsKey);
+  }
+  const memo =
+    argsKey != null
+      ? options.childMemo?.get(cmd.selector)?.get(argsKey)
+      : undefined;
+
+  const canSkip =
+    memo !== undefined &&
+    options.ops !== undefined &&
+    !isNeedToRerunRange(memo.selectRangeCmds, options.ops);
+
+  if (canSkip) {
+    // Keep the root subscription covering this child's ranges even though
+    // we did not rescan them this run. The entry (and its whole nested
+    // childMemo) is preserved untouched.
+    options.selectRangeCmds?.push(...memo.selectRangeCmds);
+    if (
+      traceContext &&
+      tracer &&
+      traceFrame &&
+      !options.skipChildTrace &&
+      !cmd.skipTrace?.childTrace
+    ) {
+      tracer.markTraceFrameCached(traceContext, traceFrame);
+    }
+    return memo.result;
+  }
+
+  const childRanges: SelectRangeCmd[] = [];
+  // Reuse this node's existing nested memo across reruns so that, even
+  // when the node itself recomputes, its unaffected descendants stay
+  // cached. Non-serializable nodes can't be persisted, so their subtree
+  // memo is a throwaway scope (ephemeral, recomputed each run).
+  const scopedMemo: ChildMemo | undefined =
+    options.childMemo === undefined
+      ? undefined
+      : memoizesSelf
+        ? argsKey != null
+          ? (memo?.childMemo ?? new Map())
+          : new Map()
+        : options.childMemo;
+  const scopedVisited: ChildVisited | undefined = options.visited
+    ? memoizesSelf
+      ? new Map()
+      : options.visited
+    : undefined;
+  // Re-wrap the freshly created body with the current trace path so its
+  // scans stay under any active callback/action/selector frames.
+  const selectorPath =
+    traceContext && tracer && traceFrame
+      ? [...traceContext.frameMetas]
+      : undefined;
+  const body = selectorPath
+    ? wrapGeneratorWithExistingTracePath(cmd.makeBody(), selectorPath)
+    : cmd.makeBody();
+
+  let value: unknown;
+  try {
+    value = yield* runCommandGenerator(db, body, {
+      ...options,
+      // Selectors stay read-only even when an action runs them.
+      allowWrites: false,
+      selectRangeCmds: childRanges,
+      childMemo: scopedMemo,
+      visited: scopedVisited,
+      traceContext,
+      skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
+      skipChildTrace: options.skipChildTrace || cmd.skipTrace?.childTrace,
+    });
+  } catch (error) {
+    // A parent may catch this failure and return a fallback, which still
+    // depends on what the child read, so keep those ranges subscribed.
+    options.selectRangeCmds?.push(...childRanges);
+    // The previous successful result no longer reflects this child.
+    if (argsKey != null) options.childMemo?.get(cmd.selector)?.delete(argsKey);
+    throw error;
+  }
+
+  if (argsKey != null) {
+    // Drop descendants not referenced by this body run (conditional
+    // branches / changed args), keeping the rest cached.
+    if (scopedVisited && scopedMemo) {
+      pruneChildMemo(scopedMemo, scopedVisited);
+    }
+    storeChildEntry(options.childMemo, cmd.selector, argsKey, {
+      selectRangeCmds: childRanges,
+      result: value,
+      childMemo: scopedMemo ?? new Map(),
+    });
+  }
+  // Bubble child ranges up so the root subscription reruns on changes
+  // to the child's data.
+  options.selectRangeCmds?.push(...childRanges);
+  return value;
+}
+
+const assertWritesAllowed = (
+  kind: "insert" | "upsert" | "delete",
+  { options }: CommandContext,
+) => {
+  if (!options.allowWrites) {
+    throw new HyperDBError(
+      "WRITES_DISALLOWED",
+      `Writes are disallowed for command: ${kind}`,
+    );
+  }
+};
+
+const runInsert: CommandHandler<InsertActionCmd> = (cmd, ctx) => {
+  assertWritesAllowed("insert", ctx);
+  const { scopedDB } = ctx;
+  return runMutationCommand(
+    scopedDB,
+    ctx.tracer,
+    ctx.traceContext,
+    ctx.traceFrame,
+    {
+      kind: "insert",
+      tableName: cmd.table.tableName,
+      rows: cmd.values,
+      run: () => scopedDB.insert(cmd.table, cmd.values),
+    },
+  );
+};
+
+const runUpsert: CommandHandler<UpsertActionCmd> = (cmd, ctx) => {
+  assertWritesAllowed("upsert", ctx);
+  const { scopedDB } = ctx;
+  return runMutationCommand(
+    scopedDB,
+    ctx.tracer,
+    ctx.traceContext,
+    ctx.traceFrame,
+    {
+      kind: "upsert",
+      tableName: cmd.table.tableName,
+      rows: cmd.values,
+      run: () => scopedDB.upsert(cmd.table, cmd.values),
+    },
+  );
+};
+
+const runDelete: CommandHandler<DeleteActionCmd> = (cmd, ctx) => {
+  assertWritesAllowed("delete", ctx);
+  const { scopedDB } = ctx;
+  return runMutationCommand(
+    scopedDB,
+    ctx.tracer,
+    ctx.traceContext,
+    ctx.traceFrame,
+    {
+      kind: "delete",
+      tableName: cmd.table.tableName,
+      ids: cmd.values,
+      run: () => scopedDB.delete(cmd.table, cmd.values),
+    },
+  );
+};
+
+const runWithTraits: CommandHandler<RunWithTraitsCmd> = (
+  cmd,
+  { scopedDB, options, traceContext },
+) =>
+  runCommandGenerator(scopedDB.withTraits(...cmd.traits), cmd.body, {
+    ...options,
+    traceContext,
+  });
+
+function* getCurrentTraits(
+  _cmd: GetCurrentTraitsCmd,
+  { scopedDB }: CommandContext,
+): Generator<DBCmd, unknown, unknown> {
+  return withoutInternalTraits(scopedDB.getTraits());
+}
+
+// Storage-level commands (async unwrap, noop) go up to the executor.
+function* forwardToExecutor(cmd: DBCmd): Generator<DBCmd, unknown, unknown> {
+  return yield cmd;
+}
+
+const resolveCommandHandler = (
+  cmd: unknown,
+): ((ctx: CommandContext) => Generator<DBCmd, unknown, unknown>) => {
+  if (isSelectRangeCmd(cmd)) return (ctx) => runSelectRange(cmd, ctx);
+  if (isRunSelectorCmd(cmd)) return (ctx) => runSelector(cmd, ctx);
+  if (isInsertActionCmd(cmd)) return (ctx) => runInsert(cmd, ctx);
+  if (isUpsertActionCmd(cmd)) return (ctx) => runUpsert(cmd, ctx);
+  if (isDeleteActionCmd(cmd)) return (ctx) => runDelete(cmd, ctx);
+  if (isRunWithTraitsCmd(cmd)) return (ctx) => runWithTraits(cmd, ctx);
+  if (isGetCurrentTraitsCmd(cmd)) return (ctx) => getCurrentTraits(cmd, ctx);
+  if (isDBCmd(cmd)) return () => forwardToExecutor(cmd);
+
+  throw new HyperDBError(
+    "UNSUPPORTED_COMMAND",
+    `Unsupported command: ${describeUnsupportedCommand(cmd)}`,
+  );
+};
+
 export function* runCommandGenerator<TReturn>(
   db: HyperDB,
   gen: Generator<unknown, TReturn, unknown>,
@@ -246,216 +522,24 @@ export function* runCommandGenerator<TReturn>(
             options.skipChildTrace ? undefined : getCommandFramePath(cmd),
           )
         : undefined;
-
-      if (isSelectRangeCmd(cmd)) {
-        const { table, index, selectQuery } = cmd;
-
-        options.selectRangeCmds?.push(cmd);
-        const selectEvent =
-          traceContext && tracer && traceFrame
-            ? tracer.beginSelectEvent(traceContext, traceFrame, {
-                tableName: table.tableName,
-                index,
-                where: selectQuery.where,
-                bounds: cmd.bounds,
-                limit: selectQuery.limit,
-                order: selectQuery.order,
-              })
-            : undefined;
-
-        try {
-          const selectDB = selectEvent
-            ? withCurrentSelectEventTrait(scopedDB, selectEvent)
-            : scopedDB;
-          const rows = yield* selectDB.intervalScan(
-            table,
-            index,
-            selectQuery.where,
-            {
-              limit: selectQuery.limit,
-              order: selectQuery.order,
-            },
-          );
-          if (traceContext && tracer && selectEvent) {
-            tracer.endSelectEventSuccess(traceContext, selectEvent, rows);
-          }
-          result = gen.next(rows);
-        } catch (error) {
-          if (traceContext && tracer && selectEvent) {
-            tracer.endSelectEventError(traceContext, selectEvent, error);
-          }
-          throw error;
-        }
-      } else if (isRunSelectorCmd(cmd)) {
-        const memoizesSelf = cmd.memoization?.selfChild === true;
-        const argsKey =
-          options.childMemo !== undefined && memoizesSelf
-            ? argsKeyOf(cmd.args)
-            : undefined;
-        if (db.getOptions?.().freezeArgs) {
-          deepFreeze(cmd.args);
-        }
-        if (argsKey != null) {
-          recordVisited(options.visited, cmd.selector, argsKey);
-        }
-        const memo =
-          argsKey != null
-            ? options.childMemo?.get(cmd.selector)?.get(argsKey)
-            : undefined;
-
-        const canSkip =
-          memo !== undefined &&
-          options.ops !== undefined &&
-          !isNeedToRerunRange(memo.selectRangeCmds, options.ops);
-
-        if (canSkip) {
-          // Keep the root subscription covering this child's ranges even though
-          // we did not rescan them this run. The entry (and its whole nested
-          // childMemo) is preserved untouched.
-          options.selectRangeCmds?.push(...memo.selectRangeCmds);
-          if (
-            traceContext &&
-            tracer &&
-            traceFrame &&
-            !options.skipChildTrace &&
-            !cmd.skipTrace?.childTrace
-          ) {
-            tracer.markTraceFrameCached(traceContext, traceFrame);
-          }
-          result = gen.next(memo.result);
-        } else {
-          const childRanges: SelectRangeCmd[] = [];
-          // Reuse this node's existing nested memo across reruns so that, even
-          // when the node itself recomputes, its unaffected descendants stay
-          // cached. Non-serializable nodes can't be persisted, so their subtree
-          // memo is a throwaway scope (ephemeral, recomputed each run).
-          const scopedMemo: ChildMemo | undefined =
-            options.childMemo === undefined
-              ? undefined
-              : memoizesSelf
-                ? argsKey != null
-                  ? (memo?.childMemo ?? new Map())
-                  : new Map()
-                : options.childMemo;
-          const scopedVisited: ChildVisited | undefined = options.visited
-            ? memoizesSelf
-              ? new Map()
-              : options.visited
-            : undefined;
-          // Re-wrap the freshly created body with the current trace path so its
-          // scans stay under any active callback/action/selector frames.
-          const selectorPath =
-            traceContext && tracer && traceFrame
-              ? [...traceContext.frameMetas]
-              : undefined;
-          const body = selectorPath
-            ? wrapGeneratorWithExistingTracePath(cmd.makeBody(), selectorPath)
-            : cmd.makeBody();
-
-          const value = yield* runCommandGenerator(db, body, {
-            ...options,
-            selectRangeCmds: childRanges,
-            childMemo: scopedMemo,
-            visited: scopedVisited,
-            traceContext,
-            skipRootTrace: options.skipRootTrace || cmd.skipTrace?.rootTrace,
-            skipChildTrace: options.skipChildTrace || cmd.skipTrace?.childTrace,
-          });
-
-          if (argsKey != null) {
-            // Drop descendants not referenced by this body run (conditional
-            // branches / changed args), keeping the rest cached.
-            if (scopedVisited && scopedMemo) {
-              pruneChildMemo(scopedMemo, scopedVisited);
-            }
-            storeChildEntry(options.childMemo, cmd.selector, argsKey, {
-              selectRangeCmds: childRanges,
-              result: value,
-              childMemo: scopedMemo ?? new Map(),
-            });
-          }
-          // Bubble child ranges up so the root subscription reruns on changes
-          // to the child's data.
-          options.selectRangeCmds?.push(...childRanges);
-          result = gen.next(value);
-        }
-      } else if (isInsertActionCmd(cmd)) {
-        if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: insert");
-        }
-
-        result = gen.next(
-          yield* runMutationCommand(
-            scopedDB,
-            tracer,
-            traceContext,
-            traceFrame,
-            {
-              kind: "insert",
-              tableName: cmd.table.tableName,
-              rows: cmd.values,
-              run: () => scopedDB.insert(cmd.table, cmd.values),
-            },
-          ),
-        );
-      } else if (isUpsertActionCmd(cmd)) {
-        if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: upsert");
-        }
-
-        result = gen.next(
-          yield* runMutationCommand(
-            scopedDB,
-            tracer,
-            traceContext,
-            traceFrame,
-            {
-              kind: "upsert",
-              tableName: cmd.table.tableName,
-              rows: cmd.values,
-              run: () => scopedDB.upsert(cmd.table, cmd.values),
-            },
-          ),
-        );
-      } else if (isDeleteActionCmd(cmd)) {
-        if (!options.allowWrites) {
-          throw new Error("Writes are disallowed for command: delete");
-        }
-
-        result = gen.next(
-          yield* runMutationCommand(
-            scopedDB,
-            tracer,
-            traceContext,
-            traceFrame,
-            {
-              kind: "delete",
-              tableName: cmd.table.tableName,
-              ids: cmd.values,
-              run: () => scopedDB.delete(cmd.table, cmd.values),
-            },
-          ),
-        );
-      } else if (isRunWithTraitsCmd(cmd)) {
-        result = gen.next(
-          yield* runCommandGenerator(
-            scopedDB.withTraits(...cmd.traits),
-            cmd.body,
-            {
-              ...options,
-              traceContext,
-            },
-          ),
-        );
-      } else if (isGetCurrentTraitsCmd(cmd)) {
-        result = gen.next(scopedDB.getTraits());
-      } else if (isDBCmd(cmd)) {
-        result = gen.next(yield cmd);
-      } else {
-        throw new Error(
-          `Unsupported command: ${describeUnsupportedCommand(cmd)}`,
-        );
+      let value: unknown;
+      try {
+        const run = resolveCommandHandler(cmd);
+        value = yield* run({
+          db,
+          scopedDB,
+          options,
+          tracer,
+          traceContext,
+          traceFrame,
+        });
+      } catch (error) {
+        // Raise the failure at the handler's `yield*`, so its try/catch and
+        // finally blocks see it. An uncaught error still propagates below.
+        result = gen.throw(error);
+        continue;
       }
+      result = gen.next(value);
     }
 
     if (ownsTraceContext) {
@@ -467,8 +551,6 @@ export function* runCommandGenerator<TReturn>(
     if (ownsTraceContext) {
       tracer?.endTraceError(traceContext, error);
     }
-
-    console.error(error);
 
     throw error;
   }

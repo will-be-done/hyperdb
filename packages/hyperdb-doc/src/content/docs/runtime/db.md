@@ -234,9 +234,10 @@ the queued flush.
 If the retry limit is reached, the cache and primary store can no longer be
 trusted to agree, so HybridDB enters a permanent **crashed** state. Every
 subsequent read, write, or transaction, including cache-only reads, throws
-`HybridDBCrashedError` with the persistence error as its `cause`. Check
-`hybrid.isCrashed` to detect this; recover by constructing a fresh `HybridDB`
-and reloading tables or by reloading the browser.
+`HybridDBCrashedError` (code `HYBRID_DB_CRASHED`) with the persistence error as
+its `cause`. Check `hybrid.isCrashed` to detect this; recover by closing it,
+constructing a fresh `HybridDB`, and reloading tables, or by reloading the
+browser.
 
 ### Pending Flushes
 
@@ -351,19 +352,49 @@ and startup can afford one bulk read of each table. Use regular `HybridDB` when
 startup should touch only queried ranges, or a plain in-memory driver when all
 rows comfortably fit in memory and reads must remain synchronous.
 
+## Closing a runtime
+
+Every built-in runtime has a `close()` command. Close a database when it is no
+longer needed, such as at the end of a test, on logout, or when a server tenant
+is evicted:
+
+```ts
+await execAsync(db.close()); // or execSync(db.close()) for sync runtimes
+```
+
+`close()` is idempotent and does the following:
+
+- `HybridDB` and `PreloadedHybridDB` immediately refuse new transactions with
+  `DB_CLOSED`, then wait until every transaction already accepted has reached
+  background persistence and every flush has settled. A crashed runtime still
+  closes without rethrowing the crash. `PreloadedHybridDB` then releases its
+  preloaded rows and indexes.
+- The runtime then closes its wrapped databases and releases driver resources.
+  `IdbDriver` closes its IndexedDB connection; the in-memory driver drops its
+  data. SQLite handles you passed to `SqlDriver` or `AsyncSqlDriver` stay open,
+  because you own them.
+- `SubscribableDB` removes its subscribers and mutation hooks.
+- The `DB` is removed from devtools discovery.
+
+Afterwards every read, write, or transaction throws a `HyperDBError` with code
+`DB_CLOSED`, including cached selector reads. `db.isClosed` reports whether a
+runtime has started closing. If a driver fails to close, `close()` rejects and
+can be called again.
+
 ## Executing commands
 
 Selectors and actions are generators. The dispatch and select helpers run them
 for you, but you can also drive a generator directly:
 
-| Helper                                | Use                                            |
-| ------------------------------------- | ---------------------------------------------- |
-| `syncDispatch(db, action(args))`      | Run an action in a transaction (sync drivers)  |
-| `asyncDispatch(db, action(args))`     | Run an action in a transaction (async drivers) |
-| `selectSync(db, { selector, args })`  | Run a selector once (sync drivers)             |
-| `selectAsync(db, { selector, args })` | Run a selector once (async drivers)            |
-| `execSync(generator)`                 | Drive a raw DB-command generator (sync)        |
-| `execAsync(generator)`                | Drive a raw DB-command generator (async)       |
+| Helper                                 | Use                                             |
+| -------------------------------------- | ----------------------------------------------- |
+| `syncDispatch(db, action(args))`       | Run an action in a transaction (sync drivers)   |
+| `asyncDispatch(db, action(args))`      | Run an action in a transaction (async drivers)  |
+| `dispatchMaybeAsync(db, action(args))` | Run an action; sync result unless a step waited |
+| `selectSync(db, { selector, args })`   | Run a selector once (sync drivers)              |
+| `selectAsync(db, { selector, args })`  | Run a selector once (async drivers)             |
+| `execSync(generator)`                  | Drive a raw DB-command generator (sync)         |
+| `execAsync(generator)`                 | Drive a raw DB-command generator (async)        |
 
 `execSync` throws if the generator yields an async command, which is how the
 sync/async split is enforced. Async drivers must go through `execAsync` /
@@ -394,3 +425,10 @@ const whoami = action({
 
 A typical use is tagging writes with their origin (e.g. "local edit" vs. "applied
 from sync") so an `afterChange` hook can decide whether to record them.
+
+`getCurrentTraits()`, mutation hooks, and `subscribe` callbacks receive only
+the traits you and plugins attached, such as undo's replay and skip traits.
+HyperDB's own tracing context is not included, so code can compare or count
+traits safely. A hook that needs the active trace can call
+`getTraceContextForDB(db)` from `@will-be-done/hyperdb/tracing` on the DB it
+receives.

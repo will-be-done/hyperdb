@@ -21,7 +21,7 @@
     "lint:cycles": "pnpm --filter '@will-be-done/hyperdb' lint:cycles && pnpm --filter '@will-be-done/hyperdb-devtool' lint:cycles",
     "release": "pnpm --filter '@will-be-done/hyperdb' build && pnpm --filter '@will-be-done/hyperdb-devtool' build && changeset publish",
     "test": "pnpm --filter '@will-be-done/hyperdb' test && pnpm --filter '@will-be-done/hyperdb-devtool' test",
-    "ts": "pnpm --filter '@will-be-done/hyperdb' ts && pnpm --filter '@will-be-done/hyperdb-devtool' ts",
+    "ts": "pnpm --filter '@will-be-done/hyperdb' ts && pnpm --filter '@will-be-done/hyperdb-devtool' ts && pnpm --filter '@will-be-done/hyperdb-demo-app' ts",
     "version-packages": "changeset version"
   },
   "devDependencies": {

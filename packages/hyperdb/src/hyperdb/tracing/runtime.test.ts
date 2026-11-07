@@ -18,7 +18,8 @@ import {
 } from "../commands/action/builders";
 import { selectFrom } from "../commands/selector/builder";
 import { createSelector, selectSync } from "../commands/selector/selector";
-import { getTraceContextFromTraits } from "./context";
+import { getTraceContextForDB } from "./context";
+import type { Trait } from "../core/primitives";
 import {
   hyperDBTraceStore,
   traceRootsRuntimeTable,
@@ -35,7 +36,11 @@ type Task = {
 };
 
 class FakeAsyncDriverTx implements DBDriverTX {
-  constructor(private readonly tx: DBDriverTX) {}
+  private readonly tx: DBDriverTX;
+
+  constructor(tx: DBDriverTX) {
+    this.tx = tx;
+  }
 
   *commit() {
     yield* unwrap(Promise.resolve());
@@ -325,6 +330,31 @@ describe("devtool runtime tracing", () => {
       { col: "projectId", val: "project-1" },
     ]);
     expect(trace.commandEvents[0]?.bounds.length).toBeGreaterThan(0);
+  });
+
+  it("does not blame a select for an error the handler throws after it", () => {
+    const db = createDB();
+    execSync(db.insert(tasksTable, [task()]));
+    const failAfterRead = action({
+      name: "failAfterRead",
+      args: {},
+      handler: function* failAfterRead() {
+        yield* selectFrom(tasksTable, "projectState").where((q) =>
+          q.eq("projectId", "project-1"),
+        );
+        throw new Error("handler failed");
+      },
+    });
+
+    expect(() => syncDispatch(db, failAfterRead({}))).toThrow("handler failed");
+    hyperDBTraceStore.flushTraceCommits();
+    const trace = selectCommittedTraces()[0]!;
+
+    expect(trace.status).toBe("error");
+    expect(trace.commandEvents[0]).toMatchObject({
+      resultCount: 1,
+      status: "success",
+    });
   });
 
   it("records traces before the devtool opens when selector trace is enabled", async () => {
@@ -821,14 +851,19 @@ describe("devtool runtime tracing", () => {
     });
   });
 
-  it("passes the trace context through traits", () => {
+  it("keeps the trace context out of user-visible traits", () => {
     const db = createDB();
-    const observedSubscriberTraces: (string | undefined)[] = [];
+    const observedHookTraits: Trait[][] = [];
+    const observedSubscriberTraits: Trait[][] = [];
+    const observedHookTraces: (string | undefined)[] = [];
 
-    db.afterChange(function* afterChange(_db, _table, traits) {
-      observedSubscriberTraces.push(
-        getTraceContextFromTraits(traits)?.trace.name,
-      );
+    db.afterChange(function* afterChange(hookDB, _table, traits) {
+      observedHookTraits.push(traits);
+      // Hooks can still reach the trace through the DB they receive.
+      observedHookTraces.push(getTraceContextForDB(hookDB)?.trace.name);
+    });
+    db.subscribe((_ops, traits) => {
+      observedSubscriberTraits.push(traits);
     });
 
     const readTraceTraitsAction = action({
@@ -837,15 +872,17 @@ describe("devtool runtime tracing", () => {
       handler: function* traceTraitsAction() {
         const traits = yield* getCurrentTraits();
         yield* insert(tasksTable, [task()]);
-
-        return getTraceContextFromTraits(traits)?.trace.name;
+        return traits;
       },
     });
 
-    expect(syncDispatch(db, readTraceTraitsAction({}))).toBe(
-      "traceTraitsAction",
-    );
-    expect(observedSubscriberTraces).toEqual(["traceTraitsAction"]);
+    const userTrait = { type: "user.remote-merge" };
+    expect(
+      syncDispatch(db.withTraits(userTrait), readTraceTraitsAction({})),
+    ).toEqual([userTrait]);
+    expect(observedHookTraits).toEqual([[userTrait]]);
+    expect(observedSubscriberTraits).toEqual([[userTrait]]);
+    expect(observedHookTraces).toEqual(["traceTraitsAction"]);
   });
 
   it("does not create extra roots for synchronous afterChange subscribers", async () => {

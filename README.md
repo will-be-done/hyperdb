@@ -325,6 +325,27 @@ failure can occur after the cache commit and history queues have moved.
 See [Undo & Redo](https://hyperdb.will-be-done.app/integrations/undo/) for callback
 exclusions outside actions, grouping rules, hooks, and conflict handling.
 
+## Typed selectors and actions
+
+Selector handlers are typed to yield only reads, so writing from a selector is
+a compile error, and the runtime rejects it too. Annotate reusable helpers with
+`SelectorGenerator<T>` for reads or `ActionGenerator<T>` for helpers that may
+write.
+
+## Errors and shutdown
+
+Runtime errors extend `HyperDBError` and carry a stable `code` such as
+`DUPLICATE_ID`, `VALIDATION`, `WRITES_DISALLOWED`, `HYBRID_DB_CRASHED`, or
+`DB_CLOSED`. Match on the code with `isHyperDBError(error, code)`. Mistakes in
+how tables, actions, or queries are defined (such as a blank action name or
+conflicting query conditions) throw a plain `Error`, for which `isHyperDBError`
+returns `false`. HyperDB does not log the errors it throws.
+
+Use `dispatchMaybeAsync(db, action(args))` when you want a synchronous result
+whenever no step had to wait. Close a runtime with `await execAsync(db.close())`:
+it flushes hybrid persistence, releases driver-owned resources, clears
+subscribers, and unregisters the DB from devtools.
+
 ## Entry points
 
 | Import path                              | Contents                                                                                                  |

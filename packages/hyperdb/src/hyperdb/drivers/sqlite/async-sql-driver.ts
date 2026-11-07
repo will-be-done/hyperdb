@@ -32,7 +32,11 @@ import {
   selectSqliteSchemaMetadataSQL,
   selectSqliteSchemaMetadataTableExistsSQL,
   upsertSqliteSchemaMetadataSQL,
-  isMissingSqliteSchemaMetadataError,
+  sqliteSchemaMetadataMatches,
+  sqliteWriteNeedsSavepoint,
+  SQLITE_WRITE_SAVEPOINT,
+  toSqliteSchemaMetadataReadError,
+  type SqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
   assertSafeTableDefinition,
   buildRowInsertParams,
@@ -41,6 +45,14 @@ import {
   type SqlValue,
 } from "./sqlite-common";
 import AwaitLock from "../../utils/await-lock";
+import { HyperDBError } from "../../core/errors";
+import {
+  err,
+  ok,
+  okAsync,
+  ResultAsync,
+  unwrapOrThrow,
+} from "../../utils/result";
 
 export interface AsyncSQLStatement {
   values(values: SqlValue[]): Promise<SqlValue[][]>;
@@ -183,6 +195,58 @@ async function rollbackAsyncQuietly(
   } catch (rollbackError) {
     console.warn("Failed to rollback SQLite transaction", rollbackError);
     // Best effort cleanup after a failed statement.
+  }
+}
+
+function* performAsyncTxWrite(
+  db: AsyncSQLiteDB,
+  kind: "insert" | "upsert" | "delete",
+  tableDef: TableDefinition,
+  count: number,
+  run: () => Generator<DBCmd, void>,
+  // Called when the savepoint cannot be rolled back or released, because part
+  // of the write may still be applied; the transaction must not commit.
+  poison: (error: unknown) => void,
+  debug?: AsyncSqlDriverDebug,
+): Generator<DBCmd, void> {
+  if (!sqliteWriteNeedsSavepoint(kind, tableDef, count)) {
+    yield* run();
+    return;
+  }
+
+  yield* unwrapCb(() =>
+    runAsyncSQL(db, `SAVEPOINT ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
+  );
+  try {
+    yield* run();
+  } catch (error) {
+    yield* unwrapCb(async () => {
+      try {
+        await runAsyncSQL(
+          db,
+          `ROLLBACK TO ${SQLITE_WRITE_SAVEPOINT}`,
+          undefined,
+          debug,
+        );
+        await runAsyncSQL(
+          db,
+          `RELEASE ${SQLITE_WRITE_SAVEPOINT}`,
+          undefined,
+          debug,
+        );
+      } catch {
+        poison(error);
+      }
+    });
+    throw error;
+  }
+  try {
+    yield* unwrapCb(() =>
+      runAsyncSQL(db, `RELEASE ${SQLITE_WRITE_SAVEPOINT}`, undefined, debug),
+    );
+  } catch (error) {
+    poison(error);
+    throw error;
   }
 }
 
@@ -390,6 +454,11 @@ class AsyncSqlDriverTx implements DBDriverTX {
   private onFinish: () => void;
   private queryLock = new AwaitLock();
   private debug: AsyncSqlDriverDebug | undefined;
+  // Set when a write's savepoint could not be cleaned up; commit refuses.
+  private poisonedBy: { error: unknown } | undefined;
+  private readonly poison = (error: unknown) => {
+    this.poisonedBy ??= { error };
+  };
 
   constructor(
     db: AsyncSQLiteDB,
@@ -405,9 +474,13 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
   *commit(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
+    if (this.poisonedBy) throw this.poisonedBy.error;
     yield* unwrapCb(async () => {
       await runAsyncSQL(this.db, "COMMIT", undefined, this.debug);
     });
@@ -418,7 +491,10 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
   *rollback(): Generator<DBCmd, void> {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
 
     yield* unwrapCb(async () => {
@@ -439,14 +515,30 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncInsertOperation(
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
+      yield* performAsyncTxWrite(
         this.db,
+        "insert",
         tableDef,
-        values as Row[],
+        values.length,
+        () =>
+          performAsyncInsertOperation(
+            this.db,
+            tableDef,
+            values as Row[],
+            this.debug,
+          ),
+        this.poison,
         this.debug,
       );
     } finally {
@@ -461,11 +553,27 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncUpsertOperation(this.db, tableDef, values, this.debug);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
+      yield* performAsyncTxWrite(
+        this.db,
+        "upsert",
+        tableDef,
+        values.length,
+        () =>
+          performAsyncUpsertOperation(this.db, tableDef, values, this.debug),
+        this.poison,
+        this.debug,
+      );
     } finally {
       this.queryLock.release();
     }
@@ -478,11 +586,27 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
       const tableDef = this.tableDefinitions.get(tableName);
-      if (!tableDef) throw new Error(`Table ${tableName} not found`);
-      yield* performAsyncDeleteOperation(this.db, tableDef, values, this.debug);
+      if (!tableDef)
+        throw new HyperDBError(
+          "TABLE_NOT_FOUND",
+          `Table ${tableName} not found`,
+        );
+      yield* performAsyncTxWrite(
+        this.db,
+        "delete",
+        tableDef,
+        values.length,
+        () =>
+          performAsyncDeleteOperation(this.db, tableDef, values, this.debug),
+        this.poison,
+        this.debug,
+      );
     } finally {
       this.queryLock.release();
     }
@@ -500,7 +624,10 @@ class AsyncSqlDriverTx implements DBDriverTX {
 
     try {
       if (this.committed || this.rolledback) {
-        throw new Error("Transaction already finished");
+        throw new HyperDBError(
+          "TRANSACTION_FINISHED",
+          "Transaction already finished",
+        );
       }
 
       return yield* performAsyncScanOperation(
@@ -810,53 +937,56 @@ export class AsyncSqlDriver implements DBDriver {
   ): Promise<boolean> {
     const sql = selectSqliteSchemaMetadataSQL(tableDefinitions.length);
     const startedAt = this.debug ? nowMs() : 0;
-    let statement: AsyncSQLStatement | undefined;
+    const result = await ResultAsync.fromPromise(
+      this.readSchemaMetadata(sql, tableDefinitions),
+      toSqliteSchemaMetadataReadError,
+    )
+      .map((rows) => {
+        emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
+          rowCount: rows.length,
+        }));
+        return sqliteSchemaMetadataMatches(tableDefinitions, rows);
+      })
+      .orElse((error) => this.recoverSchemaMetadataRead(error));
 
+    if (result.isErr()) {
+      emitAsyncSqlDebug(
+        this.debug,
+        "scan",
+        sql,
+        startedAt,
+        () => ({}),
+        result.error,
+      );
+    }
+    return unwrapOrThrow(result);
+  }
+
+  private async readSchemaMetadata(
+    sql: string,
+    tableDefinitions: TableDefinition<any>[],
+  ): Promise<SqlValue[][]> {
+    const statement = await this.db.prepare(sql);
     try {
-      statement = await this.db.prepare(sql);
-      const rows = await statement.values(
+      return await statement.values(
         tableDefinitions.map((tableDef) => tableDef.tableName),
       );
-      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({
-        rowCount: rows.length,
-      }));
-
-      const schemaVersion = Number(rows[0]?.[3]);
-      if (!Number.isInteger(schemaVersion)) return false;
-      const metadataByTable = new Map(
-        rows
-          .filter((row) => typeof row[0] === "string")
-          .map((row) => [
-            String(row[0]),
-            {
-              signature: String(row[1]),
-              verifiedSchemaVersion: Number(row[2]),
-            },
-          ]),
-      );
-
-      return tableDefinitions.every((tableDef) => {
-        const metadata = metadataByTable.get(tableDef.tableName);
-        return (
-          metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
-          metadata.verifiedSchemaVersion === schemaVersion
-        );
-      });
-    } catch (error) {
-      if (isMissingSqliteSchemaMetadataError(error)) return false;
-      await statement?.finalize();
-      statement = undefined;
-      try {
-        if (!(await this.schemaMetadataTableExists())) return false;
-      } catch {
-        // Preserve the original metadata-read error when even the fallback
-        // schema inspection cannot run.
-      }
-      emitAsyncSqlDebug(this.debug, "scan", sql, startedAt, () => ({}), error);
-      throw error;
     } finally {
-      await statement?.finalize();
+      await statement.finalize();
     }
+  }
+
+  // A metadata table that does not exist yet means the schema must be
+  // reconciled. Any other read failure is rethrown.
+  private recoverSchemaMetadataRead(
+    error: SqliteSchemaMetadataReadError,
+  ): ResultAsync<boolean, unknown> {
+    if (error.kind === "missing") return okAsync(false);
+    // Preserve the original metadata-read error when even the fallback
+    // schema inspection cannot run.
+    return ResultAsync.fromSafePromise(
+      this.schemaMetadataTableExists().catch(() => true),
+    ).andThen((exists) => (exists ? err(error.cause) : ok(false)));
   }
 
   private async schemaMetadataTableExists(): Promise<boolean> {
@@ -1201,7 +1331,8 @@ export class AsyncSqlDriver implements DBDriver {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 }

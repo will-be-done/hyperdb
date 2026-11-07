@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { ActionGenerator } from "../commands/command-types";
 import type {
   HyperDB,
   HyperDBTx,
@@ -24,11 +25,13 @@ import type {
 import {
   createTraceFrameMeta,
   getTraceContextForDB,
+  withoutInternalTraits,
   type HyperDBTracerOption,
   type TraceContext,
 } from "../core/tracer";
 import { wrapGeneratorWithExistingTracePath } from "../tracing/metadata";
 import { refVar, type RefVar } from "../utils";
+import { HyperDBError } from "../core/errors";
 
 export type { InsertOp, UpsertOp, DeleteOp, Op } from "./ops";
 
@@ -56,28 +59,28 @@ type AfterInsertSub = (
   table: TableDefinition,
   traits: Trait[],
   ops: InsertOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterUpsertSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: UpsertOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterDeleteSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: DeleteOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterChangeSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: Op[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 export type AfterScanCallback = (
   db: HyperDB,
@@ -86,7 +89,7 @@ export type AfterScanCallback = (
   clauses: WhereClause[],
   selectOptions: SelectOptions | undefined,
   results: Row[],
-) => Generator<unknown, unknown, unknown>;
+) => ActionGenerator<unknown>;
 
 const wrapAfterScanCallbackGenerator = (
   cb: AfterScanCallback,
@@ -166,6 +169,8 @@ type SubscribableDBTxState = {
   committed: RefVar<boolean>;
   rollbacked: RefVar<boolean>;
   txCounter: RefVar<number>;
+  // First error from a hook that ran after its write was applied.
+  hookFailure?: { error: unknown };
 };
 
 const createSubscribableDBTxState = (): SubscribableDBTxState => ({
@@ -183,6 +188,8 @@ type SubscribableDBState = {
   afterChangeSubscribers: AfterChangeSub[];
   afterScanSubscribers: AfterScanCallback[];
   revision: RefVar<number>;
+  closed: boolean;
+  closeCallbacks: (() => void)[];
 };
 
 const createSubscribableDBState = (): SubscribableDBState => ({
@@ -193,6 +200,8 @@ const createSubscribableDBState = (): SubscribableDBState => ({
   afterChangeSubscribers: [],
   afterScanSubscribers: [],
   revision: refVar(0),
+  closed: false,
+  closeCallbacks: [],
 });
 
 export class SubscribableDBTx implements HyperDBTx {
@@ -265,7 +274,7 @@ export class SubscribableDBTx implements HyperDBTx {
       : this.txDb;
   }
 
-  withTraits(...traits: Trait[]): HyperDBTx {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDBTx {
     return new SubscribableDBTx(this.subDb, this.txDb, this.state, [
       ...this.traits,
       ...traits,
@@ -298,15 +307,21 @@ export class SubscribableDBTx implements HyperDBTx {
       selectOptions,
     );
 
-    yield* runAfterScanSubscribers(
-      this,
-      this.subDb.afterScanSubscribers,
-      table,
-      String(indexName),
-      clauses,
-      selectOptions,
-      results as Row[],
-    );
+    try {
+      yield* runAfterScanSubscribers(
+        this,
+        this.subDb.afterScanSubscribers,
+        table,
+        String(indexName),
+        clauses,
+        selectOptions,
+        results as Row[],
+      );
+    } catch (error) {
+      // afterScan hooks may write; their partial writes must not commit.
+      this.state.hookFailure ??= { error };
+      throw error;
+    }
 
     return results;
   }
@@ -361,20 +376,18 @@ export class SubscribableDBTx implements HyperDBTx {
       });
     }
 
-    for (const cb of this.subDb.afterInsertSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), insertOps),
-        { allowWrites: true, traceContext },
-      );
-    }
-    for (const cb of this.subDb.afterChangeSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), insertOps),
-        { allowWrites: true, traceContext },
-      );
-    }
+    yield* this.runMutationHooks(
+      this.subDb.afterInsertSubscribers,
+      table,
+      insertOps,
+      traceContext,
+    );
+    yield* this.runMutationHooks(
+      this.subDb.afterChangeSubscribers,
+      table,
+      insertOps,
+      traceContext,
+    );
   }
 
   *upsert<TTable extends TableDefinition<any>>(
@@ -461,20 +474,18 @@ export class SubscribableDBTx implements HyperDBTx {
       });
     }
 
-    for (const cb of this.subDb.afterUpsertSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), upsertOps),
-        { allowWrites: true, traceContext },
-      );
-    }
-    for (const cb of this.subDb.afterChangeSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), upsertOps),
-        { allowWrites: true, traceContext },
-      );
-    }
+    yield* this.runMutationHooks(
+      this.subDb.afterUpsertSubscribers,
+      table,
+      upsertOps,
+      traceContext,
+    );
+    yield* this.runMutationHooks(
+      this.subDb.afterChangeSubscribers,
+      table,
+      upsertOps,
+      traceContext,
+    );
   }
 
   *delete<TTable extends TableDefinition<any>>(
@@ -527,19 +538,45 @@ export class SubscribableDBTx implements HyperDBTx {
       });
     }
 
-    for (const cb of this.subDb.afterDeleteSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), deleteOps),
-        { allowWrites: true, traceContext },
-      );
-    }
-    for (const cb of this.subDb.afterChangeSubscribers) {
-      yield* runCommandGenerator(
-        this,
-        cb(this, table, this.getTraits(), deleteOps),
-        { allowWrites: true, traceContext },
-      );
+    yield* this.runMutationHooks(
+      this.subDb.afterDeleteSubscribers,
+      table,
+      deleteOps,
+      traceContext,
+    );
+    yield* this.runMutationHooks(
+      this.subDb.afterChangeSubscribers,
+      table,
+      deleteOps,
+      traceContext,
+    );
+  }
+
+  // Hooks run after their write is applied. If one fails, the transaction can
+  // no longer commit, so a handler that catches the error cannot publish the
+  // write without the hook's own changes.
+  private *runMutationHooks<TOp extends Op>(
+    hooks: ((
+      db: HyperDB,
+      table: TableDefinition,
+      traits: Trait[],
+      ops: TOp[],
+    ) => ActionGenerator<void>)[],
+    table: TableDefinition,
+    ops: TOp[],
+    traceContext: TraceContext | undefined,
+  ): Generator<DBCmd, void> {
+    try {
+      for (const cb of hooks) {
+        yield* runCommandGenerator(
+          this,
+          cb(this, table, withoutInternalTraits(this.getTraits()), ops),
+          { allowWrites: true, traceContext },
+        );
+      }
+    } catch (error) {
+      this.state.hookFailure ??= { error };
+      throw error;
     }
   }
 
@@ -551,6 +588,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
   *commit(): Generator<DBCmd, void> {
     this.throwIfDone();
+    if (this.state.hookFailure) throw this.state.hookFailure.error;
     this.state.txCounter.val--;
     if (this.state.txCounter.val !== 0) return;
 
@@ -559,7 +597,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
     // if (this.operations.length === 0) return;
 
-    const traits = this.getTraits();
+    const traits = withoutInternalTraits(this.getTraits());
     const revision = this.subDb.incrementRevision();
     notifySubscribers(
       this.subDb.subscribers,
@@ -571,11 +609,17 @@ export class SubscribableDBTx implements HyperDBTx {
 
   throwIfDone() {
     if (this.state.committed.val) {
-      throw new Error("Cannot modify a committed tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a committed tx",
+      );
     }
 
     if (this.state.rollbacked.val) {
-      throw new Error("Cannot modify a rollbacked tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a rollbacked tx",
+      );
     }
   }
 }
@@ -656,11 +700,46 @@ export class SubscribableDB implements HyperDB {
     if (db.waitForPersistence) yield* db.waitForPersistence();
   }
 
+  getCacheDB(): HyperDB | undefined {
+    return this.db.getCacheDB?.();
+  }
+
+  get isClosed(): boolean {
+    return this.state.closed || this.db.isClosed === true;
+  }
+
+  /** @internal Runs once when this DB closes, e.g. to release derived caches. */
+  onClose(cb: () => void): void {
+    this.state.closeCallbacks.push(cb);
+  }
+
+  /** @internal Drops subscribers and hooks without closing the wrapped DB. */
+  clearSubscriptions(): void {
+    const { state } = this;
+    state.subscribers.length = 0;
+    state.afterInsertSubscribers.length = 0;
+    state.afterUpsertSubscribers.length = 0;
+    state.afterDeleteSubscribers.length = 0;
+    state.afterChangeSubscribers.length = 0;
+    state.afterScanSubscribers.length = 0;
+  }
+
+  *close(): Generator<DBCmd, void> {
+    try {
+      if (this.db.close) yield* this.db.close();
+      this.state.closed = true;
+    } finally {
+      // Release listeners even if the wrapped DB failed to close.
+      this.clearSubscriptions();
+      for (const cb of this.state.closeCallbacks.splice(0)) cb();
+    }
+  }
+
   canUseReadonlyTransactionsForSelectors(): boolean {
     return this.delegateDB().canUseReadonlyTransactionsForSelectors();
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = new SubscribableDB(this.db);
     db.state = this.state;
     db.traits = [...this.traits, ...traits];

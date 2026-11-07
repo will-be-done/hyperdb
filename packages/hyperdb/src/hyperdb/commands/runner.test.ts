@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { commandBrand } from "./brand";
 import { DB, execSync } from "../db";
 import { SubscribableDB } from "../runtime/subscribable-db";
 import { BptreeInmemDriver } from "../drivers/inmemory/bptree-inmem-driver";
@@ -148,6 +149,7 @@ describe("runCommandGenerator nested selector memo", () => {
     const makeRoot = () =>
       (function* root() {
         return (yield {
+          [commandBrand]: true,
           type: "runSelector",
           selector: manualSelector,
           args,
@@ -160,6 +162,7 @@ describe("runCommandGenerator nested selector memo", () => {
     const makeMemoizedRoot = () =>
       (function* root() {
         return (yield {
+          [commandBrand]: true,
           type: "runSelector",
           selector: manualSelector,
           args,
@@ -274,5 +277,18 @@ describe("runCommandGenerator nested selector memo", () => {
     // Result is the memoized value; nothing recomputed.
     expect(result).toEqual({ a: 11, b: 11 });
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe("runCommandGenerator command dispatch", () => {
+  test("rejects look-alike write commands that lack the brand", () => {
+    const db = makeDb();
+    function* forged() {
+      yield { type: "insert", table: {}, values: [{ id: "x" }] };
+    }
+
+    expect(() =>
+      execSync(runCommandGenerator(db, forged(), { allowWrites: true })),
+    ).toThrow(expect.objectContaining({ code: "UNSUPPORTED_COMMAND" }));
   });
 });

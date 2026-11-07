@@ -7,12 +7,15 @@ import type {
 } from "../../schema/table";
 import type { Value } from "../../core/primitives";
 import { convertWhereToBound } from "../../core/query/bounds";
-import type {
-  QueryOrder,
-  QueryWhereClause,
-  SelectQuery,
-  SelectRangeCmd,
+import {
+  selectRangeType,
+  type QueryOrder,
+  type QueryWhereClause,
+  type SelectQuery,
+  type SelectRangeCmd,
 } from "./commands";
+import { commandBrand } from "../brand";
+import { HyperDBError } from "../../core/errors";
 
 export type ExtractIndexName<TTable> = Extract<
   keyof ExtractIndexes<TTable>,
@@ -47,13 +50,15 @@ const createSelectRangeCmd = <QType extends SelectQuery>(
   const indexName = query.index;
   const indexDef = table.indexes[indexName];
   if (!indexDef) {
-    throw new Error(
+    throw new HyperDBError(
+      "INDEX_NOT_FOUND",
       `Index not found: ${indexName as string} for table: ${table.tableName}`,
     );
   }
 
   return {
-    type: "selectRange",
+    [commandBrand]: true,
+    type: selectRangeType,
     table,
     index: indexName as string,
     selectQuery: query,
@@ -66,7 +71,7 @@ function* selectFirst<
   TIndexName extends ExtractIndexName<TTable>,
 >(
   query: SelectQuery<TTable, TIndexName>,
-): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+): Generator<SelectRangeCmd, ExtractSchema<TTable> | undefined, unknown> {
   const results = (yield createSelectRangeCmd({
     ...query,
     limit: 1,
@@ -82,7 +87,7 @@ function* selectFirstOr<
 >(
   query: SelectQuery<TTable, TIndexName>,
   otherValue: TOtherValue,
-): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
   const result = yield* selectFirst(query);
   return result === undefined ? otherValue : result;
 }
@@ -253,19 +258,27 @@ class SelectQueryBuilder<
     };
   }
 
-  *[Symbol.iterator](): Generator<unknown, ExtractSchema<TTable>[], unknown> {
+  *[Symbol.iterator](): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable>[],
+    unknown
+  > {
     return (yield createSelectRangeCmd(
       this.toQuery(),
     )) as ExtractSchema<TTable>[];
   }
 
-  first(): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+  first(): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable> | undefined,
+    unknown
+  > {
     return selectFirst(this.toQuery());
   }
 
   firstOr<TOtherValue>(
     otherValue: TOtherValue,
-  ): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+  ): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
     return selectFirstOr(this.toQuery(), otherValue);
   }
 }
@@ -324,19 +337,27 @@ class SelectQueryBuilderWithWhere<
     };
   }
 
-  *[Symbol.iterator](): Generator<unknown, ExtractSchema<TTable>[], unknown> {
+  *[Symbol.iterator](): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable>[],
+    unknown
+  > {
     return (yield createSelectRangeCmd(
       this.toQuery(),
     )) as ExtractSchema<TTable>[];
   }
 
-  first(): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+  first(): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable> | undefined,
+    unknown
+  > {
     return selectFirst(this.toQuery());
   }
 
   firstOr<TOtherValue>(
     otherValue: TOtherValue,
-  ): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+  ): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
     return selectFirstOr(this.toQuery(), otherValue);
   }
 }

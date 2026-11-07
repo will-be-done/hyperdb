@@ -1,10 +1,35 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type { ObjectSelector } from "../hyperdb/commands/selector/selector";
 import {
   setHyperDBHookDepsForTest,
   useSyncDispatch,
   useAsyncSelector,
   useSyncSelector,
 } from "./hooks";
+
+// The hooks only call the selector function; tests skip real selector
+// metadata (name, args schema) but keep the Mock API for assertions.
+const mockSelector = <TFn extends (args: never) => Generator<unknown, unknown>>(
+  fn: TFn,
+) =>
+  vi.fn(fn) as unknown as Mock<TFn> &
+    ObjectSelector<
+      ReturnType<TFn> extends Generator<unknown, infer R> ? R : never
+    >;
+
+// The fakes cover only what the hooks call, so the deps are cast here.
+const setTestDeps = (deps: Record<string, unknown>) =>
+  setHyperDBHookDepsForTest(
+    deps as Parameters<typeof setHyperDBHookDepsForTest>[0],
+  );
 
 type Subscriber = (ops: unknown[], traits: unknown[], revision: number) => void;
 type MockDB = {
@@ -200,18 +225,19 @@ describe("useAsyncSelector", () => {
     mocks.isNeedToRerunRange.mockReset();
     mocks.stableSerializeSelectorArgs.mockReset();
     mocks.stableSerializeSelectorArgs.mockReturnValue("args-key");
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...fakeReactHooks,
       useDB: () => mocks.db,
-      createCachedSelectorStoreSync: (...args) =>
+      createCachedSelectorStoreSync: (...args: unknown[]) =>
         mocks.createCachedSelectorStoreSync(...args),
-      selectCachedMaybeAsync: (...args) =>
+      selectCachedMaybeAsync: (...args: unknown[]) =>
         mocks.selectCachedMaybeAsync(...args),
-      selectAsync: (...args) => mocks.selectAsync(...args),
-      selectMaybeAsync: (...args) => mocks.selectMaybeAsync(...args),
-      syncDispatch: (...args) => mocks.syncDispatch(...args),
-      isNeedToRerunRange: (...args) => mocks.isNeedToRerunRange(...args),
-      stableSerializeSelectorArgs: (...args) =>
+      selectAsync: (...args: unknown[]) => mocks.selectAsync(...args),
+      selectMaybeAsync: (...args: unknown[]) => mocks.selectMaybeAsync(...args),
+      syncDispatch: (...args: unknown[]) => mocks.syncDispatch(...args),
+      isNeedToRerunRange: (...args: unknown[]) =>
+        mocks.isNeedToRerunRange(...args),
+      stableSerializeSelectorArgs: (...args: unknown[]) =>
         mocks.stableSerializeSelectorArgs(...args),
     });
   });
@@ -222,7 +248,7 @@ describe("useAsyncSelector", () => {
   });
 
   it("runs object-form sync selectors through the shared cache", () => {
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     const store = {
@@ -245,7 +271,7 @@ describe("useAsyncSelector", () => {
   });
 
   it("returns default value for disabled sync selectors without creating cache entries", () => {
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
 
@@ -264,7 +290,7 @@ describe("useAsyncSelector", () => {
   it("keeps the sync selector store stable when defaultValue references change", () => {
     restoreHookDeps?.();
     const reactHooks = createStatefulFakeReactHooks();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     const store = {
@@ -272,7 +298,7 @@ describe("useAsyncSelector", () => {
       getSnapshot: vi.fn(() => ["task-1"]),
     };
     const createCachedSelectorStoreSync = vi.fn(() => store);
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useDB: () => mocks.db,
       createCachedSelectorStoreSync,
@@ -297,13 +323,13 @@ describe("useAsyncSelector", () => {
   it("returns the latest disabled sync defaultValue through the stable store", () => {
     restoreHookDeps?.();
     const reactHooks = createStatefulFakeReactHooks();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useDB: () => mocks.db,
-      createCachedSelectorStoreSync: (...args) =>
+      createCachedSelectorStoreSync: (...args: unknown[]) =>
         mocks.createCachedSelectorStoreSync(...args),
       stableSerializeSelectorArgs: () => "args-key",
     });
@@ -356,9 +382,9 @@ describe("useAsyncSelector", () => {
     });
 
     useAsyncSelector({
-      selector: function* selector() {
+      selector: mockSelector(function* selector() {
         return "unused";
-      },
+      }),
       args: {},
     });
 
@@ -410,9 +436,9 @@ describe("useAsyncSelector", () => {
     });
 
     useAsyncSelector({
-      selector: function* selector() {
+      selector: mockSelector(function* selector() {
         return "unused";
-      },
+      }),
       args: {},
     });
 
@@ -430,7 +456,7 @@ describe("useAsyncSelector", () => {
   });
 
   it("returns default value for disabled async selectors without running or subscribing", () => {
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
 
@@ -458,9 +484,11 @@ describe("useAsyncSelector", () => {
     };
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
     const cmd = { table: "tasks", range: "hybrid" };
@@ -502,7 +530,7 @@ describe("useAsyncSelector", () => {
   it("keeps the async selector store stable when option value references change", () => {
     restoreHookDeps?.();
     const reactHooks = createStatefulFakeReactHooks();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     const store = {
@@ -538,7 +566,7 @@ describe("useAsyncSelector", () => {
       destroy: vi.fn(),
     };
     const createCachedSelectorStoreAsync = vi.fn(() => store);
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useDB: () => mocks.db,
       createCachedSelectorStoreAsync,
@@ -565,7 +593,7 @@ describe("useAsyncSelector", () => {
   it("does not destroy a stable async selector store during strict cleanup", () => {
     restoreHookDeps?.();
     const reactHooks = createStatefulFakeReactHooks();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     const store = {
@@ -601,7 +629,7 @@ describe("useAsyncSelector", () => {
       destroy: vi.fn(),
     };
     const createCachedSelectorStoreAsync = vi.fn(() => store);
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useDB: () => mocks.db,
       createCachedSelectorStoreAsync,
@@ -638,10 +666,10 @@ describe("useAsyncSelector", () => {
     });
     const gate = deferred<string>();
     const runCachedSelectorMaybeAsync = vi.fn(() => gate.promise);
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return "unused";
     });
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useSyncExternalStore,
       useDB: () => mocks.db,
@@ -682,7 +710,7 @@ describe("useAsyncSelector", () => {
   it("passes the latest async selector option values when the store is recreated", () => {
     restoreHookDeps?.();
     const reactHooks = createStatefulFakeReactHooks();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     const store = {
@@ -717,8 +745,10 @@ describe("useAsyncSelector", () => {
       refetch: vi.fn(),
       destroy: vi.fn(),
     };
-    const createCachedSelectorStoreAsync = vi.fn(() => store);
-    restoreHookDeps = setHyperDBHookDepsForTest({
+    const createCachedSelectorStoreAsync = vi.fn(
+      (_db: unknown, _input: { initialData?: unknown }) => store,
+    );
+    restoreHookDeps = setTestDeps({
       ...reactHooks,
       useDB: () => mocks.db,
       createCachedSelectorStoreAsync,
@@ -753,10 +783,12 @@ describe("useAsyncSelector", () => {
     };
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
     const pending = deferred<string[]>();
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
 
@@ -810,9 +842,9 @@ describe("useAsyncSelector", () => {
     });
 
     useAsyncSelector({
-      selector: function* selector() {
+      selector: mockSelector(function* selector() {
         return ["unused"];
-      },
+      }),
       args: {},
       defaultValue: [],
     });
@@ -845,7 +877,9 @@ describe("useAsyncSelector", () => {
       beginTx: vi.fn(),
       intervalScan: vi.fn(),
     };
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
     const first = deferred<string[]>();
@@ -863,7 +897,7 @@ describe("useAsyncSelector", () => {
       .mockReturnValueOnce("project-2");
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
 
     useAsyncSelector({
@@ -907,7 +941,9 @@ describe("useAsyncSelector", () => {
       beginTx: vi.fn(),
       intervalScan: vi.fn(),
     };
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
 
@@ -918,7 +954,7 @@ describe("useAsyncSelector", () => {
       .mockReturnValueOnce("project-1");
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
 
     useAsyncSelector({
@@ -957,7 +993,7 @@ describe("useAsyncSelector", () => {
 
   it("resolves refetch with the freshly fetched selector result", async () => {
     const pending = deferred<string[]>();
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
     mocks.selectCachedMaybeAsync.mockReturnValue(pending.promise);
@@ -989,7 +1025,7 @@ describe("useAsyncSelector", () => {
         intervalScan: vi.fn(),
       },
     }) as unknown as MockDB;
-    const selector = vi.fn(function* selector() {
+    const selector = mockSelector(function* selector() {
       return ["unused"];
     });
 
@@ -1006,7 +1042,9 @@ describe("useAsyncSelector", () => {
 
   it("applies fully synchronous async selector runs without waiting for a promise turn", () => {
     const cmd = { table: "tasks", range: "sync" };
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
 
@@ -1037,7 +1075,9 @@ describe("useAsyncSelector", () => {
   });
 
   it("runs object-form async selectors with args", async () => {
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
 
@@ -1066,7 +1106,9 @@ describe("useAsyncSelector", () => {
   });
 
   it("resets object-form async selector result when args key changes", () => {
-    const selector = vi.fn(function* selector(_args: { projectId: string }) {
+    const selector = mockSelector(function* selector(_args: {
+      projectId: string;
+    }) {
       return ["unused"];
     });
     mocks.selectCachedMaybeAsync.mockReturnValue(new Promise(() => {}));

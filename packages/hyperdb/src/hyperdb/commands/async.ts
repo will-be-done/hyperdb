@@ -1,12 +1,17 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+import { commandBrand, isCommandOfType, type CommandBrand } from "./brand";
+
 const unwrapType = "unwrap";
 const noopType = "noop";
-type NoopCmd = { type: typeof noopType };
-type UnwrapCmd = { type: typeof unwrapType; data: unknown | Promise<unknown> };
+type NoopCmd = CommandBrand & { type: typeof noopType };
+type UnwrapCmd = CommandBrand & {
+  type: typeof unwrapType;
+  data: unknown | Promise<unknown>;
+};
 export type DBCmd = UnwrapCmd | NoopCmd;
 
 export function* unwrap<T>(data: Promise<T>): Generator<DBCmd, T, unknown> {
   return (yield {
+    [commandBrand]: true,
     type: unwrapType,
     data: data,
   } satisfies UnwrapCmd) as T;
@@ -16,6 +21,7 @@ export function* unwrapCb<T>(
   data: () => Promise<T>,
 ): Generator<DBCmd, T, unknown> {
   return (yield {
+    [commandBrand]: true,
     type: unwrapType,
     data: data(),
   } satisfies UnwrapCmd) as T;
@@ -23,12 +29,13 @@ export function* unwrapCb<T>(
 
 export function* noop(): Generator<DBCmd, void, unknown> {
   return (yield {
+    [commandBrand]: true,
     type: noopType,
   } satisfies NoopCmd) as void;
 }
 
 export const isUnwrapCmd = (cmd: unknown): cmd is UnwrapCmd =>
-  cmd instanceof Object && cmd !== null && (cmd as any).type === unwrapType;
+  isCommandOfType(cmd, unwrapType);
 
-export const isCmd = (cmd: unknown): cmd is UnwrapCmd | any => isUnwrapCmd(cmd);
-export const isNoopCmd = (cmd: any): cmd is NoopCmd => cmd.type === noopType;
+export const isNoopCmd = (cmd: unknown): cmd is NoopCmd =>
+  isCommandOfType(cmd, noopType);

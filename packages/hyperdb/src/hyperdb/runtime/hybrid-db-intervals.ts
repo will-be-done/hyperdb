@@ -18,6 +18,7 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
+import { HyperDBError } from "../core/errors";
 
 export type NormalizedInterval = {
   lower: Tuple;
@@ -167,7 +168,8 @@ export const intervalFromClauses = (
 
   const indexConfig = table.indexes[indexName];
   if (!indexConfig) {
-    throw new Error(
+    throw new HyperDBError(
+      "INDEX_NOT_FOUND",
       `Index not found: ${indexName} for table: ${table.tableName}`,
     );
   }

@@ -89,15 +89,19 @@ check the matching docs below and also check the root `README.md`.
   subscriptions, revisions, and practical guidance for reading data reactively.
 - `src/content/docs/database/actions.md`: Actions and mutations. Covers
   defining actions, `insert`, `upsert`, `deleteRows`, dispatching with
-  `syncDispatch`/`asyncDispatch`, why selectors cannot write, transaction
+  `syncDispatch`/`asyncDispatch`/`dispatchMaybeAsync`, why selectors cannot
+  write (typed yields and the runtime guard), typing reusable helpers with
+  `SelectorGenerator`/`ActionGenerator`, the `HyperDBError` codes table and
+  `isHyperDBError`, catching failed commands with `try`/`catch`, transaction
   behavior and rollback, and bulk write guidance.
 
 ## Runtime
 
 - `src/content/docs/runtime/db.md`: Runtime API guide. Covers `DB` construction
   and options, `SubscribableDB` revisions/subscriptions/lifecycle hooks,
-  `HybridDB` primary/cache behavior and async trade-offs, command execution
-  helpers, transactions, traits, `withTraits`, and `getCurrentTraits`.
+  `HybridDB` primary/cache behavior and async trade-offs, closing runtimes
+  with `close()`, command execution helpers, transactions, traits,
+  `withTraits`, and `getCurrentTraits`.
 - `src/content/docs/runtime/drivers.md`: Storage driver guide. Covers choosing
   between in-memory, SQLite, async SQLite, and IndexedDB drivers; sync vs. async
   helper requirements; in-memory setup; SQLite adapter interfaces and storage

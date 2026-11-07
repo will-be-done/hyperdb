@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  deleteTestIndexedDB,
+  uniqueTestDBName,
+} from "../../test-utils/indexeddb";
 import { execAsync } from "../../core/executor";
 import { DB } from "../../runtime/db";
 import { PreloadedHybridDB } from "../../runtime/preloaded-hybrid-db";
@@ -16,23 +20,11 @@ const bulkGroupsTable = defineTable("idbScanAllBulkGroups", {
   title: v.string(),
 });
 
-let databaseCounter = 0;
-
-function deleteDatabase(databaseName: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(databaseName);
-    request.onsuccess = () => resolve();
-    request.onerror = () =>
-      reject(request.error ?? new Error("Failed to delete test database"));
-    request.onblocked = () =>
-      reject(new Error("IndexedDB delete request was blocked"));
-  });
-}
+const deleteDatabase = deleteTestIndexedDB;
 
 describe("IdbDriver scanAll", () => {
   it("reads at least 1,001 decoded rows in key order", async () => {
-    databaseCounter += 1;
-    const databaseName = `hyperdb-idb-scan-all-${Date.now().toString(36)}-${databaseCounter}`;
+    const databaseName = uniqueTestDBName("hyperdb-idb-scan-all");
     await deleteDatabase(databaseName);
     const driver = await openIndexedDBDriver(databaseName);
     const db = new DB(driver);
@@ -53,8 +45,7 @@ describe("IdbDriver scanAll", () => {
   });
 
   it("preloads multiple IndexedDB tables with whole concurrency", async () => {
-    databaseCounter += 1;
-    const databaseName = `hyperdb-idb-preloaded-${Date.now().toString(36)}-${databaseCounter}`;
+    const databaseName = uniqueTestDBName("hyperdb-idb-preloaded");
     await deleteDatabase(databaseName);
     const driver = await openIndexedDBDriver(databaseName);
     const primary = new DB(driver);

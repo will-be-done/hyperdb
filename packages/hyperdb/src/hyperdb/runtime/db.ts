@@ -34,8 +34,9 @@ import type {
   ExtractSchema,
   TableDefinition,
 } from "../schema/table";
-import { registerHyperDB } from "../tracing/registry";
+import { registerHyperDB, unregisterHyperDB } from "../tracing/registry";
 import { DBTx } from "./db-tx";
+import { HyperDBError } from "../core/errors";
 
 export type DBOptions = Partial<CodecOptions> & {
   dbName?: string;
@@ -50,6 +51,7 @@ type DBState = {
   id: string;
   name?: string;
   tracer?: HyperDBTracerOption;
+  closed: boolean;
 };
 
 let dbIdCounter = 0;
@@ -75,6 +77,7 @@ const createDBState = (options: DBOptions): DBState => {
     id: createDBId(),
     name: options.dbName,
     tracer: options.tracer,
+    closed: false,
   };
 };
 
@@ -96,7 +99,8 @@ function* performScan(
 
   const indexConfig = table.indexes[indexName as string];
   if (!indexConfig) {
-    throw new Error(
+    throw new HyperDBError(
+      "INDEX_NOT_FOUND",
       `Index not found: ${indexName as string} for table: ${table.tableName}`,
     );
   }
@@ -174,7 +178,7 @@ export class DB implements HyperDB {
     }
   }
 
-  withTraits(...traits: Trait[]): HyperDB {
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
     const db = Object.create(DB.prototype) as DB;
     db.driver = this.driver;
     db.traits = [...this.traits, ...traits];
@@ -214,7 +218,26 @@ export class DB implements HyperDB {
     return this.state.tables;
   }
 
+  get isClosed(): boolean {
+    return this.state.closed;
+  }
+
+  private throwIfClosed(): void {
+    if (this.state.closed) {
+      throw new HyperDBError("DB_CLOSED", "DB is closed");
+    }
+  }
+
+  *close(): Generator<DBCmd, void> {
+    if (this.state.closed) return;
+    // Mark closed only after the driver closes, so a failed close can retry.
+    this.driver.close?.();
+    this.state.closed = true;
+    unregisterHyperDB(this.state.id);
+  }
+
   *loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void> {
+    this.throwIfClosed();
     this.state.tables = tables;
     yield* this.driver.loadTables(tables);
   }
@@ -227,6 +250,7 @@ export class DB implements HyperDB {
   *scanAll<TTable extends TableDefinition>(
     table: TTable,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfClosed();
     if (!this.driver.scanAll) {
       throw new Error(
         `Driver does not support startup index preloading for table: ${table.tableName}`,
@@ -240,6 +264,7 @@ export class DB implements HyperDB {
   }
 
   *beginTx(mode: DBTransactionMode = "readwrite"): Generator<DBCmd, DBTx> {
+    this.throwIfClosed();
     const tx = yield* this.driver.beginTx(mode, {
       traceContext: getDriverTraceContextForDB(this),
     });
@@ -255,6 +280,7 @@ export class DB implements HyperDB {
     clauses: WhereClause[],
     selectOptions?: SelectOptions,
   ): Generator<DBCmd, ExtractSchema<TTable>[]> {
+    this.throwIfClosed();
     return yield* performScan(
       this.driver,
       table,
@@ -272,6 +298,7 @@ export class DB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ) {
+    this.throwIfClosed();
     yield* performInsert(this.driver, table, records as Row[], this.options, {
       traceContext: getDriverTraceContextForDB(this),
     });
@@ -281,6 +308,7 @@ export class DB implements HyperDB {
     table: TTable,
     records: ExtractSchema<TTable>[],
   ) {
+    this.throwIfClosed();
     yield* performUpsert(this.driver, table, records as Row[], this.options, {
       traceContext: getDriverTraceContextForDB(this),
     });
@@ -290,6 +318,7 @@ export class DB implements HyperDB {
     table: TTable,
     ids: string[],
   ) {
+    this.throwIfClosed();
     yield* performDelete(this.driver, table, ids, {
       traceContext: getDriverTraceContextForDB(this),
     });

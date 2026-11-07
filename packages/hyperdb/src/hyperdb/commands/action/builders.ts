@@ -5,7 +5,6 @@ import type { HyperDB } from "../../core/contracts";
 import type { DBCmd } from "../async";
 import type { Trait } from "../../core/primitives";
 import {
-  defaultTraceOptions,
   driverTraceContextFromFrameMeta,
   getDriverTraceContextForDB,
   withDriverTraceContextTrait,
@@ -32,138 +31,44 @@ import {
   type InsertActionCmd,
   type UpsertActionCmd,
 } from "./commands";
+import { commandBrand } from "../brand";
+import type { ActionGenerator } from "../command-types";
+import {
+  assertCommandName,
+  createFactoryOptions,
+  defineCommandMetadata,
+  isTraceDisabled,
+  normalizeTraceSkip,
+  type CommandTraceSkip,
+  type FactoryConfigureOptions,
+} from "../builder-common";
 
 export type ActionArgsSchema = Record<string, Validator<any>>;
-export type ActionTraceSkip =
-  | boolean
-  | {
-      childTrace: boolean;
-      rootTrace: boolean;
-    };
+export type ActionTraceSkip = CommandTraceSkip;
 export type ActionFactoryOptions = {
   trace?: TraceOptions;
   validateArgs?: boolean;
 };
-export type ActionFactoryConfigureOptions = {
-  trace?: Partial<TraceOptions>;
-  validateArgs?: boolean;
-};
+export type ActionFactoryConfigureOptions = FactoryConfigureOptions;
 
 export type ObjectAction<
   TReturn,
   TSchema extends ActionArgsSchema = ActionArgsSchema,
-> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
+> = ((args: InferObject<TSchema>) => ActionGenerator<TReturn>) & {
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
   readonly skipTrace?: ActionTraceSkip;
   readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
-  readonly handler: (
-    args: InferObject<TSchema>,
-  ) => Generator<unknown, TReturn, unknown>;
+  readonly handler: (args: InferObject<TSchema>) => ActionGenerator<TReturn>;
 };
 
 export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
   skipTrace?: ActionTraceSkip;
-  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
-};
-
-type NormalizedActionTraceSkip = {
-  childTrace: boolean;
-  rootTrace: boolean;
-};
-
-const normalizeActionTraceSkip = (
-  skipTrace: ActionTraceSkip | undefined,
-): NormalizedActionTraceSkip => {
-  if (skipTrace === true) {
-    return { childTrace: true, rootTrace: true };
-  }
-
-  if (!skipTrace) {
-    return { childTrace: false, rootTrace: false };
-  }
-
-  return {
-    childTrace: skipTrace.childTrace,
-    rootTrace: skipTrace.rootTrace,
-  };
-};
-
-const defineActionMetadata = <
-  TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
->(
-  fn: TFn,
-  metadata: {
-    name: string;
-    args?: ActionArgsSchema;
-    skipTrace?: ActionTraceSkip;
-    trace: TraceOptions | (() => TraceOptions);
-    validateArgs?: boolean | (() => boolean);
-    handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
-  },
-): TFn => {
-  const descriptors: PropertyDescriptorMap = {
-    kind: {
-      value: "action",
-      enumerable: true,
-      configurable: false,
-    },
-    name: {
-      value: metadata.name,
-      enumerable: false,
-      configurable: true,
-    },
-    args: {
-      value: metadata.args,
-      enumerable: true,
-      configurable: false,
-    },
-    handler: {
-      value: metadata.handler,
-      enumerable: true,
-      configurable: false,
-    },
-    trace: {
-      get:
-        typeof metadata.trace === "function"
-          ? metadata.trace
-          : () => metadata.trace,
-      enumerable: true,
-      configurable: false,
-    },
-    validateArgs: {
-      get:
-        typeof metadata.validateArgs === "function"
-          ? metadata.validateArgs
-          : () => metadata.validateArgs,
-      enumerable: true,
-      configurable: false,
-    },
-  };
-
-  if (metadata.skipTrace !== undefined) {
-    descriptors.skipTrace = {
-      value: metadata.skipTrace,
-      enumerable: true,
-      configurable: false,
-    };
-  }
-
-  Object.defineProperties(fn, descriptors);
-
-  return fn;
-};
-
-const assertActionName = (name: unknown): string => {
-  if (typeof name !== "string" || name.trim().length === 0) {
-    throw new Error("Action name is required");
-  }
-
-  return name;
+  handler: (args: InferObject<TSchema>) => ActionGenerator<TReturn>;
 };
 
 export interface ActionBuilder {
@@ -173,43 +78,18 @@ export interface ActionBuilder {
   configure(options: ActionFactoryConfigureOptions): void;
 }
 
-const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
-  trace: defaultTraceOptions,
-  validateArgs: false,
-};
-
-const isTraceDisabled = (trace: TraceOptions): boolean => !trace.enabled;
-
 export function createAction(
   options: ActionFactoryOptions = {},
 ): ActionBuilder {
-  const factoryOptions = {
-    ...defaultActionFactoryOptions,
-    ...options,
-    trace: {
-      ...defaultActionFactoryOptions.trace,
-      ...options.trace,
-    },
-  };
-
-  const configure = (nextOptions: ActionFactoryConfigureOptions): void => {
-    if (nextOptions.trace !== undefined) {
-      factoryOptions.trace = {
-        ...factoryOptions.trace,
-        ...nextOptions.trace,
-      };
-    }
-    if (nextOptions.validateArgs !== undefined) {
-      factoryOptions.validateArgs = nextOptions.validateArgs;
-    }
-  };
+  const factory = createFactoryOptions(options);
+  const factoryOptions = factory.current;
 
   const buildAction = <TSchema extends ActionArgsSchema, TReturn>(
     input: ActionDefinition<TSchema, TReturn>,
   ): ObjectAction<TReturn, TSchema> => {
-    const displayName = assertActionName(input.name);
+    const displayName = assertCommandName("Action", input.name);
     const argsValidator = v.object(input.args);
-    const skipTrace = normalizeActionTraceSkip(input.skipTrace);
+    const skipTrace = normalizeTraceSkip(input.skipTrace);
     const wrapped = ((args: InferObject<typeof input.args>) => {
       const traceDisabled = isTraceDisabled(factoryOptions.trace);
       const normalizedArgs = factoryOptions.validateArgs
@@ -229,7 +109,7 @@ export function createAction(
       );
     }) as ObjectAction<TReturn, TSchema>;
 
-    return defineActionMetadata(wrapped, {
+    return defineCommandMetadata(wrapped, "action", {
       name: displayName,
       args: input.args,
       skipTrace: input.skipTrace,
@@ -240,7 +120,7 @@ export function createAction(
   };
 
   const builder = buildAction as ActionBuilder;
-  builder.configure = configure;
+  builder.configure = factory.configure;
 
   return builder;
 }
@@ -248,8 +128,9 @@ export function createAction(
 export function* insert<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: ExtractSchema<TTable>[],
-): Generator<unknown> {
+): Generator<InsertActionCmd, void, unknown> {
   yield {
+    [commandBrand]: true,
     type: insertType,
     table,
     values,
@@ -259,8 +140,9 @@ export function* insert<TTable extends TableDefinition<any, any>>(
 export function* upsert<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: ExtractSchema<TTable>[],
-): Generator<unknown> {
+): Generator<UpsertActionCmd, void, unknown> {
   yield {
+    [commandBrand]: true,
     type: upsertType,
     table,
     values,
@@ -270,53 +152,29 @@ export function* upsert<TTable extends TableDefinition<any, any>>(
 export function* deleteRows<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: string[],
-): Generator<unknown> {
+): Generator<DeleteActionCmd, void, unknown> {
   yield {
+    [commandBrand]: true,
     type: deleteType,
     table,
     values,
   } satisfies DeleteActionCmd;
 }
 
-export function* getCurrentTraits(): Generator<unknown, Trait[], unknown> {
+export function* getCurrentTraits(): Generator<
+  GetCurrentTraitsCmd,
+  Trait[],
+  unknown
+> {
   return (yield {
+    [commandBrand]: true,
     type: getCurrentTraitsType,
   } satisfies GetCurrentTraitsCmd) as Trait[];
 }
 
-export function syncDispatch<TReturn>(
-  db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
-): TReturn {
-  const actionDB = withDriverTraceContextTrait(
-    db,
-    driverTraceContextFromFrameMeta(
-      getGeneratorTraceMeta(action),
-      getDriverTraceContextForDB(db),
-    ),
-  );
-  const tx = execSync(actionDB.beginTx());
-
-  let isCommitted = false;
-  try {
-    const result = execSync(
-      runCommandGenerator(tx, action, { allowWrites: true }),
-    );
-
-    execSync(tx.commit());
-    isCommitted = true;
-
-    return result;
-  } finally {
-    if (!isCommitted) {
-      execSync(tx.rollback());
-    }
-  }
-}
-
 function* dispatchAction<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): Generator<DBCmd, TReturn> {
   const actionDB = withDriverTraceContextTrait(
     db,
@@ -344,9 +202,28 @@ function* dispatchAction<TReturn>(
   }
 }
 
+export function syncDispatch<TReturn>(
+  db: HyperDB,
+  action: ActionGenerator<TReturn>,
+): TReturn {
+  return execSync(dispatchAction(db, action));
+}
+
+/**
+ * Dispatches an action and returns its result synchronously when no step
+ * needed to wait (for example a HybridDB write served by the in-memory cache),
+ * or a promise otherwise. Use it to avoid a microtask hop on sync fast paths.
+ */
+export function dispatchMaybeAsync<TReturn>(
+  db: HyperDB,
+  action: ActionGenerator<TReturn>,
+): TReturn | Promise<TReturn> {
+  return execMaybeAsync(dispatchAction(db, action));
+}
+
 export async function asyncDispatch<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): Promise<TReturn> {
-  return execMaybeAsync(dispatchAction(db, action));
+  return dispatchMaybeAsync(db, action);
 }
