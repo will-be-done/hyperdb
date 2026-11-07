@@ -44,4 +44,57 @@ describe("isNeedToRerunRange", () => {
     ops.push({ type: "insert", table, newValue: { id: "a", group: "g1" } });
     expect(isNeedToRerunRange(cmds, ops)).toBe(true);
   });
+
+  it("builds row tuples per index when selectors share a commit", () => {
+    const table = defineTable("memoPeople", {
+      id: v.string(),
+      group: v.string(),
+      name: v.string(),
+    })
+      .index("byGroup", ["group"])
+      .index("byNameGroup", ["name", "group"]);
+    const byGroup = selectFrom(table, "byGroup").where((q) =>
+      q.eq("group", "g1"),
+    );
+    const byNameGroup = selectFrom(table, "byNameGroup").where((q) =>
+      q.eq("name", "n1").eq("group", "g2"),
+    );
+    const cmd = (query: typeof byGroup | typeof byNameGroup) =>
+      query[Symbol.iterator]().next().value as SelectRangeCmd;
+    const ops: Op[] = [
+      {
+        type: "insert",
+        table,
+        newValue: { id: "a", group: "g2", name: "n1" },
+      },
+    ];
+
+    expect(isNeedToRerunRange([cmd(byGroup)], ops)).toBe(false);
+    expect(isNeedToRerunRange([cmd(byNameGroup)], ops)).toBe(true);
+    expect(isNeedToRerunRange([cmd(byGroup)], ops)).toBe(false);
+  });
+
+  it("checks both sides of an upsert and the old row of a delete", () => {
+    const table = defineRows();
+    const cmds = [rangeCmd(table)];
+    const upsert = (oldGroup: string | undefined, newGroup: string): Op[] => [
+      {
+        type: "upsert",
+        table,
+        oldValue:
+          oldGroup === undefined ? undefined : { id: "a", group: oldGroup },
+        newValue: { id: "a", group: newGroup },
+      },
+    ];
+
+    expect(isNeedToRerunRange(cmds, upsert("g1", "g2"))).toBe(true);
+    expect(isNeedToRerunRange(cmds, upsert("g2", "g1"))).toBe(true);
+    expect(isNeedToRerunRange(cmds, upsert("g2", "g3"))).toBe(false);
+    expect(isNeedToRerunRange(cmds, upsert(undefined, "g3"))).toBe(false);
+    expect(
+      isNeedToRerunRange(cmds, [
+        { type: "delete", table, oldValue: { id: "a", group: "g1" } },
+      ]),
+    ).toBe(true);
+  });
 });
