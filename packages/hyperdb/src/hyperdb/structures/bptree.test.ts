@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, expect, it } from "vitest";
 import { jsonCodec } from "lexicodec";
-import { InMemoryBinaryPlusTree } from "./bptree";
+import { InMemoryBinaryPlusTree, type TreeNode } from "./bptree";
 
 const assert = {
   equal: (actual: unknown, expected: unknown, message?: string) => {
@@ -323,14 +323,14 @@ describe("InMemoryBinaryPlusTree", () => {
     }
 
     const forked = tree.fork();
-    assert.equal(forked.nodes.size, 0);
+    assert.equal(ownedNodeCount(forked), 0);
     assert.deepEqual(forked.list(), tree.list());
 
     const originalList = tree.list();
     forked.set(201, 201);
 
-    assert.isAbove(forked.nodes.size, 0);
-    assert.isBelow(forked.nodes.size, tree.nodes.size);
+    assert.isAbove(ownedNodeCount(forked), 0);
+    assert.isBelow(ownedNodeCount(forked), treeNodes(forked).length);
 
     forked.delete(10);
     assert.deepEqual(tree.list(), originalList);
@@ -345,6 +345,51 @@ describe("InMemoryBinaryPlusTree", () => {
     assert.equal(forked.get(11), 11);
     assert.equal(forked.get(201), 201);
     assert.equal(forked.get(202), undefined);
+  });
+
+  it("keeps the base unchanged through random writes in a fork", () => {
+    // Small nodes make every write split, merge or redistribute, so the fork
+    // copies and rearranges nodes it shares with the base on most writes.
+    for (const [minSize, maxSize] of [
+      [2, 4],
+      [2, 5],
+      [3, 6],
+    ]) {
+      for (let seed = 1; seed <= 20; seed++) {
+        const random = seededRandom(seed);
+        const tree = new InMemoryBinaryPlusTree(minSize, maxSize);
+        for (let i = 0; i < 300; i++) tree.set(i * 2, i);
+        const baseList = tree.list();
+
+        const forked = tree.fork();
+        const expected = new Map(
+          baseList.map(({ key, value }) => [key, value]),
+        );
+        for (let op = 0; op < 400; op++) {
+          const key = Math.floor(random() * 700);
+          if (random() < 0.5) {
+            forked.delete(key);
+            expected.delete(key);
+          } else {
+            forked.set(key, -op);
+            expected.set(key, -op);
+          }
+        }
+
+        assert.deepEqual(tree.list(), baseList, `base list, seed ${seed}`);
+        for (const { key, value } of baseList) {
+          assert.equal(tree.get(key), value, `base get ${key}, seed ${seed}`);
+        }
+        verify(tree);
+        assert.deepEqual(
+          forked.list(),
+          [...expected]
+            .sort(([a], [b]) => a - b)
+            .map(([key, value]) => ({ key, value })),
+          `fork list, seed ${seed}`,
+        );
+      }
+    }
   });
 
   it("prevents sibling forks from the same base", () => {
@@ -989,6 +1034,17 @@ describe("InMemoryBinaryPlusTree", () => {
   });
 });
 
+// Mulberry32: a deterministic stream of floats in [0, 1).
+function seededRandom(seed: number) {
+  let state = seed;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function randomNumbers(size: number, range?: [number, number]) {
   if (!range) range = [-size * 10, size * 10];
   const numbers: number[] = [];
@@ -1030,17 +1086,30 @@ function parseTests(str: string) {
 // }
 
 function treeDepth(tree: InMemoryBinaryPlusTree) {
-  const root = tree.nodes.get("root");
-  if (!root) return 0;
+  let node = tree.root;
+  if (!node) return 0;
   let depth = 1;
-  let node = root;
   while (!node.leaf) {
     depth += 1;
-    const nextNode = tree.nodes.get(node.children[0].childId);
-    if (!nextNode) throw new Error("Broken.");
-    node = nextNode;
+    node = node.children[0].child;
   }
   return depth;
+}
+
+function treeNodes(tree: InMemoryBinaryPlusTree): TreeNode<any, any>[] {
+  const nodes: TreeNode<any, any>[] = [];
+  const visit = (node: TreeNode<any, any>) => {
+    nodes.push(node);
+    if (!node.leaf) for (const { child } of node.children) visit(child);
+  };
+  if (tree.root) visit(tree.root);
+  return nodes;
+}
+
+// Nodes the tree may change in place, as opposed to ones shared with a base.
+function ownedNodeCount(tree: InMemoryBinaryPlusTree) {
+  const owner = (tree as unknown as { owner: object }).owner;
+  return treeNodes(tree).filter((node) => node.owner === owner).length;
 }
 
 function test(tree: InMemoryBinaryPlusTree) {
@@ -1067,8 +1136,7 @@ type KeyTree =
   | { keys: Key[]; children?: undefined }
   | { keys: Key[]; children: KeyTree[] };
 
-function toKeyTree(tree: InMemoryBinaryPlusTree, id = "root"): KeyTree {
-  const node = tree.nodes.get(id);
+function toKeyTree(tree: InMemoryBinaryPlusTree, node = tree.root): KeyTree {
   if (!node) throw new Error("Missing node!");
 
   const keys = node.leaf
@@ -1076,7 +1144,7 @@ function toKeyTree(tree: InMemoryBinaryPlusTree, id = "root"): KeyTree {
     : node.children.map((v) => v.minKey);
 
   if (node.leaf) return { keys: keys };
-  const subtrees = node.children.map((v) => toKeyTree(tree, v.childId));
+  const subtrees = node.children.map((v) => toKeyTree(tree, v.child));
 
   return { keys: keys, children: subtrees };
 }
@@ -1119,41 +1187,21 @@ function inspect(tree: InMemoryBinaryPlusTree) {
   return str;
 }
 
-/** Check for node sizes. */
-function verify(tree: InMemoryBinaryPlusTree, id = "root") {
-  const node = tree.nodes.get(id);
-  if (id === "root") {
-    assert.equal(countNodes(tree), tree.nodes.size);
-    if (!node) return;
-    if (node.leaf) return;
-    for (const { childId } of node.children) verify(tree, childId);
-    return;
-  }
+/** Check for node sizes, and that a tree without a base owns every node. */
+function verify(tree: InMemoryBinaryPlusTree) {
+  const root = tree.root;
+  if (!root) return;
 
-  if (!node) throw new Error(`Missing node ${id}`);
-  const size = node.leaf ? node.values.length : node.children.length;
-  assert.ok(size >= tree.minSize);
-  assert.ok(size <= tree.maxSize, inspect(tree));
+  const isFork = (tree as unknown as { base?: unknown }).base !== undefined;
+  if (!isFork) assert.equal(ownedNodeCount(tree), treeNodes(tree).length);
 
-  if (node.leaf) return;
-  for (const { childId } of node.children) verify(tree, childId);
-}
-
-function countNodes(tree: InMemoryBinaryPlusTree, id = "root") {
-  const node = tree.nodes.get(id);
-  if (id === "root") {
-    if (!node) return 0;
-    if (node.leaf) return 1;
-    let count = 1;
-    for (const { childId } of node.children) count += countNodes(tree, childId);
-    return count;
-  }
-
-  if (!node) throw new Error(`Missing node ${id}`);
-  if (node.leaf) return 1;
-  let count = 1;
-  for (const { childId } of node.children) count += countNodes(tree, childId);
-  return count;
+  const verifyNode = (node: TreeNode<any, any>) => {
+    const size = node.leaf ? node.values.length : node.children.length;
+    assert.ok(size >= tree.minSize);
+    assert.ok(size <= tree.maxSize, inspect(tree));
+    if (!node.leaf) for (const { child } of node.children) verifyNode(child);
+  };
+  if (!root.leaf) for (const { child } of root.children) verifyNode(child);
 }
 
 function listEvens(min: number, max: number) {

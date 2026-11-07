@@ -245,12 +245,23 @@ const scanBtree = (
   tupleBounds: TupleScanOptions[],
   selectOptions: SelectOptions,
   compareKey: (a: ScanValue[], b: ScanValue[]) => number = compareTuple,
-): Row[] =>
-  mergeBtreeIterators(
+): Row[] => {
+  // Every key ends with the row id, so one range never repeats a row and
+  // needs no merge.
+  if (tupleBounds.length === 1) {
+    return btree.values({
+      ...tupleBounds[0],
+      limit: selectOptions.limit,
+      reverse: selectOptions.order === "desc",
+    });
+  }
+
+  return mergeBtreeIterators(
     createBtreeScanIterators(btree, tupleBounds, selectOptions),
     selectOptions,
     compareKey,
   );
+};
 
 function performScan(
   tableData: TableData | TxTableData,

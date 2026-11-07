@@ -156,6 +156,15 @@ class IdBtreeIndex implements IdOnlyIndex {
   scan(clauses: WhereClause[], options: SelectOptions): string[] {
     if (options.limit !== undefined && options.limit <= 0) return [];
     const bounds = convertWhereToBound(this.storedColumns, clauses);
+    // Every key ends with the row id, so one range never repeats a row and
+    // needs no merge.
+    if (bounds.length === 1) {
+      return this.tree.values({
+        ...bounds[0],
+        limit: options.limit,
+        reverse: options.order === "desc",
+      });
+    }
     const iterators = bounds.map((bound) =>
       this.tree.iterate({
         ...bound,
