@@ -2940,15 +2940,25 @@ const DevtoolsPanelInner = ({
     defaultValue: emptyTraceSelection,
   });
 
+  const registeredDBIdsRef = useRef<ReadonlySet<string>>(new Set());
+
   useEffect(() => {
+    // A closed DB leaves the registry; forget it unless it still has traces.
+    const registeredIds = new Set(registeredDBOptions.map(({ id }) => id));
+    const closedIds = new Set(
+      [...registeredDBIdsRef.current].filter((id) => !registeredIds.has(id)),
+    );
+    registeredDBIdsRef.current = registeredIds;
+
     setKnownDBOptions((currentOptions) => {
-      const nextOptions = mergeDBOptions(currentOptions, latestKnownDBOptions);
+      const openOptions = currentOptions.filter(({ id }) => !closedIds.has(id));
+      const nextOptions = mergeDBOptions(openOptions, latestKnownDBOptions);
 
       return areDBOptionsEqual(currentOptions, nextOptions)
         ? currentOptions
         : nextOptions;
     });
-  }, [latestKnownDBOptions]);
+  }, [latestKnownDBOptions, registeredDBOptions]);
 
   useEffect(() => {
     if (!hasMultipleDBs) return;
