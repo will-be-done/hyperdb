@@ -62,7 +62,26 @@ jobs:
         run: pnpm --filter '@will-be-done/hyperdb' exec playwright install --with-deps chromium
 
       - name: Test
-        run: pnpm run test
+        run: pnpm run test:coverage
+
+      - name: Coverage summary
+        if: ${{ !cancelled() && hashFiles('packages/hyperdb/coverage/coverage-summary.json') != '' }}
+        run: |
+          node -e '
+            const { total } = require("./packages/hyperdb/coverage/coverage-summary.json");
+            const rows = ["statements", "branches", "functions", "lines"].map(
+              (key) => `| ${key} | ${total[key].pct}% | ${total[key].covered}/${total[key].total} |`,
+            );
+            console.log(["### @will-be-done/hyperdb coverage", "", "| Metric | % | Covered |", "| --- | --- | --- |", ...rows].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: ${{ !cancelled() && hashFiles('packages/hyperdb/coverage/index.html') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hyperdb-coverage
+          path: packages/hyperdb/coverage
+          retention-days: 14
 
       - name: Check import cycles
         run: pnpm run lint:cycles
