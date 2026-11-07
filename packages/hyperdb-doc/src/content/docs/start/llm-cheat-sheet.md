@@ -282,7 +282,9 @@ Runtime errors extend `HyperDBError` with a stable `code` (definition mistakes,
 such as a blank action name or conflicting query conditions, throw plain
 `Error`); match on the code,
 not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
-across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),
+across duplicate package copies. Every driver reports primary-key collisions
+as `DuplicateIdError` (`id`); other engine errors, such as a `uniqhash`
+violation, pass through unchanged. Subclasses: `DuplicateIdError` (`id`),
 `ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
 `WRITES_DISALLOWED`, `TRANSACTION_FINISHED`, `READONLY_TRANSACTION`,
 `TABLE_NOT_FOUND`, `INDEX_NOT_FOUND`, `ASYNC_IN_SYNC_EXECUTION`,

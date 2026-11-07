@@ -150,6 +150,24 @@ export function isMissingSqliteSchemaMetadataError(error: unknown): boolean {
   );
 }
 
+/**
+ * True when `error` is SQLite rejecting a second row with the same primary
+ * key in `tableName`. Engines word this as `UNIQUE constraint failed:
+ * <table>.id`, some with a prefix or a lowercased table name. Unique-index
+ * violations name the sort-key column instead and do not match.
+ */
+export function isSqliteDuplicateIdError(
+  error: unknown,
+  tableName: string,
+): boolean {
+  assertSafeIdentifier("Table name", tableName);
+  const message = error instanceof Error ? error.message : String(error);
+  return new RegExp(
+    `UNIQUE constraint failed: ${tableName}\\.id(?![A-Za-z0-9_])`,
+    "i",
+  ).test(message);
+}
+
 /** Why the schema metadata could not be read. */
 export type SqliteSchemaMetadataReadError =
   | { kind: "missing" }

@@ -38,9 +38,14 @@ import {
   assertSafeTableDefinition,
   buildRowInsertParams,
   parseSqliteStoredRow,
+  isSqliteDuplicateIdError,
   type SqlValue,
 } from "./sqlite-common";
-import { HyperDBError, isHyperDBError } from "../../core/errors";
+import {
+  DuplicateIdError,
+  HyperDBError,
+  isHyperDBError,
+} from "../../core/errors";
 import { err, ok, type Result } from "../../utils/result";
 
 // The SQLite driver logic lives here once, written as DBCmd generators. The
@@ -110,16 +115,49 @@ function* insertRows(
   values: Row[],
 ): Generator<DBCmd, void> {
   for (const chunk of chunkArray(values, getSqliteInsertChunkSize(tableDef))) {
-    yield* conn.exec(
-      buildInsertSQL(tableDef, chunk.length),
-      chunk.flatMap((value) => buildRowInsertParams(tableDef, value)),
-      {
-        operation: "insert",
-        tableName: tableDef.tableName,
-        rowCount: chunk.length,
-      },
-    );
+    try {
+      yield* conn.exec(
+        buildInsertSQL(tableDef, chunk.length),
+        chunk.flatMap((value) => buildRowInsertParams(tableDef, value)),
+        {
+          operation: "insert",
+          tableName: tableDef.tableName,
+          rowCount: chunk.length,
+        },
+      );
+    } catch (error) {
+      if (!isSqliteDuplicateIdError(error, tableDef.tableName)) throw error;
+      // The failed statement was rolled back on its own, so the transaction
+      // can still be read to name the colliding id.
+      const duplicateId = (yield* attempt(
+        findDuplicateId(conn, tableDef.tableName, chunk),
+      )).unwrapOr(undefined);
+      if (duplicateId === undefined) throw error;
+      throw new DuplicateIdError(duplicateId, { cause: error });
+    }
   }
+}
+
+// Mirrors the other drivers: a repeat inside the batch wins over a row that
+// already exists.
+function* findDuplicateId(
+  conn: SqliteConnection,
+  tableName: string,
+  rows: Row[],
+): Generator<DBCmd, string | undefined> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (ids.has(row.id)) return row.id;
+    ids.add(row.id);
+  }
+
+  const existing = yield* conn.query(
+    `SELECT id FROM ${tableName} WHERE id IN (${[...ids].map(() => "?").join(", ")}) LIMIT 1`,
+    [...ids],
+    { operation: "scan", tableName },
+  );
+  const id = existing[0]?.[0];
+  return typeof id === "string" ? id : undefined;
 }
 
 function* deleteRows(

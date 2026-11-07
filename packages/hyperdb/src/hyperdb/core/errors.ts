@@ -33,8 +33,12 @@ export class HyperDBError extends Error {
 export class DuplicateIdError extends HyperDBError {
   readonly id: string;
 
-  constructor(id: string) {
-    super("DUPLICATE_ID", `Record with duplicate id already exists: ${id}`);
+  constructor(id: string, options?: ErrorOptions) {
+    super(
+      "DUPLICATE_ID",
+      `Record with duplicate id already exists: ${id}`,
+      options,
+    );
     this.name = "DuplicateIdError";
     this.id = id;
   }

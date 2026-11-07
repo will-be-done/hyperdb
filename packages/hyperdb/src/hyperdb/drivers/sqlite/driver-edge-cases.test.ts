@@ -8,12 +8,16 @@ import {
 } from "../../schema/table";
 import {
   createInspectableSqlDriver,
+  createSqlJsAsyncDriver,
   createSqlJsDriver,
   createSqlJsDriverFromDatabase,
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
-import { execSync } from "../../core/executor";
+import { execAsync, execSync } from "../../core/executor";
+import { DuplicateIdError } from "../../core/errors";
+import { createTursoWasmDriver } from "../../test-utils/turso-wasm-driver";
+import type { DBDriver } from "../../core/driver";
 import type { DBCmd } from "../../commands/async";
 import {
   buildSortKeyWhereClause,
@@ -669,4 +673,110 @@ describe("SQLite driver edge case regressions", () => {
         .map((row) => row.id),
     ).toEqual(["task-a", "task-b"]);
   });
+
+  const sqliteDrivers: [string, () => Promise<DBDriver>][] = [
+    ["SqlDriver", createSqlJsDriver],
+    ["AsyncSqlDriver (sql.js)", () => createSqlJsAsyncDriver()],
+    ["AsyncSqlDriver (Turso WASM)", () => createTursoWasmDriver()],
+  ];
+
+  for (const [name, createDriver] of sqliteDrivers) {
+    describe(`${name} duplicate ids`, () => {
+      const usersTable = defineTable("driverEdgeDuplicateUsers", {
+        id: v.string(),
+        email: v.string(),
+      }).index("byEmail", ["email"], { type: "uniqhash" });
+
+      const setup = async () => {
+        const driver = await createDriver();
+        await execAsync(driver.loadTables([usersTable]));
+        await execAsync(
+          driver.insert(usersTable.tableName, [{ id: "a", email: "a@x" }]),
+        );
+        return driver;
+      };
+
+      const rejection = async (run: Promise<unknown>) => {
+        try {
+          await run;
+        } catch (error) {
+          return error;
+        }
+        throw new Error("expected the write to fail");
+      };
+
+      it("reports an existing id as DuplicateIdError", async () => {
+        const driver = await setup();
+        const error = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [
+              { id: "b", email: "b@x" },
+              { id: "a", email: "other@x" },
+            ]),
+          ),
+        );
+
+        expect(error).toBeInstanceOf(DuplicateIdError);
+        expect((error as DuplicateIdError).id).toBe("a");
+        expect((error as DuplicateIdError).cause).toBeInstanceOf(Error);
+      });
+
+      it("reports a repeated id inside one batch", async () => {
+        const driver = await setup();
+        const insertError = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [
+              { id: "c", email: "c@x" },
+              { id: "c", email: "c2@x" },
+            ]),
+          ),
+        );
+        const upsertError = await rejection(
+          execAsync(
+            driver.upsert(usersTable.tableName, [
+              { id: "a", email: "a2@x" },
+              { id: "a", email: "a3@x" },
+            ]),
+          ),
+        );
+
+        expect((insertError as DuplicateIdError).id).toBe("c");
+        expect((upsertError as DuplicateIdError).id).toBe("a");
+      });
+
+      it("finds the duplicate when the batch spans several statements", async () => {
+        const driver = await setup();
+        const rows = Array.from({ length: 1000 }, (_, index) => ({
+          id: `row-${index}`,
+          email: `${index}@x`,
+        }));
+        const tx = await execAsync(driver.beginTx());
+        const error = await rejection(
+          execAsync(
+            tx.insert(usersTable.tableName, [
+              ...rows,
+              { id: "row-3", email: "again@x" },
+            ]),
+          ),
+        );
+        await execAsync(tx.rollback());
+
+        expect((error as DuplicateIdError).id).toBe("row-3");
+      });
+
+      it("keeps the engine error for unique-index violations", async () => {
+        const driver = await setup();
+        const error = await rejection(
+          execAsync(
+            driver.insert(usersTable.tableName, [{ id: "b", email: "a@x" }]),
+          ),
+        );
+
+        expect(error).not.toBeInstanceOf(DuplicateIdError);
+        expect(String((error as Error).message)).toContain(
+          "UNIQUE constraint failed",
+        );
+      });
+    });
+  }
 });
