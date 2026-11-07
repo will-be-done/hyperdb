@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { ActionGenerator } from "../commands/command-types";
 import type {
   HyperDB,
   HyperDBTx,
@@ -57,28 +58,28 @@ type AfterInsertSub = (
   table: TableDefinition,
   traits: Trait[],
   ops: InsertOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterUpsertSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: UpsertOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterDeleteSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: DeleteOp[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 type AfterChangeSub = (
   db: HyperDB,
   table: TableDefinition,
   traits: Trait[],
   ops: Op[],
-) => Generator<unknown, void, unknown>;
+) => ActionGenerator<void>;
 
 export type AfterScanCallback = (
   db: HyperDB,

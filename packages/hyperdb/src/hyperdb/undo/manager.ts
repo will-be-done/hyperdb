@@ -1,5 +1,7 @@
 import type { DBCmd } from "../commands/async";
 import { HyperDBError } from "../core/errors";
+import type { ActionGenerator } from "../commands/command-types";
+import type { RunWithTraitsCmd } from "../commands/action/commands";
 import type { HyperDB, HyperDBTx } from "../core/contracts";
 import type { Row, Trait } from "../core/primitives";
 import { deepFreeze } from "../deep-freeze";
@@ -291,12 +293,12 @@ export class UndoManager {
   }
 
   withoutUndo<T>(
-    body: () => Generator<unknown, T, unknown>,
-  ): Generator<unknown, T, unknown>;
+    body: () => ActionGenerator<T>,
+  ): Generator<RunWithTraitsCmd, T, unknown>;
   withoutUndo<T>(body: (db: HyperDB) => T): T;
   withoutUndo<T>(
-    body: (db: HyperDB) => T | Generator<unknown, T, unknown>,
-  ): T | Generator<unknown, T, unknown> {
+    body: (db: HyperDB) => T | ActionGenerator<T>,
+  ): T | Generator<RunWithTraitsCmd, T, unknown> {
     this.assertUsable();
     const trait: UndoTrait = { type: skipUndoType, manager: this.id };
     // Generator functions and ordinary zero-argument generator factories both

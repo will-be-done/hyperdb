@@ -79,20 +79,21 @@ describe("close()", () => {
     // copies, which share the driver but not instance-level spies.
     const events: string[] = [];
     const begin = primaryDriver.beginTx.bind(primaryDriver);
-    vi.spyOn(primaryDriver, "beginTx").mockImplementation(
-      function* (mode, options) {
-        const tx = yield* begin(mode, options);
-        if (mode !== "readwrite") return tx;
-        const commit = tx.commit.bind(tx);
-        tx.commit = function* () {
-          // Keep the flush pending so close() has to wait for it.
-          yield* unwrap(new Promise((resolve) => setTimeout(resolve, 10)));
-          yield* commit();
-          events.push("persisted");
-        };
-        return tx;
-      },
-    );
+    // DB passes the mode even though the in-memory driver ignores it.
+    vi.spyOn(primaryDriver, "beginTx").mockImplementation(function* (
+      ...args: unknown[]
+    ) {
+      const tx = yield* begin();
+      if (args[0] !== "readwrite") return tx;
+      const commit = tx.commit.bind(tx);
+      tx.commit = function* () {
+        // Keep the flush pending so close() has to wait for it.
+        yield* unwrap(new Promise((resolve) => setTimeout(resolve, 10)));
+        yield* commit();
+        events.push("persisted");
+      };
+      return tx;
+    });
     const closeDriver = primaryDriver.close.bind(primaryDriver);
     vi.spyOn(primaryDriver, "close").mockImplementation(() => {
       events.push("primary closed");
@@ -121,12 +122,12 @@ describe("close()", () => {
     const hybrid = new HybridDB(primary, cache);
     await execAsync(hybrid.loadTables([rowsTable]));
     const begin = primaryDriver.beginTx.bind(primaryDriver);
-    vi.spyOn(primaryDriver, "beginTx").mockImplementation(
-      function* (mode, options) {
-        if (mode === "readwrite") throw new Error("disk gone");
-        return yield* begin(mode, options);
-      },
-    );
+    vi.spyOn(primaryDriver, "beginTx").mockImplementation(function* (
+      ...args: unknown[]
+    ) {
+      if (args[0] === "readwrite") throw new Error("disk gone");
+      return yield* begin();
+    });
 
     await asyncDispatch(hybrid, insertRow({ id: "r1" }));
     await execAsync(hybrid.close());

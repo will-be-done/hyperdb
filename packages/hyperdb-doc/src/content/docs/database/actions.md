@@ -171,10 +171,44 @@ for retry and recovery behavior.
 
 ## Selectors can't write
 
-The command runner only permits mutations while dispatching an action. If a
-selector emits `insert`, `upsert`, or `deleteRows`, the runtime throws a
-`HyperDBError` with code `WRITES_DISALLOWED`. This keeps reads pure and is what
-makes selector caching safe.
+Selector handlers are typed to yield only read commands, so calling `insert`,
+`upsert`, `deleteRows`, or an action inside a selector is a TypeScript error.
+The runtime enforces the same rule for untyped code: the runner only permits
+mutations while dispatching an action and otherwise throws a `HyperDBError`
+with code `WRITES_DISALLOWED`. This keeps reads pure and is what makes selector
+caching safe.
+
+## Typing reusable helpers
+
+Plain generator helpers compose with `yield*` like selectors and actions do.
+Inferred return types work as is. When you annotate a helper, use
+`SelectorGenerator<T>` for reads (usable in selectors and actions) or
+`ActionGenerator<T>` for helpers that may write (usable only in actions):
+
+```ts
+import {
+  selectFrom,
+  upsert,
+  type ActionGenerator,
+  type SelectorGenerator,
+} from "@will-be-done/hyperdb";
+import { tasksTable, type Task } from "./schema";
+
+function* findTask(id: string): SelectorGenerator<Task | undefined> {
+  return yield* selectFrom(tasksTable, "byId")
+    .where((q) => q.eq("id", id))
+    .first();
+}
+
+function* saveTask(task: Task): ActionGenerator<void> {
+  yield* upsert(tasksTable, [task]);
+}
+```
+
+A helper annotated as `Generator<unknown, T>` no longer type-checks inside a
+handler; switch it to one of the types above. Handlers may only yield HyperDB
+commands, so a stray `yield value` is also a type error. The yield unions
+themselves are exported as `SelectorCommand` and `ActionCommand`.
 
 ## Errors
 

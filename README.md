@@ -325,6 +325,13 @@ failure can occur after the cache commit and history queues have moved.
 See [Undo & Redo](https://hyperdb.will-be-done.app/integrations/undo/) for callback
 exclusions outside actions, grouping rules, hooks, and conflict handling.
 
+## Typed selectors and actions
+
+Selector handlers are typed to yield only reads, so writing from a selector is
+a compile error, and the runtime rejects it too. Annotate reusable helpers with
+`SelectorGenerator<T>` for reads or `ActionGenerator<T>` for helpers that may
+write.
+
 ## Errors and shutdown
 
 HyperDB errors extend `HyperDBError` and carry a stable `code` such as

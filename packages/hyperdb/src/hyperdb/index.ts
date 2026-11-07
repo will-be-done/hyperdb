@@ -6,6 +6,12 @@ export * from "./commands/selector/selector";
 export * from "./commands/selector/async-selector-store";
 export { noop } from "./commands/async";
 export type {
+  ActionCommand,
+  ActionGenerator,
+  SelectorCommand,
+  SelectorGenerator,
+} from "./commands/command-types";
+export type {
   HyperDB,
   HyperDBTx,
   HybridPreloadTableSpec,

@@ -1,3 +1,4 @@
+import type { ActionGenerator } from "../hyperdb/commands/command-types";
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   createCachedSelectorStoreSync,
@@ -366,7 +367,7 @@ export function useSyncDispatch() {
   const db = hookDeps.useDB();
 
   return hookDeps.useCallback(
-    <TReturn>(action: Generator<unknown, TReturn, unknown>): TReturn => {
+    <TReturn>(action: ActionGenerator<TReturn>): TReturn => {
       return hookDeps.syncDispatch(db, action);
     },
     [db],
@@ -377,9 +378,7 @@ export function useAsyncDispatch() {
   const db = hookDeps.useDB();
 
   return hookDeps.useCallback(
-    <TReturn>(
-      action: Generator<unknown, TReturn, unknown>,
-    ): Promise<TReturn> => {
+    <TReturn>(action: ActionGenerator<TReturn>): Promise<TReturn> => {
       return hookDeps.asyncDispatch(db, action);
     },
     [db],

@@ -1,4 +1,9 @@
-import { createSelector, selectFrom, v } from "@will-be-done/hyperdb";
+import {
+  createSelector,
+  selectFrom,
+  v,
+  type SelectorGenerator,
+} from "@will-be-done/hyperdb";
 import {
   hydrateTracePayload,
   tracePayloadsRuntimeTable,
@@ -76,7 +81,7 @@ function* selectTraceRows({
   dbKey?: string;
   kind?: TraceQueryKind;
   skipCached?: boolean;
-}): Generator<unknown, TraceRootRow[], unknown> {
+}): SelectorGenerator<TraceRootRow[]> {
   const limit = normalizedLimit(maxTraces);
   let queryLimit = limit;
 
@@ -109,7 +114,7 @@ function* selectTraceRowCandidates({
   sortField: TraceSortField;
   sortDir: TraceSortDir;
   dbKey?: string;
-}): Generator<unknown, TraceRootRow[], unknown> {
+}): SelectorGenerator<TraceRootRow[]> {
   const index = traceSortIndex(sortField, dbKey);
   const query = selectFrom(traceRootsRuntimeTable, index)
     .order(sortDir)
@@ -124,7 +129,7 @@ function* selectTraceRowCandidates({
 
 function* selectTracePayload(
   id: string,
-): Generator<unknown, RootTrace | undefined, unknown> {
+): SelectorGenerator<RootTrace | undefined> {
   const payloadRows = yield* selectFrom(
     tracePayloadsRuntimeTable,
     "byId",
@@ -214,7 +219,7 @@ export const traceStoreTraceSelection = selector({
     sortDir,
     selectedTraceId,
     autoSelectFirst = true,
-  }): Generator<unknown, TraceStoreTraceSelection, unknown> {
+  }): SelectorGenerator<TraceStoreTraceSelection> {
     const rows = yield* selectTraceRows({
       maxTraces,
       dbKey,

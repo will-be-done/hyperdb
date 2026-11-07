@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Selector types and the createSelector() builder.
+import type { SelectorGenerator } from "../command-types";
 import { SubscribableDB } from "../../runtime/subscribable-db";
 import type { Row } from "../../core/primitives";
 import { type TraceOptions } from "../../core/tracer";
@@ -47,7 +48,9 @@ export type SelectorFactoryConfigureOptions = FactoryConfigureOptions;
 export type ObjectSelector<
   TReturn,
   TSchema extends SelectorArgsSchema = SelectorArgsSchema,
-> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
+> = ((
+  args: InferObject<TSchema>,
+) => Generator<RunSelectorCmd, TReturn, unknown>) & {
   readonly kind: "selector";
   readonly name: string;
   readonly args: TSchema;
@@ -55,9 +58,7 @@ export type ObjectSelector<
   readonly memoization?: SelectorMemoization;
   readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
-  readonly handler: (
-    args: InferObject<TSchema>,
-  ) => Generator<unknown, TReturn, unknown>;
+  readonly handler: (args: InferObject<TSchema>) => SelectorGenerator<TReturn>;
 };
 
 export type AnyObjectSelector = ((
@@ -121,7 +122,7 @@ export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   args: TSchema;
   skipTrace?: SelectorTraceSkip;
   memoization?: SelectorMemoizationOptions;
-  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
+  handler: (args: InferObject<TSchema>) => SelectorGenerator<TReturn>;
 };
 
 const defaultSelectorMemoization: SelectorMemoization = {

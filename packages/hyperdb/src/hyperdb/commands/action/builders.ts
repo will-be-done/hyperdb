@@ -32,6 +32,7 @@ import {
   type UpsertActionCmd,
 } from "./commands";
 import { commandBrand } from "../brand";
+import type { ActionGenerator } from "../command-types";
 import {
   assertCommandName,
   createFactoryOptions,
@@ -53,23 +54,21 @@ export type ActionFactoryConfigureOptions = FactoryConfigureOptions;
 export type ObjectAction<
   TReturn,
   TSchema extends ActionArgsSchema = ActionArgsSchema,
-> = ((args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>) & {
+> = ((args: InferObject<TSchema>) => ActionGenerator<TReturn>) & {
   readonly kind: "action";
   readonly name: string;
   readonly args: TSchema;
   readonly skipTrace?: ActionTraceSkip;
   readonly trace: TraceOptions;
   readonly validateArgs?: boolean;
-  readonly handler: (
-    args: InferObject<TSchema>,
-  ) => Generator<unknown, TReturn, unknown>;
+  readonly handler: (args: InferObject<TSchema>) => ActionGenerator<TReturn>;
 };
 
 export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
   name: string;
   args: TSchema;
   skipTrace?: ActionTraceSkip;
-  handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
+  handler: (args: InferObject<TSchema>) => ActionGenerator<TReturn>;
 };
 
 export interface ActionBuilder {
@@ -129,7 +128,7 @@ export function createAction(
 export function* insert<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: ExtractSchema<TTable>[],
-): Generator<unknown> {
+): Generator<InsertActionCmd, void, unknown> {
   yield {
     [commandBrand]: true,
     type: insertType,
@@ -141,7 +140,7 @@ export function* insert<TTable extends TableDefinition<any, any>>(
 export function* upsert<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: ExtractSchema<TTable>[],
-): Generator<unknown> {
+): Generator<UpsertActionCmd, void, unknown> {
   yield {
     [commandBrand]: true,
     type: upsertType,
@@ -153,7 +152,7 @@ export function* upsert<TTable extends TableDefinition<any, any>>(
 export function* deleteRows<TTable extends TableDefinition<any, any>>(
   table: TTable,
   values: string[],
-): Generator<unknown> {
+): Generator<DeleteActionCmd, void, unknown> {
   yield {
     [commandBrand]: true,
     type: deleteType,
@@ -162,7 +161,11 @@ export function* deleteRows<TTable extends TableDefinition<any, any>>(
   } satisfies DeleteActionCmd;
 }
 
-export function* getCurrentTraits(): Generator<unknown, Trait[], unknown> {
+export function* getCurrentTraits(): Generator<
+  GetCurrentTraitsCmd,
+  Trait[],
+  unknown
+> {
   return (yield {
     [commandBrand]: true,
     type: getCurrentTraitsType,
@@ -171,7 +174,7 @@ export function* getCurrentTraits(): Generator<unknown, Trait[], unknown> {
 
 function* dispatchAction<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): Generator<DBCmd, TReturn> {
   const actionDB = withDriverTraceContextTrait(
     db,
@@ -201,7 +204,7 @@ function* dispatchAction<TReturn>(
 
 export function syncDispatch<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): TReturn {
   return execSync(dispatchAction(db, action));
 }
@@ -213,14 +216,14 @@ export function syncDispatch<TReturn>(
  */
 export function dispatchMaybeAsync<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): TReturn | Promise<TReturn> {
   return execMaybeAsync(dispatchAction(db, action));
 }
 
 export async function asyncDispatch<TReturn>(
   db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
+  action: ActionGenerator<TReturn>,
 ): Promise<TReturn> {
   return dispatchMaybeAsync(db, action);
 }

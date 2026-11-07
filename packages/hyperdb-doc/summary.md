@@ -90,7 +90,9 @@ check the matching docs below and also check the root `README.md`.
 - `src/content/docs/database/actions.md`: Actions and mutations. Covers
   defining actions, `insert`, `upsert`, `deleteRows`, dispatching with
   `syncDispatch`/`asyncDispatch`/`dispatchMaybeAsync`, why selectors cannot
-  write, the `HyperDBError` codes table and `isHyperDBError`, transaction
+  write (typed yields and the runtime guard), typing reusable helpers with
+  `SelectorGenerator`/`ActionGenerator`, the `HyperDBError` codes table and
+  `isHyperDBError`, transaction
   behavior and rollback, and bulk write guidance.
 
 ## Runtime

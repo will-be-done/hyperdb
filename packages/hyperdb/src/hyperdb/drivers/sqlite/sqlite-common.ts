@@ -277,6 +277,7 @@ function validateHashBounds(
 
     if (
       !bound.lte ||
+      !bound.gte ||
       bound.lte.length !== indexColumns.length ||
       bound.gte.length !== indexColumns.length
     ) {

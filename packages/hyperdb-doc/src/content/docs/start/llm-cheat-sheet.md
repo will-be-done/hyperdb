@@ -87,9 +87,11 @@ import {
   upsert,
   v,
   ValidationError,
+  type ActionGenerator,
   type ExtractSchema,
   type HyperDB,
   type HyperDBErrorCode,
+  type SelectorGenerator,
 } from "@will-be-done/hyperdb";
 ```
 
@@ -507,6 +509,16 @@ results are visible immediately, while promise results show `defaultValue`,
 `initialData`, or `placeholderData` until that promise resolves. `defaultValue`
 may be a value or a zero-argument function that returns the value. Use
 `useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
+
+## Typed Yields
+
+Selector handlers may yield only reads (`selectFrom`, other selectors,
+`getCurrentTraits`, `noop`); writes or actions inside a selector are type
+errors. Action handlers may also yield `insert`, `upsert`, `deleteRows`, other
+actions, and `withoutUndo` scopes. Annotate reusable helpers as
+`SelectorGenerator<T>` (reads) or `ActionGenerator<T>` (may write), never
+`Generator<unknown, T>`. The yield unions are `SelectorCommand` and
+`ActionCommand`.
 
 ## Rules Of Thumb
 

@@ -71,7 +71,7 @@ function* selectFirst<
   TIndexName extends ExtractIndexName<TTable>,
 >(
   query: SelectQuery<TTable, TIndexName>,
-): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+): Generator<SelectRangeCmd, ExtractSchema<TTable> | undefined, unknown> {
   const results = (yield createSelectRangeCmd({
     ...query,
     limit: 1,
@@ -87,7 +87,7 @@ function* selectFirstOr<
 >(
   query: SelectQuery<TTable, TIndexName>,
   otherValue: TOtherValue,
-): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
   const result = yield* selectFirst(query);
   return result === undefined ? otherValue : result;
 }
@@ -258,19 +258,27 @@ class SelectQueryBuilder<
     };
   }
 
-  *[Symbol.iterator](): Generator<unknown, ExtractSchema<TTable>[], unknown> {
+  *[Symbol.iterator](): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable>[],
+    unknown
+  > {
     return (yield createSelectRangeCmd(
       this.toQuery(),
     )) as ExtractSchema<TTable>[];
   }
 
-  first(): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+  first(): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable> | undefined,
+    unknown
+  > {
     return selectFirst(this.toQuery());
   }
 
   firstOr<TOtherValue>(
     otherValue: TOtherValue,
-  ): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+  ): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
     return selectFirstOr(this.toQuery(), otherValue);
   }
 }
@@ -329,19 +337,27 @@ class SelectQueryBuilderWithWhere<
     };
   }
 
-  *[Symbol.iterator](): Generator<unknown, ExtractSchema<TTable>[], unknown> {
+  *[Symbol.iterator](): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable>[],
+    unknown
+  > {
     return (yield createSelectRangeCmd(
       this.toQuery(),
     )) as ExtractSchema<TTable>[];
   }
 
-  first(): Generator<unknown, ExtractSchema<TTable> | undefined, unknown> {
+  first(): Generator<
+    SelectRangeCmd,
+    ExtractSchema<TTable> | undefined,
+    unknown
+  > {
     return selectFirst(this.toQuery());
   }
 
   firstOr<TOtherValue>(
     otherValue: TOtherValue,
-  ): Generator<unknown, ExtractSchema<TTable> | TOtherValue, unknown> {
+  ): Generator<SelectRangeCmd, ExtractSchema<TTable> | TOtherValue, unknown> {
     return selectFirstOr(this.toQuery(), otherValue);
   }
 }

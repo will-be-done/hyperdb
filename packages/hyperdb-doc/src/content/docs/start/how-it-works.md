@@ -41,7 +41,8 @@ Reads and writes are generator functions that _describe_ work instead of
 performing it directly. When you `yield*` a query or a mutation, you are emitting
 a command; you never call the storage driver yourself.
 
-- Selectors read data. They can compose other selectors but cannot write.
+- Selectors read data. They can compose other selectors but cannot write;
+  TypeScript rejects writes in a selector handler.
 - Actions read and write data. They emit `insert`, `upsert`, and
   `deleteRows` commands, and can call selectors or other actions.
 

@@ -5,6 +5,7 @@ import {
   type RunWithTraitsCmd,
 } from "../commands/action/commands";
 import { commandBrand } from "../commands/brand";
+import type { ActionGenerator } from "../commands/command-types";
 
 export const skipUndoType = "hyperdb.undo.skip";
 export const replayUndoType = "hyperdb.undo.replay";
@@ -22,9 +23,9 @@ export function isUndoReplay(traits: readonly Trait[]): boolean {
 }
 
 export function* runInUndoScope<T>(
-  body: () => Generator<unknown, T, unknown>,
+  body: () => ActionGenerator<T>,
   trait: UndoTrait,
-): Generator<unknown, T, unknown> {
+): Generator<RunWithTraitsCmd, T, unknown> {
   return (yield {
     [commandBrand]: true,
     type: runWithTraitsType,
@@ -35,14 +36,14 @@ export function* runInUndoScope<T>(
 
 /** Skip history recording in every manager for a nested action block. */
 export function withoutUndo<T>(
-  body: () => Generator<unknown, T, unknown>,
-): Generator<unknown, T, unknown>;
+  body: () => ActionGenerator<T>,
+): Generator<RunWithTraitsCmd, T, unknown>;
 /** Skip history recording in every manager for writes through the scoped DB. */
 export function withoutUndo<T>(db: HyperDB, body: (db: HyperDB) => T): T;
 export function withoutUndo<T>(
-  dbOrBody: HyperDB | (() => Generator<unknown, T, unknown>),
+  dbOrBody: HyperDB | (() => ActionGenerator<T>),
   body?: (db: HyperDB) => T,
-): T | Generator<unknown, T, unknown> {
+): T | Generator<RunWithTraitsCmd, T, unknown> {
   const trait: UndoTrait = { type: skipUndoType };
   if (typeof dbOrBody === "function") {
     return runInUndoScope(dbOrBody, trait);

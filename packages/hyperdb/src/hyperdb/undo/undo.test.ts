@@ -423,6 +423,7 @@ describe("undo middleware", () => {
     const selector = createSelector()({
       name: "invalidUndoSelector",
       args: {},
+      // @ts-expect-error selectors cannot write; the runtime guard is tested too
       handler: function* () {
         yield* withoutUndo(function* () {
           yield* insert(items, [{ id: "a", value: 1 }]);

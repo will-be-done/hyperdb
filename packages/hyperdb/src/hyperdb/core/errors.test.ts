@@ -42,6 +42,7 @@ const insertRows = action({
 const writingSelector = selector({
   name: "writingSelector",
   args: {},
+  // @ts-expect-error selectors cannot write; the runtime guard is tested too
   handler: function* () {
     yield* insert(rowsTable, [{ id: "x", title: "x" }]);
   },
