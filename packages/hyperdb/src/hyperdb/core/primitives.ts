@@ -25,7 +25,8 @@ export type SelectOptions = {
   order?: "asc" | "desc";
 };
 
-export type Trait = { type: string };
+/** Metadata attached with withTraits(). `type` identifies it; other fields are free-form. */
+export type Trait = { type: string; [key: string]: unknown };
 
 export type Row = Record<string, unknown> & {
   id: string;

@@ -1076,7 +1076,7 @@ function verify(tree: InMemoryBinaryPlusTree, id = "root") {
     return;
   }
 
-  assert.ok(node);
+  if (!node) throw new Error(`Missing node ${id}`);
   const size = node.leaf ? node.values.length : node.children.length;
   assert.ok(size >= tree.minSize);
   assert.ok(size <= tree.maxSize, inspect(tree));
@@ -1095,7 +1095,7 @@ function countNodes(tree: InMemoryBinaryPlusTree, id = "root") {
     return count;
   }
 
-  assert.ok(node);
+  if (!node) throw new Error(`Missing node ${id}`);
   if (node.leaf) return 1;
   let count = 1;
   for (const { childId } of node.children) count += countNodes(tree, childId);

@@ -293,7 +293,7 @@ export class UndoManager {
   }
 
   withoutUndo<T>(
-    body: () => ActionGenerator<T>,
+    body: (db: HyperDB) => ActionGenerator<T>,
   ): Generator<RunWithTraitsCmd, T, unknown>;
   withoutUndo<T>(body: (db: HyperDB) => T): T;
   withoutUndo<T>(

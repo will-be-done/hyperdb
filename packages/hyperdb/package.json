@@ -63,7 +63,7 @@
     "lint:cycles": "depcruise src --config .dependency-cruiser.cjs",
     "bench": "vitest bench",
     "prepack": "pnpm run build",
-    "ts": "tsc && tsc -p tsconfig.typetest.json",
+    "ts": "tsc && tsc -p tsconfig.eslint.json",
     "test": "vitest run"
   },
   "peerDependencies": {

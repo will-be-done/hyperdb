@@ -1,5 +1,5 @@
 // Compile-time checks for the yield types of selectors and actions.
-// Type-checked by `pnpm ts` (tsconfig.typetest.json); never executed.
+// Type-checked by `pnpm ts` with the test sources; never executed.
 import {
   createAction,
   createSelector,
@@ -12,9 +12,10 @@ import {
   upsert,
   v,
   type ActionGenerator,
+  type HyperDB,
   type SelectorGenerator,
 } from "../index";
-import { withoutUndo } from "../undo";
+import { withoutUndo, type UndoManager } from "../undo";
 
 const rows = defineTable("typetestRows", {
   id: v.string(),
@@ -108,3 +109,15 @@ export const untypedHelper: SelectorGenerator<void> = (function* (): Generator<
   void,
   unknown
 > {})();
+
+// Traits carry free-form fields next to `type`.
+export const tagged = (db: HyperDB) =>
+  db.withTraits({ type: "myFeature.source", value: "import" });
+
+// Callback exclusions get a typed scoped DB; generator bodies keep their type.
+export const callbackExclusion = (history: UndoManager) =>
+  history.withoutUndo((scoped) => scoped.getId());
+export const generatorExclusion = (history: UndoManager) =>
+  history.withoutUndo(function* () {
+    yield* rename("a", "b");
+  });

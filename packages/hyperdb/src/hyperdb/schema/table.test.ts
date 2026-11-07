@@ -105,20 +105,14 @@ describe("defineTable", () => {
         ),
       );
       assertType(
-        tasksTable.index(
-          "badHash",
-          // @ts-expect-error hash indexes must use exactly one column
-          ["projectId", "state"],
-          { type: "hash" },
-        ),
+        // @ts-expect-error hash indexes must use exactly one column
+        tasksTable.index("badHash", ["projectId", "state"], { type: "hash" }),
       );
       assertType(
-        tasksTable.index(
-          "badUniqHash",
-          // @ts-expect-error uniqhash indexes must use exactly one column
-          ["projectId", "state"],
-          { type: "uniqhash" },
-        ),
+        // @ts-expect-error uniqhash indexes must use exactly one column
+        tasksTable.index("badUniqHash", ["projectId", "state"], {
+          type: "uniqhash",
+        }),
       );
     }
   });
@@ -317,8 +311,8 @@ describe("defineTable", () => {
         ),
       );
       assertType(
-        // @ts-expect-error title indexes take title values, not numbers
         selectFrom(documentsTable, "byPostTitle").where((q) =>
+          // @ts-expect-error title indexes take title values, not numbers
           q.eq("title", 1),
         ),
       );

@@ -23,6 +23,7 @@ function normalizeWasmUrl(url: string): string {
 
 export type InspectableSqlDatabase = {
   exec(sql: string, params?: SqlValue[]): { values: SqlValue[][] }[];
+  run(sql: string, params?: SqlValue[]): unknown;
   prepare(sql: string): {
     bind(values?: SqlValue[]): boolean;
     step(): boolean;

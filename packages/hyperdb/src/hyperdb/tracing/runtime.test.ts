@@ -36,7 +36,11 @@ type Task = {
 };
 
 class FakeAsyncDriverTx implements DBDriverTX {
-  constructor(private readonly tx: DBDriverTX) {}
+  private readonly tx: DBDriverTX;
+
+  constructor(tx: DBDriverTX) {
+    this.tx = tx;
+  }
 
   *commit() {
     yield* unwrap(Promise.resolve());
