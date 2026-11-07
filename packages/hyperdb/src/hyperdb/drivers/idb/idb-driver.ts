@@ -29,6 +29,11 @@ import {
   getSqliteIndexSortKeyValue,
 } from "../sqlite/sqlite-common";
 import { encodeSqliteSortKeyTuple } from "../sqlite/sqlite-sort-key";
+import {
+  DuplicateIdError,
+  HyperDBError,
+  isHyperDBError,
+} from "../../core/errors";
 
 type NativeStoredRecord = {
   id: string;
@@ -187,6 +192,39 @@ function staleConnectionError(event: IDBVersionChangeEvent): Error {
   );
 }
 
+// A failed add() aborts the transaction. Before it does, check whether the id
+// already exists so a primary-key collision surfaces as DuplicateIdError;
+// unique-index violations keep their native error. The transaction is then
+// aborted explicitly, as the browser would have done.
+function addRecord(
+  tx: IDBTransaction,
+  store: IDBObjectStore,
+  id: string,
+  record: unknown,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = store.add(record);
+    request.onsuccess = () => resolve();
+    request.onerror = (event) => {
+      const error = request.error ?? new Error("IDB request failed");
+      if (error.name !== "ConstraintError") {
+        reject(error);
+        return;
+      }
+      event.preventDefault();
+      const lookup = store.getKey(id);
+      lookup.onsuccess = () => {
+        reject(lookup.result === undefined ? error : new DuplicateIdError(id));
+        abortQuietly(tx);
+      };
+      lookup.onerror = () => {
+        reject(error);
+        abortQuietly(tx);
+      };
+    };
+  });
+}
+
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -216,11 +254,16 @@ function readAllWithCursor<T>(source: IDBObjectStore): Promise<T[]> {
 }
 
 function txDone(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
+  const done = new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
     tx.onabort = () => reject(tx.error ?? new Error("IDB transaction aborted"));
     tx.onerror = () => reject(tx.error ?? new Error("IDB transaction failed"));
   });
+  // commit()/rollback() await this later. A handler that catches a failed
+  // request keeps running while the transaction aborts, so the rejection can
+  // land before anyone awaits it; don't report that as unhandled.
+  done.catch(() => {});
+  return done;
 }
 
 function abortQuietly(tx: IDBTransaction): void {
@@ -284,7 +327,7 @@ function validateBatchIds(values: Row[]): void {
       throw new Error("Inserted records must have a string id");
     }
     if (seen.has(value.id)) {
-      throw new Error(`Record with duplicate id already exists: ${value.id}`);
+      throw new DuplicateIdError(value.id);
     }
     seen.add(value.id);
   }
@@ -348,7 +391,8 @@ function createSortKeyRanges(
   clauses: WhereClause[],
 ): MaybeKeyRange[] {
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const filterColumns = indexDef.cols.map(String);
   const sortColumns =
@@ -757,7 +801,7 @@ async function performInsert(
 
     const store = tx.objectStore(tableStoreName(tableDef.tableName));
     const requests = values.map((value) =>
-      requestToPromise(store.add(createNativeRecord(tableDef, value))),
+      addRecord(tx, store, value.id, createNativeRecord(tableDef, value)),
     );
     await Promise.all(requests);
     emitIdbDebug(debug, "insert", startedAt, {
@@ -877,7 +921,10 @@ async function performScan(
   debug?: IdbDriverDebug,
 ): Promise<Row[]> {
   const tableDef = tableDefinitions.get(tableName);
-  if (!tableDef) throw new Error(`Table ${tableName} not found`);
+  if (!tableDef)
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
+  if (!tableDef.indexes[indexName])
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const startedAt = debug ? nowMs() : 0;
   if (selectOptions.limit !== undefined && selectOptions.limit <= 0) {
@@ -917,7 +964,15 @@ async function performScan(
     if (isPrimaryKeyBackedIndex(tableDef, indexName)) {
       const ids = new Set<string>();
       for (const clause of clauses) {
-        for (const condition of clause.eq ?? []) {
+        // Like the other drivers, a hash index only answers id equality;
+        // without this a range or full scan silently returned no rows.
+        const eq = exactIdConditions(clause);
+        if (!eq) {
+          throw new Error(
+            `Hash index should have equality conditions for columns 'id' and index name '${indexName}': ${JSON.stringify(clause)}`,
+          );
+        }
+        for (const condition of eq) {
           if (condition.col !== "id" || typeof condition.val !== "string") {
             throw new Error(
               `Primary-key index ${indexName} requires string IDs`,
@@ -1003,8 +1058,34 @@ async function performScan(
         error,
       );
     }
+    // Keep coded errors (such as INDEX_NOT_FOUND) matchable.
+    if (isHyperDBError(error)) throw error;
     throw new Error(`Scan failed for index ${indexName}: ${error}`);
   }
+}
+
+// The equality conditions of a hash-index clause, or undefined if it asks for
+// a range. Matching inclusive bounds (gte === lte) are an exact lookup too.
+function exactIdConditions(
+  clause: WhereClause,
+): { col: string; val: unknown }[] | undefined {
+  const nonEmpty = (conditions: unknown[] | undefined) =>
+    conditions !== undefined && conditions.length > 0;
+  if (nonEmpty(clause.gt) || nonEmpty(clause.lt)) return undefined;
+
+  const eq = clause.eq ?? [];
+  const { gte, lte } = clause;
+  if (!nonEmpty(gte) && !nonEmpty(lte)) return eq.length > 0 ? eq : undefined;
+  if (
+    eq.length === 0 &&
+    gte?.length === 1 &&
+    lte?.length === 1 &&
+    gte[0]!.col === lte[0]!.col &&
+    Object.is(gte[0]!.val, lte[0]!.val)
+  ) {
+    return [gte[0]!];
+  }
+  return undefined;
 }
 
 class IdbDriverTx implements DBDriverTX {
@@ -1179,13 +1260,17 @@ class IdbDriverTx implements DBDriverTX {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 
   private throwIfDone(): void {
     if (this.committed || this.rolledback) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
   }
 
@@ -1244,15 +1329,24 @@ class IdbDriverReadonlyTx implements DBDriverTX {
   }
 
   *insert(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *upsert(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *delete(): Generator<DBCmd, void> {
-    throw new Error("Cannot write through a readonly transaction");
+    throw new HyperDBError(
+      "READONLY_TRANSACTION",
+      "Cannot write through a readonly transaction",
+    );
   }
 
   *intervalScan(
@@ -1307,7 +1401,10 @@ class IdbDriverReadonlyTx implements DBDriverTX {
     traceContext: DBDriverTraceContext | undefined,
   ): Promise<ActiveReadonlyTransaction> {
     if (this.closed) {
-      throw new Error("Transaction already finished");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Transaction already finished",
+      );
     }
     if (this.active && !this.active.finished) {
       return this.active;
@@ -1823,7 +1920,8 @@ export class IdbDriver implements DBDriver {
 
   private getTableDefinition(tableName: string): TableDefinition {
     const tableDef = this.tableDefinitions.get(tableName);
-    if (!tableDef) throw new Error(`Table ${tableName} not found`);
+    if (!tableDef)
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     return tableDef;
   }
 

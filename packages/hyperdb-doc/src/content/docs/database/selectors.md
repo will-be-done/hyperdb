@@ -166,6 +166,9 @@ Both apply a `limit(1)` internally, so they stop after the first match.
 Selectors call other selectors with `yield*`, which lets you build larger reads
 from smaller ones. The runtime tracks the index ranges scanned across the whole
 tree, so a composed selector stays just as precisely reactive as its parts.
+Selector handlers can yield reads only: writing or calling an action from a
+selector is a type error. To annotate a reusable read helper, return
+`SelectorGenerator<T>` (see [typing reusable helpers](/database/actions/#typing-reusable-helpers)).
 
 ```ts
 import { selectFrom, v } from "@will-be-done/hyperdb";

@@ -56,13 +56,14 @@
     "access": "public"
   },
   "scripts": {
-    "analyze": "ANALYZE=true vite build && tsc",
-    "build": "vite build && tsc",
+    "analyze": "ANALYZE=true vite build && tsc && node scripts/check-public-types.mjs",
+    "build": "vite build && tsc && node scripts/check-public-types.mjs",
+    "check:public-types": "node scripts/check-public-types.mjs",
     "lint": "eslint .",
     "lint:cycles": "depcruise src --config .dependency-cruiser.cjs",
     "bench": "vitest bench",
     "prepack": "pnpm run build",
-    "ts": "tsc",
+    "ts": "tsc && tsc -p tsconfig.eslint.json",
     "test": "vitest run"
   },
   "peerDependencies": {
@@ -92,5 +93,8 @@
     "typescript-eslint": "^8.48.0",
     "vite": "^8.0.12",
     "vitest": "4.1.5"
+  },
+  "dependencies": {
+    "neverthrow": "^8.2.0"
   }
 }

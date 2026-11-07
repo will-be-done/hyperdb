@@ -1,7 +1,11 @@
 import { isNoopCmd, isUnwrapCmd, type DBCmd } from "../commands/async";
+import { HyperDBError } from "./errors";
 
 function unexpectedCmdError(cmd: unknown): Error {
-  return new Error(`Unexpected DBCmd yielded: ${String(cmd)}`);
+  return new HyperDBError(
+    "UNSUPPORTED_COMMAND",
+    `Unexpected DBCmd yielded: ${String(cmd)}`,
+  );
 }
 
 const isPromiseLike = <T>(value: unknown): value is PromiseLike<T> => {
@@ -20,7 +24,18 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
-      throw new Error("Cannot execute async commands");
+      // The promise is abandoned here; observe it so a later rejection (for
+      // example an async rollback) is not reported as unhandled.
+      const data = result.value.data;
+      if (isPromiseLike(data)) data.then(undefined, () => {});
+      // Throw into the generator so its finally blocks (such as a transaction
+      // rollback) still run before the error reaches the caller.
+      result = cmd.throw(
+        new HyperDBError(
+          "ASYNC_IN_SYNC_EXECUTION",
+          "Cannot execute async commands",
+        ),
+      );
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();
     } else {

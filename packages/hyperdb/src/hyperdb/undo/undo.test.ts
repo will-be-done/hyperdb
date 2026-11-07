@@ -95,7 +95,7 @@ describe("undo middleware", () => {
 
       const replay = history[direction]();
       expect(replay.next().done).toBe(false);
-      expect(replay.return(undefined).done).toBe(true);
+      expect(replay.return(undefined as never).done).toBe(true);
       expect(rows()).toEqual(before);
       expect(history.undoLevels).toBe(undoLevels);
       expect(history.redoLevels).toBe(redoLevels);
@@ -136,7 +136,7 @@ describe("undo middleware", () => {
 
       const replay = history[direction]();
       expect(replay.next().done).toBe(false);
-      const closing = replay.return(undefined);
+      const closing = replay.return(undefined as never);
       expect(closing.done).toBe(false);
       if (closing.done || !isUnwrapCmd(closing.value))
         throw new Error("Expected async rollback");
@@ -423,6 +423,7 @@ describe("undo middleware", () => {
     const selector = createSelector()({
       name: "invalidUndoSelector",
       args: {},
+      // @ts-expect-error selectors cannot write; the runtime guard is tested too
       handler: function* () {
         yield* withoutUndo(function* () {
           yield* insert(items, [{ id: "a", value: 1 }]);

@@ -58,7 +58,8 @@ export interface HyperDB {
     table: TTable,
     ids: string[],
   ): Generator<DBCmd, void>;
-  withTraits(...trait: Trait[]): HyperDB;
+  // Generic so trait literals may carry extra fields next to `type`.
+  withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB;
   getTraits(): Trait[];
   getId(): string;
   getDBName?(): string | undefined;
@@ -68,6 +69,18 @@ export interface HyperDB {
 
   beginTx(mode?: DBTransactionMode): Generator<DBCmd, HyperDBTx>;
   waitForPersistence?(): Generator<DBCmd, void>;
+  /**
+   * Flushes pending persistence, releases driver resources, and unregisters
+   * the DB from devtools discovery. Later operations throw `DB_CLOSED`.
+   */
+  close?(): Generator<DBCmd, void>;
+  /** True once close() has started; the runtime no longer serves operations. */
+  readonly isClosed?: boolean;
+  /**
+   * The in-memory cache of a hybrid runtime, if any. Selector preloading primes
+   * its results there so later cached reads start warm.
+   */
+  getCacheDB?(): HyperDB | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
   preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(

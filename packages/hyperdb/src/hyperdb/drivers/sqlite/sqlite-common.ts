@@ -20,6 +20,7 @@ import {
   encodeSqliteSortKeyTuple,
   getSqliteSortKeyTuple,
 } from "./sqlite-sort-key";
+import { HyperDBError } from "../../core/errors";
 
 export type SqlValue = number | string | Uint8Array | null;
 export type BindParams = SqlValue[] | null;
@@ -49,6 +50,28 @@ export function getSqliteInsertChunkSize(tableDef: TableDefinition): number {
 
 export function getSqliteDeleteChunkSize(): number {
   return SQL_BIND_PARAM_LIMIT;
+}
+
+export const SQLITE_WRITE_SAVEPOINT = "hyperdb_write";
+
+/**
+ * Whether a transactional write needs a savepoint to apply all-or-nothing.
+ * One SQLite statement is already atomic; upserts (delete + insert) and
+ * writes split into several chunks are not. A handler may catch a failed
+ * write and keep going, so a half-applied write must not reach commit.
+ */
+export function sqliteWriteNeedsSavepoint(
+  kind: "insert" | "upsert" | "delete",
+  tableDef: TableDefinition,
+  count: number,
+): boolean {
+  if (count === 0) return false;
+  if (kind === "upsert") return true;
+  const chunkSize =
+    kind === "insert"
+      ? getSqliteInsertChunkSize(tableDef)
+      : getSqliteDeleteChunkSize();
+  return count > chunkSize;
 }
 
 function isSchemalessTable(tableDef: TableDefinition): boolean {
@@ -127,6 +150,52 @@ export function isMissingSqliteSchemaMetadataError(error: unknown): boolean {
   );
 }
 
+/** Why the schema metadata could not be read. */
+export type SqliteSchemaMetadataReadError =
+  | { kind: "missing" }
+  | { kind: "failed"; cause: unknown };
+
+export function toSqliteSchemaMetadataReadError(
+  cause: unknown,
+): SqliteSchemaMetadataReadError {
+  return isMissingSqliteSchemaMetadataError(cause)
+    ? { kind: "missing" }
+    : { kind: "failed", cause };
+}
+
+/**
+ * True when stored metadata rows (`table_name, signature,
+ * verified_schema_version, schema_version`) prove every table is current, so
+ * schema reconciliation can be skipped.
+ */
+export function sqliteSchemaMetadataMatches(
+  tableDefinitions: TableDefinition[],
+  rows: SqlValue[][],
+): boolean {
+  const schemaVersion = Number(rows[0]?.[3]);
+  if (!Number.isInteger(schemaVersion)) return false;
+
+  const metadataByTable = new Map(
+    rows
+      .filter((row) => typeof row[0] === "string")
+      .map((row) => [
+        String(row[0]),
+        {
+          signature: String(row[1]),
+          verifiedSchemaVersion: Number(row[2]),
+        },
+      ]),
+  );
+
+  return tableDefinitions.every((tableDef) => {
+    const metadata = metadataByTable.get(tableDef.tableName);
+    return (
+      metadata?.signature === createSqliteTableSchemaSignature(tableDef) &&
+      metadata.verifiedSchemaVersion === schemaVersion
+    );
+  });
+}
+
 export function sqliteIndexSortKeyColumn(indexName: string): string {
   assertSafeIdentifier("Index name", indexName);
   const columnName = `idx_${indexName}${SQLITE_SORT_KEY_SUFFIX}`;
@@ -160,7 +229,8 @@ export function getSqliteIndexSortKeyValue(
   row: Row,
 ): Uint8Array | null {
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
 
   const physicalIndex =
     getPersistentIndexPlan(tableDef).byLogicalName.get(indexName);
@@ -229,6 +299,7 @@ function validateHashBounds(
 
     if (
       !bound.lte ||
+      !bound.gte ||
       bound.lte.length !== indexColumns.length ||
       bound.gte.length !== indexColumns.length
     ) {
@@ -290,11 +361,12 @@ export function buildSortKeyWhereClause(
 ): { where: string; params: any[] } {
   const tableDef = tableDefinitions.get(tableName);
   if (!tableDef) {
-    throw new Error(`Table ${tableName} not found`);
+    throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
   }
 
   const indexDef = tableDef.indexes[indexName];
-  if (!indexDef) throw new Error(`Index ${indexName} not found`);
+  if (!indexDef)
+    throw new HyperDBError("INDEX_NOT_FOUND", `Index ${indexName} not found`);
   const filterColumns = indexDef.cols.map(String);
   const rawBounds = convertWhereToBound(filterColumns, clauses);
 

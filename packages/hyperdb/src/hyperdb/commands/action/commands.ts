@@ -1,5 +1,6 @@
 import type { Row, Trait } from "../../core/primitives";
 import type { TableDefinition } from "../../schema/table";
+import { isCommandOfType, type CommandBrand } from "../brand";
 
 export const insertType = "insert";
 export const upsertType = "upsert";
@@ -7,50 +8,46 @@ export const deleteType = "delete";
 export const getCurrentTraitsType = "getCurrentTraits";
 export const runWithTraitsType = "runWithTraits";
 
-export type RunWithTraitsCmd = {
+export type RunWithTraitsCmd = CommandBrand & {
   type: typeof runWithTraitsType;
   traits: Trait[];
   body: Generator<unknown, unknown, unknown>;
 };
 
-export type InsertActionCmd = {
+export type InsertActionCmd = CommandBrand & {
   type: typeof insertType;
   table: TableDefinition;
   values: Row[];
 };
 
-export type UpsertActionCmd = {
+export type UpsertActionCmd = CommandBrand & {
   type: typeof upsertType;
   table: TableDefinition;
   values: Row[];
 };
 
-export type DeleteActionCmd = {
+export type DeleteActionCmd = CommandBrand & {
   type: typeof deleteType;
   table: TableDefinition;
   values: string[];
 };
 
-export type GetCurrentTraitsCmd = {
+export type GetCurrentTraitsCmd = CommandBrand & {
   type: typeof getCurrentTraitsType;
 };
 
-const isCmdObject = (cmd: unknown): cmd is { type?: unknown } =>
-  cmd instanceof Object && cmd !== null;
-
 export const isInsertActionCmd = (cmd: unknown): cmd is InsertActionCmd =>
-  isCmdObject(cmd) && cmd.type === insertType;
+  isCommandOfType(cmd, insertType);
 
 export const isUpsertActionCmd = (cmd: unknown): cmd is UpsertActionCmd =>
-  isCmdObject(cmd) && cmd.type === upsertType;
+  isCommandOfType(cmd, upsertType);
 
 export const isDeleteActionCmd = (cmd: unknown): cmd is DeleteActionCmd =>
-  isCmdObject(cmd) && cmd.type === deleteType;
+  isCommandOfType(cmd, deleteType);
 
 export const isGetCurrentTraitsCmd = (
   cmd: unknown,
-): cmd is GetCurrentTraitsCmd =>
-  isCmdObject(cmd) && cmd.type === getCurrentTraitsType;
+): cmd is GetCurrentTraitsCmd => isCommandOfType(cmd, getCurrentTraitsType);
 
 export const isRunWithTraitsCmd = (cmd: unknown): cmd is RunWithTraitsCmd =>
-  isCmdObject(cmd) && cmd.type === runWithTraitsType;
+  isCommandOfType(cmd, runWithTraitsType);

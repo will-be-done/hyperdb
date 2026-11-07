@@ -1,7 +1,8 @@
 import type { TupleScanOptions, Value } from "../../core/primitives";
 import type { AnyTableDefinition } from "../../schema/table";
+import { isCommandOfType, type CommandBrand } from "../brand";
 
-const selectRangeType = "selectRange";
+export const selectRangeType = "selectRange";
 
 export type QueryWhereClause = {
   lt: { col: string; val: Value }[];
@@ -24,7 +25,7 @@ export type SelectQuery<
   where: QueryWhereClause[];
 };
 
-export type SelectRangeCmd = {
+export type SelectRangeCmd = CommandBrand & {
   type: typeof selectRangeType;
   table: AnyTableDefinition;
   index: string;
@@ -33,12 +34,9 @@ export type SelectRangeCmd = {
 };
 
 export const isSelectRangeCmd = (cmd: unknown): cmd is SelectRangeCmd =>
-  typeof cmd === "object" &&
-  cmd !== null &&
-  typeof (cmd as { type?: unknown }).type === "string" &&
-  (cmd as { type?: unknown }).type === selectRangeType;
+  isCommandOfType(cmd, selectRangeType);
 
-const runSelectorType = "runSelector";
+export const runSelectorType = "runSelector";
 
 export type SelectorMemoization = {
   root: boolean;
@@ -50,7 +48,7 @@ export type SelectorMemoization = {
  * run the selector body or reuse a memoized result. The body is created lazily
  * via `makeBody` so a cache hit avoids constructing the generator at all.
  */
-export type RunSelectorCmd = {
+export type RunSelectorCmd = CommandBrand & {
   type: typeof runSelectorType;
   // Identity for the memo map (the wrapped selector fn).
   selector: object;
@@ -68,6 +66,4 @@ export type RunSelectorCmd = {
 };
 
 export const isRunSelectorCmd = (cmd: unknown): cmd is RunSelectorCmd =>
-  typeof cmd === "object" &&
-  cmd !== null &&
-  (cmd as { type?: unknown }).type === runSelectorType;
+  isCommandOfType(cmd, runSelectorType);

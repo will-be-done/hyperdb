@@ -16,6 +16,7 @@ import {
   type HashIndexEntry,
   type HashIndexView,
 } from "../structures/hash-index";
+import { HyperDBError } from "../core/errors";
 
 type IndexDefinition = TableDefinition["indexes"][string];
 type IndexEntry = { key: ScanValue[]; value: string };
@@ -382,7 +383,8 @@ export class PreloadedTableIndexes {
     if (clauses.length === 0) throw new Error("scan clauses must be provided");
     const index = this.indexes.get(indexName);
     if (!index) {
-      throw new Error(
+      throw new HyperDBError(
+        "INDEX_NOT_FOUND",
         `Index not found: ${indexName} for table: ${this.table.tableName}`,
       );
     }

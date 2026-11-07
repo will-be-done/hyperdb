@@ -421,7 +421,10 @@ describe("db", async () => {
     const original = new Uint8Array([0, 1]).buffer;
     const updated = new Uint8Array([0, 3]).buffer;
 
-    db.insert(mutableBytesHashTable, [{ id: "bytes", value }]);
+    // Typed arrays are accepted at runtime and copied; the column type is ArrayBuffer.
+    db.insert(mutableBytesHashTable, [
+      { id: "bytes", value: value as unknown as ArrayBuffer },
+    ]);
     value[1] = 2;
 
     db.upsert(mutableBytesHashTable, [{ id: "bytes", value: updated }]);

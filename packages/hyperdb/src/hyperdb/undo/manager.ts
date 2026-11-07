@@ -1,4 +1,7 @@
 import type { DBCmd } from "../commands/async";
+import { HyperDBError } from "../core/errors";
+import type { ActionGenerator } from "../commands/command-types";
+import type { RunWithTraitsCmd } from "../commands/action/commands";
 import type { HyperDB, HyperDBTx } from "../core/contracts";
 import type { Row, Trait } from "../core/primitives";
 import { deepFreeze } from "../deep-freeze";
@@ -67,12 +70,15 @@ type CapturedChange = {
 type RecordedChange = UndoRowChange & { batch: object };
 type HistoryEvent = { name?: string; changes: RecordedChange[] };
 
-export class UndoConflictError extends Error {
+export class UndoConflictError extends HyperDBError {
   readonly tableName: string;
   readonly rowId: string;
 
   constructor(tableName: string, rowId: string) {
-    super(`Undo/redo conflict in table "${tableName}" for row "${rowId}"`);
+    super(
+      "UNDO_CONFLICT",
+      `Undo/redo conflict in table "${tableName}" for row "${rowId}"`,
+    );
     this.name = "UndoConflictError";
     this.tableName = tableName;
     this.rowId = rowId;
@@ -287,12 +293,18 @@ export class UndoManager {
   }
 
   withoutUndo<T>(
-    body: () => Generator<unknown, T, unknown>,
-  ): Generator<unknown, T, unknown>;
-  withoutUndo<T>(body: (db: HyperDB) => T): T;
+    body: (db: HyperDB) => ActionGenerator<T>,
+  ): Generator<RunWithTraitsCmd, T, unknown>;
+  // Generators must match the overload above; any other generator would run
+  // in the undo scope but escape its typing, so it is rejected here.
   withoutUndo<T>(
-    body: (db: HyperDB) => T | Generator<unknown, T, unknown>,
-  ): T | Generator<unknown, T, unknown> {
+    body: (
+      db: HyperDB,
+    ) => T extends Generator<unknown, unknown, unknown> ? never : T,
+  ): T;
+  withoutUndo<T>(
+    body: (db: HyperDB) => T | ActionGenerator<T>,
+  ): T | Generator<RunWithTraitsCmd, T, unknown> {
     this.assertUsable();
     const trait: UndoTrait = { type: skipUndoType, manager: this.id };
     // Generator functions and ordinary zero-argument generator factories both

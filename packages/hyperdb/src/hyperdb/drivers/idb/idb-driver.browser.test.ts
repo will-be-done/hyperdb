@@ -8,6 +8,8 @@ import { selectFrom } from "../../commands/selector/builder";
 import { createSelector, selectAsync } from "../../commands/selector/selector";
 import { execAsync } from "../../core/executor";
 import type { HyperDB } from "../../core/contracts";
+import { DuplicateIdError, isHyperDBError } from "../../core/errors";
+import type { SelectorGenerator } from "../../commands/command-types";
 import { DB } from "../../runtime/db";
 import { HybridDB } from "../../runtime/hybrid-db";
 import { BptreeInmemDriver } from "../inmemory/bptree-inmem-driver";
@@ -15,9 +17,17 @@ import { getSqliteIndexSortKeyValue } from "../sqlite/sqlite-common";
 import { defineTable } from "../../schema/table";
 import { v } from "../../schema/values";
 import {
+  logIdbDriverDebugEvent,
   openIndexedDBDriver,
   type OpenIndexedDBDriverOptions,
 } from "./idb-driver";
+
+// One-off read through a throwaway selector.
+const readOnce = <T>(db: HyperDB, handler: () => SelectorGenerator<T>) =>
+  selectAsync(db, {
+    selector: createSelector()({ name: "browserTestRead", args: {}, handler }),
+    args: {},
+  });
 
 const tasksTable = defineTable("idbTasks", {
   id: v.string(),
@@ -105,8 +115,8 @@ describe("IdbDriver", () => {
 
       const tx = rawDb.transaction("hyperdb:idbTasks", "readonly");
       const store = tx.objectStore("hyperdb:idbTasks");
+      // byId is served by the store's primary key, not a native index.
       expect(Array.from(store.indexNames).sort()).toEqual([
-        "byId",
         "byProjectRank",
         "byTitle",
       ]);
@@ -234,7 +244,7 @@ describe("IdbDriver", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     try {
-      const db = await createDB();
+      const db = await createDB({ debug: logIdbDriverDebugEvent });
       await execAsync(db.loadTables([tasksTable]));
 
       await execAsync(
@@ -290,7 +300,7 @@ describe("IdbDriver", () => {
     });
 
     try {
-      const db = await createDB();
+      const db = await createDB({ debug: logIdbDriverDebugEvent });
       await execAsync(db.loadTables([tasksTable]));
       await execAsync(
         db.insert(tasksTable, [
@@ -333,7 +343,7 @@ describe("IdbDriver", () => {
     });
 
     try {
-      const db = await createDB();
+      const db = await createDB({ debug: logIdbDriverDebugEvent });
       await execAsync(db.loadTables([tasksTable]));
 
       await asyncDispatch(db, createIdbTask({}));
@@ -449,19 +459,16 @@ describe("IdbDriver", () => {
       });
 
     try {
-      const result = await selectAsync(
-        db,
-        (function* () {
-          const byProject = yield* selectFrom(tasksTable, "byProjectRank")
-            .where((q) => q.eq("projectId", "project-1"))
-            .order("asc");
-          const byTitle = yield* selectFrom(tasksTable, "byTitle").where((q) =>
-            q.eq("title", "Second"),
-          );
+      const result = await readOnce(db, function* () {
+        const byProject = yield* selectFrom(tasksTable, "byProjectRank")
+          .where((q) => q.eq("projectId", "project-1"))
+          .order("asc");
+        const byTitle = yield* selectFrom(tasksTable, "byTitle").where((q) =>
+          q.eq("title", "Second"),
+        );
 
-          return { byProject, byTitle };
-        })(),
-      );
+        return { byProject, byTitle };
+      });
 
       expect(result.byProject.map((row) => row.id)).toEqual([
         "task-1",
@@ -481,7 +488,7 @@ describe("IdbDriver", () => {
   });
 
   it("retries and logs when a scoped readonly transaction is no longer active", async () => {
-    const db = await createDB();
+    const db = await createDB({ debug: logIdbDriverDebugEvent });
     await execAsync(db.loadTables([tasksTable]));
     await execAsync(
       db.insert(tasksTable, [
@@ -517,14 +524,11 @@ describe("IdbDriver", () => {
       }
 
       await expect(
-        selectAsync(
-          db,
-          (function* () {
-            return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
-              q.eq("projectId", "project-1"),
-            );
-          })(),
-        ),
+        readOnce(db, function* () {
+          return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+            q.eq("projectId", "project-1"),
+          );
+        }),
       ).resolves.toEqual([
         {
           id: "task-1",
@@ -588,14 +592,11 @@ describe("IdbDriver", () => {
         });
 
         await expect(
-          selectAsync(
-            db,
-            (function* () {
-              return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
-                q.eq("projectId", "project-1"),
-              );
-            })(),
-          ),
+          readOnce(db, function* () {
+            return yield* selectFrom(tasksTable, "byProjectRank").where((q) =>
+              q.eq("projectId", "project-1"),
+            );
+          }),
         ).resolves.toEqual([
           {
             id: "task-1",
@@ -743,9 +744,16 @@ describe("IdbDriver", () => {
     }
   });
 
-  it("uses the table object store directly for full id-index scans", async () => {
+  it("scans a full B-tree id index in id order", async () => {
+    // Full scans need a B-tree over id; byId is an exact-match uniqhash.
+    const scannableTasksTable = defineTable("idbScannableTasks", {
+      id: v.string(),
+      title: v.string(),
+      projectId: v.string(),
+      rank: v.number(),
+    }).index("byIds", ["id"]);
     const db = await createDB();
-    await execAsync(db.loadTables([tasksTable]));
+    await execAsync(db.loadTables([scannableTasksTable]));
 
     const first = {
       id: "task-1",
@@ -759,30 +767,11 @@ describe("IdbDriver", () => {
       projectId: "project-1",
       rank: 1,
     };
-    await execAsync(db.insert(tasksTable, [second, first]));
+    await execAsync(db.insert(scannableTasksTable, [second, first]));
 
-    const storeGetAllRecordsSpy = spyOnGetAllRecords(IDBObjectStore.prototype);
-    const storeGetAllSpy = vi.spyOn(IDBObjectStore.prototype, "getAll");
-    const indexGetAllRecordsSpy = spyOnGetAllRecords(IDBIndex.prototype);
-    const indexGetAllSpy = vi.spyOn(IDBIndex.prototype, "getAll");
-
-    try {
-      await expect(
-        execAsync(db.intervalScan(tasksTable, "byId", [{}])),
-      ).resolves.toEqual([first, second]);
-
-      expect(
-        (storeGetAllRecordsSpy?.mock.calls.length ?? 0) +
-          storeGetAllSpy.mock.calls.length,
-      ).toBeGreaterThan(0);
-      expect(indexGetAllRecordsSpy?.mock.calls.length ?? 0).toBe(0);
-      expect(indexGetAllSpy).not.toHaveBeenCalled();
-    } finally {
-      storeGetAllRecordsSpy?.mockRestore();
-      storeGetAllSpy.mockRestore();
-      indexGetAllRecordsSpy?.mockRestore();
-      indexGetAllSpy.mockRestore();
-    }
+    await expect(
+      execAsync(db.intervalScan(scannableTasksTable, "byIds", [{}])),
+    ).resolves.toEqual([first, second]);
   });
 
   it("uses primary-key get for exact id-index scans", async () => {
@@ -857,6 +846,69 @@ describe("IdbDriver", () => {
         db.intervalScan(tasksTable, "byId", [{ eq: [{ col: "id", val: 1 }] }]),
       ),
     ).rejects.toThrow("Primary-key index byId requires string IDs");
+    await expect(
+      execAsync(db.intervalScan(tasksTable, "byId", [{}])),
+    ).rejects.toThrow("Hash index should have equality conditions");
+    // DB.intervalScan rejects contradictory clauses itself, so hit the driver.
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [
+            {
+              eq: [{ col: "id", val: "task-1" }],
+              gt: [{ col: "id", val: "task-1" }],
+            },
+          ],
+          {},
+        ),
+      ),
+    ).rejects.toThrow("Hash index should have equality conditions");
+    // Matching inclusive bounds are an exact lookup.
+    await expect(
+      execAsync(
+        db.driver.intervalScan(
+          tasksTable.tableName,
+          "byId",
+          [
+            {
+              gte: [{ col: "id", val: "task-1" }],
+              lte: [{ col: "id", val: "task-1" }],
+            },
+          ],
+          {},
+        ),
+      ),
+    ).resolves.toEqual([task]);
+    await expect(
+      execAsync(
+        db.driver.intervalScan(tasksTable.tableName, "missing", [{}], {}),
+      ),
+    ).rejects.toSatisfy((error) => isHyperDBError(error, "INDEX_NOT_FOUND"));
+  });
+
+  it("reports duplicate ids as DuplicateIdError and keeps unique-index errors", async () => {
+    const usersTable = defineTable("idbUniqueUsers", {
+      id: v.string(),
+      email: v.string(),
+    }).index("byEmail", ["email"], { type: "uniqhash" });
+    const db = await createDB();
+    await execAsync(db.loadTables([usersTable]));
+    await execAsync(db.insert(usersTable, [{ id: "a", email: "a@x" }]));
+
+    await expect(
+      execAsync(db.insert(usersTable, [{ id: "a", email: "other@x" }])),
+    ).rejects.toBeInstanceOf(DuplicateIdError);
+
+    let caught: unknown;
+    try {
+      await execAsync(db.insert(usersTable, [{ id: "b", email: "a@x" }]));
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toBeInstanceOf(DuplicateIdError);
+    expect((caught as Error).name).toBe("ConstraintError");
   });
 
   it("rolls back duplicate insert batches without stale index entries", async () => {
@@ -930,9 +982,9 @@ describe("IdbDriver", () => {
     const db = new DB(driver);
     await execAsync(db.loadTables([tasksTable]));
 
-    expect(await execAsync(db.intervalScan(tasksTable, "byId", [{}]))).toEqual(
-      [],
-    );
+    expect(
+      await execAsync(db.intervalScan(tasksTable, "byProjectRank", [{}])),
+    ).toEqual([]);
     driver.close();
 
     const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {

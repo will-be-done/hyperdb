@@ -760,7 +760,8 @@ describe("createCachedSelectorStoreAsync", () => {
         args: {},
       },
       {
-        runCachedSelectorMaybeAsync: cachedRunner,
+        // A plain mock stands in for the generic runner.
+        runCachedSelectorMaybeAsync: cachedRunner as never,
       },
     );
 
@@ -797,7 +798,8 @@ describe("createCachedSelectorStoreAsync", () => {
         args: {},
       },
       {
-        selectMaybeAsync: uncachedRunner,
+        // A plain mock stands in for the generic runner.
+        selectMaybeAsync: uncachedRunner as never,
       },
     );
 

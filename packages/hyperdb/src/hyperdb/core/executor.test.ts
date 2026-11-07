@@ -24,10 +24,48 @@ describe("executor", () => {
     rejection.catch(() => undefined);
 
     function* command(): Generator<DBCmd, void> {
-      yield { type: "unwrap", data: rejection } as DBCmd;
+      yield* unwrap(rejection);
     }
 
     expect(() => execSync(command())).toThrow("Cannot execute async commands");
+  });
+
+  it("rejects look-alike commands without the brand", () => {
+    function* command(): Generator<DBCmd, void> {
+      yield { type: "noop" } as unknown as DBCmd;
+    }
+
+    expect(() => execSync(command())).toThrow(/Unexpected DBCmd yielded/);
+  });
+
+  it("throws async commands back into generators in execSync so cleanup runs", () => {
+    const steps: string[] = [];
+
+    function* command(): Generator<DBCmd, void, unknown> {
+      try {
+        yield* unwrap(Promise.resolve("never awaited"));
+        steps.push("continued");
+      } finally {
+        steps.push("cleaned up");
+        yield* noop();
+      }
+    }
+
+    expect(() => execSync(command())).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(steps).toEqual(["cleaned up"]);
+  });
+
+  it("observes the promise execSync abandons so its rejection is handled", async () => {
+    function* command(): Generator<DBCmd, void, unknown> {
+      // No manual .catch(): execSync must observe it, or Vitest reports an
+      // unhandled rejection once the promise rejects.
+      yield* unwrap(Promise.reject(new Error("late cleanup failure")));
+    }
+
+    expect(() => execSync(command())).toThrow("Cannot execute async commands");
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
   it("propagates errors rejected by async unwrap commands", async () => {

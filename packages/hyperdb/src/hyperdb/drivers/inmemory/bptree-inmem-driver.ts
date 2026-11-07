@@ -19,6 +19,7 @@ import {
   hashIndexKey,
   type HashIndexEntry,
 } from "../../structures/hash-index";
+import { HyperDBError, DuplicateIdError } from "../../core/errors";
 
 type TableData = {
   tableDef: TableDefinition;
@@ -294,7 +295,7 @@ function validateRecordIds(
       throw new Error("Inserted records must have a string id");
     }
     if (ids.has(value.id)) {
-      throw new Error(`Record with duplicate id already exists: ${value.id}`);
+      throw new DuplicateIdError(value.id);
     }
     ids.add(value.id);
   }
@@ -307,7 +308,7 @@ function validateRecordIds(
   );
   const existingId = existing[0]?.id;
   if (existingId !== undefined) {
-    throw new Error(`Record with duplicate id already exists: ${existingId}`);
+    throw new DuplicateIdError(existingId);
   }
 }
 
@@ -743,11 +744,17 @@ export class BptreeInmemDriverTx implements DBDriverTX {
 
   throwIfDone() {
     if (this.committed) {
-      throw new Error("Cannot modify a committed tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a committed tx",
+      );
     }
 
     if (this.rollbacked) {
-      throw new Error("Cannot modify a rollbacked tx");
+      throw new HyperDBError(
+        "TRANSACTION_FINISHED",
+        "Cannot modify a rollbacked tx",
+      );
     }
   }
 
@@ -759,7 +766,7 @@ export class BptreeInmemDriverTx implements DBDriverTX {
 
     const noTxTableData = this.original.tblDatas.get(tableName);
     if (!noTxTableData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     const indexes = new Map<string, IndexTx>();
@@ -879,6 +886,10 @@ export class BptreeInmemDriver implements DBDriver {
     }
   }
 
+  close(): void {
+    this.tblDatas.clear();
+  }
+
   *scanAll(tableName: string): Generator<DBCmd, Row[]> {
     if (this.isInTransaction) {
       throw new Error("can't run while transaction is in progress");
@@ -886,7 +897,7 @@ export class BptreeInmemDriver implements DBDriver {
 
     const tableData = this.tblDatas.get(tableName);
     if (!tableData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     return tableData.idIndex.values();
@@ -899,7 +910,7 @@ export class BptreeInmemDriver implements DBDriver {
 
     const tblData = this.tblDatas.get(tableName);
     if (!tblData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     performUpsert(tblData, values);
@@ -912,7 +923,7 @@ export class BptreeInmemDriver implements DBDriver {
 
     const tblData = this.tblDatas.get(tableName);
     if (!tblData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     performInsert(tblData, values);
@@ -925,7 +936,7 @@ export class BptreeInmemDriver implements DBDriver {
 
     const tblData = this.tblDatas.get(tableName);
     if (!tblData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     performDelete(tblData, ids);
@@ -939,7 +950,7 @@ export class BptreeInmemDriver implements DBDriver {
   ): Generator<DBCmd, Row[]> {
     const tableData = this.tblDatas.get(tableName);
     if (!tableData) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new HyperDBError("TABLE_NOT_FOUND", `Table ${tableName} not found`);
     }
 
     return performScan(tableData, indexName, clauses, selectOptions);

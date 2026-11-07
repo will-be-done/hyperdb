@@ -37,6 +37,11 @@ All built-in drivers support the bulk table read used by
 `PreloadedHybridDB.loadTables`. This path does not require a user-declared
 full-scan index.
 
+Drivers may implement an optional synchronous `close()` to release resources
+they own. A runtime's [`close()`](/runtime/db/#closing-a-runtime) calls it after
+pending persistence has settled. A custom driver that wraps a caller-owned
+handle should leave that handle open.
+
 ## In-memory
 
 The simplest driver: a set of in-memory B+trees. Construct it with no arguments.

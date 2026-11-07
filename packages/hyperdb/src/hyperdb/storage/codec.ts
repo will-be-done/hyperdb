@@ -1,4 +1,5 @@
 import type { Row } from "../core/primitives";
+import { ValidationError } from "../core/errors";
 import type { TableDefinition } from "../schema/table";
 import {
   formatPath,
@@ -194,14 +195,16 @@ function assertRecordResult<T>(
   result: NormalizeResult<T>,
 ): T {
   if (isNormalizeFailure(result)) {
-    throw new Error(
+    throw new ValidationError(
       `${errorPrefix(table, original)}: ${result.message} at ${formatPath(
         result.path,
       )}`,
     );
   }
   if (isNormalizeOmitted(result)) {
-    throw new Error(`${errorPrefix(table, original)}: record was omitted`);
+    throw new ValidationError(
+      `${errorPrefix(table, original)}: record was omitted`,
+    );
   }
   return result.value;
 }
@@ -212,7 +215,7 @@ function assertStringId(
   value: unknown,
 ) {
   if (!isPlainObject(value) || typeof value.id !== "string") {
-    throw new Error(
+    throw new ValidationError(
       `${errorPrefix(table, original)}: id must be a string at id`,
     );
   }

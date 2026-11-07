@@ -68,11 +68,15 @@ import {
   createCachedSelectorStoreSync,
   defineTable,
   deleteRows,
+  dispatchMaybeAsync,
+  DuplicateIdError,
   execAsync,
   execMaybeAsync,
   execSync,
   getCurrentTraits,
+  HyperDBError,
   insert,
+  isHyperDBError,
   or,
   preloadSelectorAsync,
   selectAsync,
@@ -82,8 +86,12 @@ import {
   syncDispatch,
   upsert,
   v,
+  ValidationError,
+  type ActionGenerator,
   type ExtractSchema,
   type HyperDB,
+  type HyperDBErrorCode,
+  type SelectorGenerator,
 } from "@will-be-done/hyperdb";
 ```
 
@@ -255,8 +263,38 @@ await asyncDispatch(
 
 Use `await asyncDispatch(db, action(...))` for HybridDB and other asynchronous
 drivers. Use `syncDispatch(db, action(...))` only for synchronous drivers.
-`insert` fails on duplicate ids, `upsert` replaces whole rows by id, and
-`deleteRows` deletes by id.
+`dispatchMaybeAsync(db, action(...))` returns the result directly when nothing
+had to wait and a promise otherwise. `insert` fails on duplicate ids, `upsert`
+replaces whole rows by id, and `deleteRows` deletes by id.
+
+## Errors And Closing
+
+A failed read or write raises its error at the handler's `yield*`, so
+`try` / `catch` / `finally` work in actions and selectors; uncaught errors roll
+the transaction back. Failed writes leave no partial effect, so catching (for
+example a `DuplicateIdError`, then `upsert`) and continuing is safe, except on a
+bare IndexedDB driver, where a failed request aborts the whole transaction and
+the dispatch rejects anyway. A failing mutation hook also blocks the commit,
+even if the handler catches its error. Selectors never write, even inside an
+action.
+
+Runtime errors extend `HyperDBError` with a stable `code` (definition mistakes,
+such as a blank action name or conflicting query conditions, throw plain
+`Error`); match on the code,
+not the message. `isHyperDBError(error, "DUPLICATE_ID")` narrows and works
+across duplicate package copies. Subclasses: `DuplicateIdError` (`id`),
+`ValidationError`, `HybridDBCrashedError`, and `UndoConflictError`. Other codes:
+`WRITES_DISALLOWED`, `TRANSACTION_FINISHED`, `READONLY_TRANSACTION`,
+`TABLE_NOT_FOUND`, `INDEX_NOT_FOUND`, `ASYNC_IN_SYNC_EXECUTION`,
+`UNSUPPORTED_COMMAND`, `PERSISTENCE_QUEUE_FULL`, and `DB_CLOSED`. HyperDB does
+not log errors it throws.
+
+`await execAsync(db.close())` (or `execSync` for sync runtimes) flushes hybrid
+persistence, closes wrapped databases and driver-owned resources, clears
+`SubscribableDB` subscribers, and unregisters the DB from devtools. Caller-owned
+SQLite handles stay open. Hybrid runtimes refuse new commits as soon as
+`close()` starts and wait for accepted ones. Later operations, including cached
+selector reads, throw `DB_CLOSED`; a failed `close()` can be retried.
 
 ## Undo And Redo
 
@@ -408,8 +446,9 @@ from the primary and then reused by reads through every index. Do not add a
 `byIds` B-tree or call `preloadTables` for this runtime. Reads hydrate missing
 rows asynchronously. Transactions publish copy-on-write index and row changes
 before queued persistence. Cached `asyncDispatch` work runs before the call
-returns its promise. Execution suspends for database I/O, a busy transaction
-lock, or an unresolved promise yielded by the action.
+returns its promise. Execution suspends only for database I/O or a busy
+transaction lock; handlers cannot await other promises, so fetch outside the
+action and pass results in as args.
 Both hybrid runtimes allow at most 100 unsettled persistence batches. At
 capacity, a transaction rejects before publishing memory changes; await
 `waitForPersistence()` and retry in a new transaction. A rejected HybridDB commit
@@ -484,6 +523,23 @@ results are visible immediately, while promise results show `defaultValue`,
 `initialData`, or `placeholderData` until that promise resolves. `defaultValue`
 may be a value or a zero-argument function that returns the value. Use
 `useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
+
+## Traits
+
+`db.withTraits(trait)` tags writes (for example with their origin). Actions read
+them with `yield* getCurrentTraits()`; mutation hooks and `subscribe` callbacks
+receive them as an argument. These lists contain only user and plugin traits,
+never HyperDB's internal tracing context.
+
+## Typed Yields
+
+Selector handlers may yield only reads (`selectFrom`, other selectors,
+`getCurrentTraits`, `noop`); writes or actions inside a selector are type
+errors. Action handlers may also yield `insert`, `upsert`, `deleteRows`, other
+actions, and `withoutUndo` scopes. Annotate reusable helpers as
+`SelectorGenerator<T>` (reads) or `ActionGenerator<T>` (may write), never
+`Generator<unknown, T>`. The yield unions are `SelectorCommand` and
+`ActionCommand`.
 
 ## Rules Of Thumb
 
