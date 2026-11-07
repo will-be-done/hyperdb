@@ -73,6 +73,11 @@ export interface HyperDB {
    * the DB from devtools discovery. Later operations throw `DB_CLOSED`.
    */
   close?(): Generator<DBCmd, void>;
+  /**
+   * The in-memory cache of a hybrid runtime, if any. Selector preloading primes
+   * its results there so later cached reads start warm.
+   */
+  getCacheDB?(): HyperDB | undefined;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
   preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(

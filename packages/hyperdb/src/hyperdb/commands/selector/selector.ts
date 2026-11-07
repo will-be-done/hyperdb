@@ -541,40 +541,14 @@ const SELECTOR_CACHE_GC_TICK_MS = 1_000;
 const selectorGcEntries = new Set<SelectorCacheEntry<unknown>>();
 let selectorGcTicker: ReturnType<typeof setInterval> | undefined;
 
-const isHyperDBLike = (value: unknown): value is HyperDB =>
-  value !== null &&
-  typeof value === "object" &&
-  typeof (value as { intervalScan?: unknown }).intervalScan === "function" &&
-  typeof (value as { beginTx?: unknown }).beginTx === "function";
-
-const isSubscribableDBLike = (value: unknown): value is SubscribableDB =>
-  isHyperDBLike(value) &&
-  typeof (value as { subscribe?: unknown }).subscribe === "function" &&
-  typeof (value as { getRevision?: unknown }).getRevision === "function";
-
-const getHybridCacheDB = (db: SubscribableDB): HyperDB | undefined => {
-  const maybeRoot = db as unknown as { cache?: unknown; db?: unknown };
-  const maybeInner = maybeRoot.db as { cache?: unknown } | undefined;
-
-  if (isHyperDBLike(maybeInner?.cache)) {
-    return maybeInner.cache;
-  }
-
-  if (isHyperDBLike(maybeRoot.cache)) {
-    return maybeRoot.cache;
-  }
-
-  return undefined;
-};
-
 const subscribableCacheDBs = new WeakMap<HyperDB, SubscribableDB>();
 
 export const getSubscribableHybridCacheDB = (
   db: SubscribableDB,
 ): SubscribableDB | undefined => {
-  const cacheDB = getHybridCacheDB(db);
+  const cacheDB = db.getCacheDB?.();
   if (!cacheDB) return undefined;
-  if (isSubscribableDBLike(cacheDB)) return cacheDB;
+  if (cacheDB instanceof SubscribableDB) return cacheDB;
 
   let subscribable = subscribableCacheDBs.get(cacheDB);
   if (!subscribable) {

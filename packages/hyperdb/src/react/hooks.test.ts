@@ -458,7 +458,7 @@ describe("useAsyncSelector", () => {
     };
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
     const selector = vi.fn(function* selector(_args: { projectId: string }) {
       return ["unused"];
@@ -753,7 +753,7 @@ describe("useAsyncSelector", () => {
     };
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
     const pending = deferred<string[]>();
     const selector = vi.fn(function* selector(_args: { projectId: string }) {
@@ -863,7 +863,7 @@ describe("useAsyncSelector", () => {
       .mockReturnValueOnce("project-2");
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
 
     useAsyncSelector({
@@ -918,7 +918,7 @@ describe("useAsyncSelector", () => {
       .mockReturnValueOnce("project-1");
     mocks.db = {
       ...createMockDB(),
-      db: { cache: cacheDB },
+      getCacheDB: () => cacheDB,
     } as unknown as MockDB;
 
     useAsyncSelector({

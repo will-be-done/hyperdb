@@ -513,6 +513,10 @@ export class HybridDB implements HyperDB {
     yield* this.state.persistence.waitForPersistence();
   }
 
+  getCacheDB(): HyperDB {
+    return this.cache;
+  }
+
   *close(): Generator<DBCmd, void> {
     const { persistence } = this.state;
     if (persistence.isClosed) return;

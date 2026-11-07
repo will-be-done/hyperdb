@@ -663,6 +663,10 @@ export class SubscribableDB implements HyperDB {
     if (db.waitForPersistence) yield* db.waitForPersistence();
   }
 
+  getCacheDB(): HyperDB | undefined {
+    return this.db.getCacheDB?.();
+  }
+
   *close(): Generator<DBCmd, void> {
     if (this.db.close) yield* this.db.close();
     const { state } = this;
