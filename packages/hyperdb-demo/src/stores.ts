@@ -219,10 +219,10 @@ function createMemDb(mode: StoreMode): SubscribableDB {
 }
 
 async function hydrate(persistentDB: HyperDB, memDB: SubscribableDB) {
-  const { projects, tasks } = await selectAsync(
-    persistentDB,
-    scanPersistedTables({}),
-  );
+  const { projects, tasks } = await selectAsync(persistentDB, {
+    selector: scanPersistedTables,
+    args: {},
+  });
 
   if (projects.length > 0 || tasks.length > 0) {
     syncDispatch(memDB, loadIntoMemory({ projects, tasks }));
