@@ -1,5 +1,5 @@
 import type { DBCmd } from "../../commands/async";
-import { unwrapCb } from "../../commands/async";
+import { unwrap, unwrapCb } from "../../commands/async";
 import type { BindParams, SqlValue } from "./sqlite-common";
 import AwaitLock from "../../utils/await-lock";
 import {
@@ -154,7 +154,9 @@ class AsyncConnection implements SqliteConnection {
     try {
       rowCount = await run();
     } catch (error) {
-      debug({ ...event(info.rowCount), status: "error", error });
+      if (!info.expectedError?.(error)) {
+        debug({ ...event(info.rowCount), status: "error", error });
+      }
       throw error;
     }
     debug({ ...event(rowCount), status: "success" });
@@ -164,8 +166,18 @@ class AsyncConnection implements SqliteConnection {
 class AsyncLock implements SqliteLock {
   private lock = new AwaitLock();
 
-  acquire(): Generator<DBCmd, void> {
-    return unwrapCb(() => this.lock.acquireAsync());
+  *acquire(): Generator<DBCmd, void> {
+    // The wait starts before the executor sees it. If the executor then
+    // throws instead (a sync caller cannot wait) or abandons the generator,
+    // hand the lock back as soon as it is ours, or it stays held forever.
+    const acquired = this.lock.acquireAsync();
+    let held = false;
+    try {
+      yield* unwrap(acquired);
+      held = true;
+    } finally {
+      if (!held) void acquired.then(() => this.lock.release());
+    }
   }
 
   release(): void {

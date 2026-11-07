@@ -33,6 +33,7 @@ import {
   sqliteSchemaMetadataMatches,
   sqliteWriteNeedsSavepoint,
   SQLITE_WRITE_SAVEPOINT,
+  isMissingSqliteSchemaMetadataError,
   toSqliteSchemaMetadataReadError,
   sqliteIdentifierKey,
   assertSafeTableDefinition,
@@ -61,6 +62,8 @@ export type SqliteStatementInfo = {
   tableName?: string;
   indexName?: string;
   rowCount?: number;
+  /** Failures this accepts are expected and not reported as SQL errors. */
+  expectedError?: (error: unknown) => boolean;
 };
 
 export interface SqliteConnection {
@@ -551,7 +554,11 @@ export class SqliteDriverCore implements DBDriver {
       this.conn.query(
         selectSqliteSchemaMetadataSQL(tableDefinitions.length),
         tableDefinitions.map((tableDef) => tableDef.tableName),
-        { operation: "scan" },
+        // A missing metadata table is the normal first-boot case.
+        {
+          operation: "scan",
+          expectedError: isMissingSqliteSchemaMetadataError,
+        },
       ),
     );
     if (read.isOk()) {
