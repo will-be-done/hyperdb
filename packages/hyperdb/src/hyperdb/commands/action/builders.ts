@@ -5,7 +5,6 @@ import type { HyperDB } from "../../core/contracts";
 import type { DBCmd } from "../async";
 import type { Trait } from "../../core/primitives";
 import {
-  defaultTraceOptions,
   driverTraceContextFromFrameMeta,
   getDriverTraceContextForDB,
   withDriverTraceContextTrait,
@@ -33,22 +32,23 @@ import {
   type UpsertActionCmd,
 } from "./commands";
 import { commandBrand } from "../brand";
+import {
+  assertCommandName,
+  createFactoryOptions,
+  defineCommandMetadata,
+  isTraceDisabled,
+  normalizeTraceSkip,
+  type CommandTraceSkip,
+  type FactoryConfigureOptions,
+} from "../builder-common";
 
 export type ActionArgsSchema = Record<string, Validator<any>>;
-export type ActionTraceSkip =
-  | boolean
-  | {
-      childTrace: boolean;
-      rootTrace: boolean;
-    };
+export type ActionTraceSkip = CommandTraceSkip;
 export type ActionFactoryOptions = {
   trace?: TraceOptions;
   validateArgs?: boolean;
 };
-export type ActionFactoryConfigureOptions = {
-  trace?: Partial<TraceOptions>;
-  validateArgs?: boolean;
-};
+export type ActionFactoryConfigureOptions = FactoryConfigureOptions;
 
 export type ObjectAction<
   TReturn,
@@ -72,101 +72,6 @@ export type ActionDefinition<TSchema extends ActionArgsSchema, TReturn> = {
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
 
-type NormalizedActionTraceSkip = {
-  childTrace: boolean;
-  rootTrace: boolean;
-};
-
-const normalizeActionTraceSkip = (
-  skipTrace: ActionTraceSkip | undefined,
-): NormalizedActionTraceSkip => {
-  if (skipTrace === true) {
-    return { childTrace: true, rootTrace: true };
-  }
-
-  if (!skipTrace) {
-    return { childTrace: false, rootTrace: false };
-  }
-
-  return {
-    childTrace: skipTrace.childTrace,
-    rootTrace: skipTrace.rootTrace,
-  };
-};
-
-const defineActionMetadata = <
-  TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
->(
-  fn: TFn,
-  metadata: {
-    name: string;
-    args?: ActionArgsSchema;
-    skipTrace?: ActionTraceSkip;
-    trace: TraceOptions | (() => TraceOptions);
-    validateArgs?: boolean | (() => boolean);
-    handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
-  },
-): TFn => {
-  const descriptors: PropertyDescriptorMap = {
-    kind: {
-      value: "action",
-      enumerable: true,
-      configurable: false,
-    },
-    name: {
-      value: metadata.name,
-      enumerable: false,
-      configurable: true,
-    },
-    args: {
-      value: metadata.args,
-      enumerable: true,
-      configurable: false,
-    },
-    handler: {
-      value: metadata.handler,
-      enumerable: true,
-      configurable: false,
-    },
-    trace: {
-      get:
-        typeof metadata.trace === "function"
-          ? metadata.trace
-          : () => metadata.trace,
-      enumerable: true,
-      configurable: false,
-    },
-    validateArgs: {
-      get:
-        typeof metadata.validateArgs === "function"
-          ? metadata.validateArgs
-          : () => metadata.validateArgs,
-      enumerable: true,
-      configurable: false,
-    },
-  };
-
-  if (metadata.skipTrace !== undefined) {
-    descriptors.skipTrace = {
-      value: metadata.skipTrace,
-      enumerable: true,
-      configurable: false,
-    };
-  }
-
-  Object.defineProperties(fn, descriptors);
-
-  return fn;
-};
-
-const assertActionName = (name: unknown): string => {
-  if (typeof name !== "string" || name.trim().length === 0) {
-    throw new Error("Action name is required");
-  }
-
-  return name;
-};
-
 export interface ActionBuilder {
   <TSchema extends ActionArgsSchema, TReturn>(
     definition: ActionDefinition<TSchema, TReturn>,
@@ -174,43 +79,18 @@ export interface ActionBuilder {
   configure(options: ActionFactoryConfigureOptions): void;
 }
 
-const defaultActionFactoryOptions: Required<ActionFactoryOptions> = {
-  trace: defaultTraceOptions,
-  validateArgs: false,
-};
-
-const isTraceDisabled = (trace: TraceOptions): boolean => !trace.enabled;
-
 export function createAction(
   options: ActionFactoryOptions = {},
 ): ActionBuilder {
-  const factoryOptions = {
-    ...defaultActionFactoryOptions,
-    ...options,
-    trace: {
-      ...defaultActionFactoryOptions.trace,
-      ...options.trace,
-    },
-  };
-
-  const configure = (nextOptions: ActionFactoryConfigureOptions): void => {
-    if (nextOptions.trace !== undefined) {
-      factoryOptions.trace = {
-        ...factoryOptions.trace,
-        ...nextOptions.trace,
-      };
-    }
-    if (nextOptions.validateArgs !== undefined) {
-      factoryOptions.validateArgs = nextOptions.validateArgs;
-    }
-  };
+  const factory = createFactoryOptions(options);
+  const factoryOptions = factory.current;
 
   const buildAction = <TSchema extends ActionArgsSchema, TReturn>(
     input: ActionDefinition<TSchema, TReturn>,
   ): ObjectAction<TReturn, TSchema> => {
-    const displayName = assertActionName(input.name);
+    const displayName = assertCommandName("Action", input.name);
     const argsValidator = v.object(input.args);
-    const skipTrace = normalizeActionTraceSkip(input.skipTrace);
+    const skipTrace = normalizeTraceSkip(input.skipTrace);
     const wrapped = ((args: InferObject<typeof input.args>) => {
       const traceDisabled = isTraceDisabled(factoryOptions.trace);
       const normalizedArgs = factoryOptions.validateArgs
@@ -230,7 +110,7 @@ export function createAction(
       );
     }) as ObjectAction<TReturn, TSchema>;
 
-    return defineActionMetadata(wrapped, {
+    return defineCommandMetadata(wrapped, "action", {
       name: displayName,
       args: input.args,
       skipTrace: input.skipTrace,
@@ -241,7 +121,7 @@ export function createAction(
   };
 
   const builder = buildAction as ActionBuilder;
-  builder.configure = configure;
+  builder.configure = factory.configure;
 
   return builder;
 }

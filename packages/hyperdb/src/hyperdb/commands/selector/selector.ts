@@ -36,6 +36,16 @@ import {
 } from "./commands";
 import { commandBrand } from "../brand";
 import {
+  assertCommandName,
+  createFactoryOptions,
+  defineCommandMetadata,
+  isTraceDisabled,
+  normalizeTraceSkip,
+  type CommandTraceSkip,
+  type FactoryConfigureOptions,
+  type NormalizedTraceSkip,
+} from "../builder-common";
+import {
   isNeedToRerunRange,
   stableSerializeSelectorArgs,
 } from "./selector-memo";
@@ -77,21 +87,13 @@ export type PartialScanOptions<T extends Row = Row> = {
 // }
 
 export type SelectorArgsSchema = Record<string, Validator<any>>;
-export type SelectorTraceSkip =
-  | boolean
-  | {
-      childTrace: boolean;
-      rootTrace: boolean;
-    };
+export type SelectorTraceSkip = CommandTraceSkip;
 export type SelectorMemoizationOptions = Partial<SelectorMemoization>;
 export type SelectorFactoryOptions = {
   trace?: TraceOptions;
   validateArgs?: boolean;
 };
-export type SelectorFactoryConfigureOptions = {
-  trace?: Partial<TraceOptions>;
-  validateArgs?: boolean;
-};
+export type SelectorFactoryConfigureOptions = FactoryConfigureOptions;
 
 export type ObjectSelector<
   TReturn,
@@ -173,28 +175,6 @@ export type SelectorDefinition<TSchema extends SelectorArgsSchema, TReturn> = {
   handler: (args: InferObject<TSchema>) => Generator<unknown, TReturn, unknown>;
 };
 
-type NormalizedSelectorTraceSkip = {
-  childTrace: boolean;
-  rootTrace: boolean;
-};
-
-const normalizeSelectorTraceSkip = (
-  skipTrace: SelectorTraceSkip | undefined,
-): NormalizedSelectorTraceSkip => {
-  if (skipTrace === true) {
-    return { childTrace: true, rootTrace: true };
-  }
-
-  if (!skipTrace) {
-    return { childTrace: false, rootTrace: false };
-  }
-
-  return {
-    childTrace: skipTrace.childTrace,
-    rootTrace: skipTrace.rootTrace,
-  };
-};
-
 const defaultSelectorMemoization: SelectorMemoization = {
   root: true,
   selfChild: false,
@@ -207,85 +187,6 @@ const normalizeSelectorMemoization = (
   selfChild: memoization?.selfChild ?? defaultSelectorMemoization.selfChild,
 });
 
-const defineSelectorMetadata = <
-  TFn extends (...args: any[]) => Generator<unknown, unknown, unknown>,
->(
-  fn: TFn,
-  metadata: {
-    name: string;
-    args?: SelectorArgsSchema;
-    skipTrace?: SelectorTraceSkip;
-    memoization?: SelectorMemoization;
-    trace: TraceOptions | (() => TraceOptions);
-    validateArgs?: boolean | (() => boolean);
-    handler: (...args: any[]) => Generator<unknown, unknown, unknown>;
-  },
-): TFn => {
-  const descriptors: PropertyDescriptorMap = {
-    kind: {
-      value: "selector",
-      enumerable: true,
-      configurable: false,
-    },
-    name: {
-      value: metadata.name,
-      enumerable: false,
-      configurable: true,
-    },
-    args: {
-      value: metadata.args,
-      enumerable: true,
-      configurable: false,
-    },
-    handler: {
-      value: metadata.handler,
-      enumerable: true,
-      configurable: false,
-    },
-    memoization: {
-      value: metadata.memoization,
-      enumerable: true,
-      configurable: false,
-    },
-    trace: {
-      get:
-        typeof metadata.trace === "function"
-          ? metadata.trace
-          : () => metadata.trace,
-      enumerable: true,
-      configurable: false,
-    },
-    validateArgs: {
-      get:
-        typeof metadata.validateArgs === "function"
-          ? metadata.validateArgs
-          : () => metadata.validateArgs,
-      enumerable: true,
-      configurable: false,
-    },
-  };
-
-  if (metadata.skipTrace !== undefined) {
-    descriptors.skipTrace = {
-      value: metadata.skipTrace,
-      enumerable: true,
-      configurable: false,
-    };
-  }
-
-  Object.defineProperties(fn, descriptors);
-
-  return fn;
-};
-
-const assertSelectorName = (name: unknown): string => {
-  if (typeof name !== "string" || name.trim().length === 0) {
-    throw new Error("Selector name is required");
-  }
-
-  return name;
-};
-
 export interface SelectorBuilder {
   <TSchema extends SelectorArgsSchema, TReturn>(
     definition: SelectorDefinition<TSchema, TReturn>,
@@ -293,42 +194,17 @@ export interface SelectorBuilder {
   configure(options: SelectorFactoryConfigureOptions): void;
 }
 
-const defaultSelectorFactoryOptions: Required<SelectorFactoryOptions> = {
-  trace: defaultTraceOptions,
-  validateArgs: false,
-};
-
-const isTraceDisabled = (trace: TraceOptions): boolean => !trace.enabled;
-
 export function createSelector(
   options: SelectorFactoryOptions = {},
 ): SelectorBuilder {
-  const factoryOptions = {
-    ...defaultSelectorFactoryOptions,
-    ...options,
-    trace: {
-      ...defaultSelectorFactoryOptions.trace,
-      ...options.trace,
-    },
-  };
-
-  const configure = (nextOptions: SelectorFactoryConfigureOptions): void => {
-    if (nextOptions.trace !== undefined) {
-      factoryOptions.trace = {
-        ...factoryOptions.trace,
-        ...nextOptions.trace,
-      };
-    }
-    if (nextOptions.validateArgs !== undefined) {
-      factoryOptions.validateArgs = nextOptions.validateArgs;
-    }
-  };
+  const factory = createFactoryOptions(options);
+  const factoryOptions = factory.current;
 
   const buildSelector = <TSchema extends SelectorArgsSchema, TReturn>(
     definition: SelectorDefinition<TSchema, TReturn>,
   ): ObjectSelector<TReturn, TSchema> => {
-    const displayName = assertSelectorName(definition.name);
-    const skipTrace = normalizeSelectorTraceSkip(definition.skipTrace);
+    const displayName = assertCommandName("Selector", definition.name);
+    const skipTrace = normalizeTraceSkip(definition.skipTrace);
     const memoization = normalizeSelectorMemoization(definition.memoization);
     const argsValidator = v.object(definition.args);
     const wrapped = ((args: InferObject<typeof definition.args>) => {
@@ -366,19 +242,23 @@ export function createSelector(
       );
     }) as ObjectSelector<TReturn, TSchema>;
 
-    return defineSelectorMetadata(wrapped, {
-      name: displayName,
-      args: definition.args,
-      skipTrace: definition.skipTrace,
-      memoization,
-      trace: () => factoryOptions.trace,
-      validateArgs: () => factoryOptions.validateArgs,
-      handler: definition.handler,
-    });
+    return defineCommandMetadata(
+      wrapped,
+      "selector",
+      {
+        name: displayName,
+        args: definition.args,
+        skipTrace: definition.skipTrace,
+        trace: () => factoryOptions.trace,
+        validateArgs: () => factoryOptions.validateArgs,
+        handler: definition.handler,
+      },
+      { memoization },
+    );
   };
 
   const builder = buildSelector as SelectorBuilder;
-  builder.configure = configure;
+  builder.configure = factory.configure;
 
   return builder;
 }
@@ -654,11 +534,9 @@ const getSelectorTraceName = (selector: object): string => {
     : "anonymous selector";
 };
 
-const getSelectorTraceSkip = (
-  selector: object,
-): NormalizedSelectorTraceSkip => {
+const getSelectorTraceSkip = (selector: object): NormalizedTraceSkip => {
   const skipTrace = (selector as { skipTrace?: SelectorTraceSkip }).skipTrace;
-  return normalizeSelectorTraceSkip(skipTrace);
+  return normalizeTraceSkip(skipTrace);
 };
 
 const getSelectorMemoization = (selector: object): SelectorMemoization => {
