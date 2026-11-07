@@ -13,6 +13,8 @@ import {
   type InspectableSqlDatabase,
 } from "../../test-utils/sql-js-driver";
 import { v } from "../../schema/values";
+import { execSync } from "../../core/executor";
+import type { DBCmd } from "../../commands/async";
 import {
   buildSortKeyWhereClause,
   SQLITE_SCHEMA_METADATA_TABLE,
@@ -162,6 +164,54 @@ describe("SQLite driver edge case regressions", () => {
     expect(() => db.loadTables([noSideTablesTable])).toThrow(
       "metadata read failed",
     );
+  });
+
+  it("releases the transaction slot when BEGIN fails", async () => {
+    const { sqldb } = await createInspectableSqlDriver();
+    let failBegin = false;
+    const { driver } = createSqlJsDriverFromDatabase(sqldb, [], {
+      beforeExec(sql) {
+        if (failBegin && sql === "BEGIN TRANSACTION") {
+          throw new Error("begin failed");
+        }
+      },
+    });
+    execSync(driver.loadTables([noSideTablesTable]));
+
+    failBegin = true;
+    expect(() => execSync(driver.beginTx())).toThrow("begin failed");
+
+    failBegin = false;
+    const tx = execSync(driver.beginTx());
+    execSync(tx.insert(noSideTablesTable.tableName, [{ id: "a", title: "A" }]));
+    execSync(tx.commit());
+    expect(
+      execSync(
+        driver.intervalScan(noSideTablesTable.tableName, "byTitle", [{}], {}),
+      ),
+    ).toEqual([{ id: "a", title: "A" }]);
+  });
+
+  it("rejects driver operations while a sync transaction is open", async () => {
+    const driver = await createSqlJsDriver();
+    execSync(driver.loadTables([noSideTablesTable]));
+    const tx = execSync(driver.beginTx());
+
+    const operations: (() => Generator<DBCmd, unknown>)[] = [
+      () => driver.insert(noSideTablesTable.tableName, [{ id: "a" }]),
+      () =>
+        driver.intervalScan(noSideTablesTable.tableName, "byTitle", [{}], {}),
+      () => driver.loadTables([noSideTablesTable]),
+      () => driver.beginTx(),
+    ];
+    for (const run of operations) {
+      expect(() => execSync(run())).toThrow(
+        "can't run while transaction is in progress",
+      );
+    }
+
+    execSync(tx.rollback());
+    expect(() => execSync(tx.commit())).toThrow("Transaction already finished");
   });
 
   it("refreshes per-table metadata after another table changes the schema", async () => {
