@@ -24,9 +24,13 @@ export function execSync<T>(cmd: Generator<DBCmd, T>): T {
 
   while (!result.done) {
     if (isUnwrapCmd(result.value)) {
-      throw new HyperDBError(
-        "ASYNC_IN_SYNC_EXECUTION",
-        "Cannot execute async commands",
+      // Throw into the generator so its finally blocks (such as a transaction
+      // rollback) still run before the error reaches the caller.
+      result = cmd.throw(
+        new HyperDBError(
+          "ASYNC_IN_SYNC_EXECUTION",
+          "Cannot execute async commands",
+        ),
       );
     } else if (isNoopCmd(result.value)) {
       result = cmd.next();

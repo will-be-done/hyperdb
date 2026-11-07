@@ -284,36 +284,6 @@ export function* getCurrentTraits(): Generator<unknown, Trait[], unknown> {
   } satisfies GetCurrentTraitsCmd) as Trait[];
 }
 
-export function syncDispatch<TReturn>(
-  db: HyperDB,
-  action: Generator<unknown, TReturn, unknown>,
-): TReturn {
-  const actionDB = withDriverTraceContextTrait(
-    db,
-    driverTraceContextFromFrameMeta(
-      getGeneratorTraceMeta(action),
-      getDriverTraceContextForDB(db),
-    ),
-  );
-  const tx = execSync(actionDB.beginTx());
-
-  let isCommitted = false;
-  try {
-    const result = execSync(
-      runCommandGenerator(tx, action, { allowWrites: true }),
-    );
-
-    execSync(tx.commit());
-    isCommitted = true;
-
-    return result;
-  } finally {
-    if (!isCommitted) {
-      execSync(tx.rollback());
-    }
-  }
-}
-
 function* dispatchAction<TReturn>(
   db: HyperDB,
   action: Generator<unknown, TReturn, unknown>,
@@ -342,6 +312,13 @@ function* dispatchAction<TReturn>(
       yield* tx.rollback();
     }
   }
+}
+
+export function syncDispatch<TReturn>(
+  db: HyperDB,
+  action: Generator<unknown, TReturn, unknown>,
+): TReturn {
+  return execSync(dispatchAction(db, action));
 }
 
 /**

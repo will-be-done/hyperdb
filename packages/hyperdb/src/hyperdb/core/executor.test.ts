@@ -30,6 +30,25 @@ describe("executor", () => {
     expect(() => execSync(command())).toThrow("Cannot execute async commands");
   });
 
+  it("throws async commands back into generators in execSync so cleanup runs", () => {
+    const steps: string[] = [];
+
+    function* command(): Generator<DBCmd, void, unknown> {
+      try {
+        yield* unwrap(Promise.resolve("never awaited"));
+        steps.push("continued");
+      } finally {
+        steps.push("cleaned up");
+        yield* noop();
+      }
+    }
+
+    expect(() => execSync(command())).toThrow(
+      expect.objectContaining({ code: "ASYNC_IN_SYNC_EXECUTION" }),
+    );
+    expect(steps).toEqual(["cleaned up"]);
+  });
+
   it("propagates errors rejected by async unwrap commands", async () => {
     function* command(): Generator<DBCmd, void, unknown> {
       yield* unwrap(Promise.reject(new Error("boom")));
