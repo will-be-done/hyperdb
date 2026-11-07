@@ -420,3 +420,10 @@ const whoami = action({
 
 A typical use is tagging writes with their origin (e.g. "local edit" vs. "applied
 from sync") so an `afterChange` hook can decide whether to record them.
+
+`getCurrentTraits()`, mutation hooks, and `subscribe` callbacks receive only
+the traits you and plugins attached, such as undo's replay and skip traits.
+HyperDB's own tracing context is not included, so code can compare or count
+traits safely. A hook that needs the active trace can call
+`getTraceContextForDB(db)` from `@will-be-done/hyperdb/tracing` on the DB it
+receives.

@@ -25,6 +25,7 @@ import type {
 import {
   createTraceFrameMeta,
   getTraceContextForDB,
+  withoutInternalTraits,
   type HyperDBTracerOption,
   type TraceContext,
 } from "../core/tracer";
@@ -88,7 +89,7 @@ export type AfterScanCallback = (
   clauses: WhereClause[],
   selectOptions: SelectOptions | undefined,
   results: Row[],
-) => Generator<unknown, unknown, unknown>;
+) => ActionGenerator<unknown>;
 
 const wrapAfterScanCallbackGenerator = (
   cb: AfterScanCallback,
@@ -366,14 +367,14 @@ export class SubscribableDBTx implements HyperDBTx {
     for (const cb of this.subDb.afterInsertSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), insertOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), insertOps),
         { allowWrites: true, traceContext },
       );
     }
     for (const cb of this.subDb.afterChangeSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), insertOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), insertOps),
         { allowWrites: true, traceContext },
       );
     }
@@ -466,14 +467,14 @@ export class SubscribableDBTx implements HyperDBTx {
     for (const cb of this.subDb.afterUpsertSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), upsertOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), upsertOps),
         { allowWrites: true, traceContext },
       );
     }
     for (const cb of this.subDb.afterChangeSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), upsertOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), upsertOps),
         { allowWrites: true, traceContext },
       );
     }
@@ -532,14 +533,14 @@ export class SubscribableDBTx implements HyperDBTx {
     for (const cb of this.subDb.afterDeleteSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), deleteOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), deleteOps),
         { allowWrites: true, traceContext },
       );
     }
     for (const cb of this.subDb.afterChangeSubscribers) {
       yield* runCommandGenerator(
         this,
-        cb(this, table, this.getTraits(), deleteOps),
+        cb(this, table, withoutInternalTraits(this.getTraits()), deleteOps),
         { allowWrites: true, traceContext },
       );
     }
@@ -561,7 +562,7 @@ export class SubscribableDBTx implements HyperDBTx {
 
     // if (this.operations.length === 0) return;
 
-    const traits = this.getTraits();
+    const traits = withoutInternalTraits(this.getTraits());
     const revision = this.subDb.incrementRevision();
     notifySubscribers(
       this.subDb.subscribers,

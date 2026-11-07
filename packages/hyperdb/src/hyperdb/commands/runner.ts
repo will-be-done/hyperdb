@@ -32,6 +32,7 @@ import {
   withCurrentSelectEventTrait,
   withDriverTraceContextTrait,
   withTraceContextTrait,
+  withoutInternalTraits,
   type HyperDBTracer,
   type TraceContext,
   type TraceFrame,
@@ -447,7 +448,7 @@ function* getCurrentTraits(
   _cmd: GetCurrentTraitsCmd,
   { scopedDB }: CommandContext,
 ): Generator<DBCmd, unknown, unknown> {
-  return scopedDB.getTraits();
+  return withoutInternalTraits(scopedDB.getTraits());
 }
 
 // Storage-level commands (async unwrap, noop) go up to the executor.

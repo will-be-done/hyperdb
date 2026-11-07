@@ -362,6 +362,21 @@ export const withDriverTraceContextTrait = <
 
 export const currentSelectEventTraitType = "hyperdb.currentSelectEvent";
 
+// Traits HyperDB uses to carry its own execution context (tracing) through
+// withTraits(). They are not part of a write's meaning, so user-facing trait
+// lists leave them out.
+const internalTraitTypes: ReadonlySet<string> = new Set([
+  traceContextTraitType,
+  driverTraceContextTraitType,
+  currentSelectEventTraitType,
+]);
+
+/** Removes HyperDB's internal execution-context traits from a trait list. */
+export const withoutInternalTraits = (traits: Trait[]): Trait[] =>
+  traits.some((trait) => internalTraitTypes.has(trait.type))
+    ? traits.filter((trait) => !internalTraitTypes.has(trait.type))
+    : traits;
+
 export type CurrentSelectEventTrait = Trait & {
   type: typeof currentSelectEventTraitType;
   event: SelectCommandEvent;

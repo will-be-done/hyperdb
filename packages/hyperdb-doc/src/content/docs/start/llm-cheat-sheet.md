@@ -510,6 +510,13 @@ results are visible immediately, while promise results show `defaultValue`,
 may be a value or a zero-argument function that returns the value. Use
 `useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
 
+## Traits
+
+`db.withTraits(trait)` tags writes (for example with their origin). Actions read
+them with `yield* getCurrentTraits()`; mutation hooks and `subscribe` callbacks
+receive them as an argument. These lists contain only user and plugin traits,
+never HyperDB's internal tracing context.
+
 ## Typed Yields
 
 Selector handlers may yield only reads (`selectFrom`, other selectors,
