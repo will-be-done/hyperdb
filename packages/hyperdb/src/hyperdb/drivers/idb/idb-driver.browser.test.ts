@@ -11,6 +11,10 @@ import type { HyperDB } from "../../core/contracts";
 import { DuplicateIdError, isHyperDBError } from "../../core/errors";
 import type { SelectorGenerator } from "../../commands/command-types";
 import { DB } from "../../runtime/db";
+import {
+  deleteTestIndexedDB,
+  uniqueTestDBName,
+} from "../../test-utils/indexeddb";
 import { HybridDB } from "../../runtime/hybrid-db";
 import { BptreeInmemDriver } from "../inmemory/bptree-inmem-driver";
 import { getSqliteIndexSortKeyValue } from "../sqlite/sqlite-common";
@@ -55,22 +59,11 @@ const rawRowsTable = defineTable("idbRawRows", {
 }).index("byCount", ["count"]);
 
 const action = createAction();
-let dbCounter = 0;
 
-async function deleteDatabase(dbName: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(dbName);
-    request.onsuccess = () => resolve();
-    request.onerror = () =>
-      reject(request.error ?? new Error("Failed to delete test database"));
-    request.onblocked = () =>
-      reject(new Error("IndexedDB delete request was blocked"));
-  });
-}
+const deleteDatabase = deleteTestIndexedDB;
 
 async function createDB(options: OpenIndexedDBDriverOptions = {}): Promise<DB> {
-  dbCounter += 1;
-  const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+  const dbName = uniqueTestDBName("hyperdb-idb-driver");
   await deleteDatabase(dbName);
   return new DB(await openIndexedDBDriver(dbName, options));
 }
@@ -92,8 +85,7 @@ function spyOnGetAllRecords<T extends object>(prototype: T) {
 
 describe("IdbDriver", () => {
   it("stores rows in native per-table object stores", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const driver = await openIndexedDBDriver(dbName);
@@ -120,6 +112,10 @@ describe("IdbDriver", () => {
         "byProjectRank",
         "byTitle",
       ]);
+      await new Promise<void>((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onabort = () => reject(tx.error ?? new Error("Inspection aborted"));
+      });
     } finally {
       rawDb.close();
       await deleteDatabase(dbName);
@@ -127,8 +123,7 @@ describe("IdbDriver", () => {
   });
 
   it("stores IDB row payloads without storage encoding wrappers", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const bytes = new Uint8Array([1, 2, 3]).buffer;
@@ -629,8 +624,7 @@ describe("IdbDriver", () => {
   );
 
   it("does not open an IDB readonly transaction for cached HybridDB reads", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const primaryDriver = await openIndexedDBDriver(dbName);
@@ -958,8 +952,7 @@ describe("IdbDriver", () => {
   });
 
   it("resets old side-table IDB layout", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const oldDb = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -1005,8 +998,7 @@ describe("IdbDriver", () => {
   });
 
   it("skips index rebuild when table definitions match after reopen", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -1058,8 +1050,7 @@ describe("IdbDriver", () => {
   });
 
   it("invalidates old connections when a newer IDB version opens", async () => {
-    dbCounter += 1;
-    const dbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const dbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(dbName);
 
     const versionChanges: IDBVersionChangeEvent[] = [];
@@ -1133,11 +1124,9 @@ describe("IdbDriver", () => {
   });
 
   it("uses relaxed durability by default and allows overrides", async () => {
-    dbCounter += 1;
-    const relaxedDbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const relaxedDbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(relaxedDbName);
-    dbCounter += 1;
-    const strictDbName = `hyperdb-idb-driver-${Date.now().toString(36)}-${dbCounter}`;
+    const strictDbName = uniqueTestDBName("hyperdb-idb-driver");
     await deleteDatabase(strictDbName);
 
     const txSpy = vi.spyOn(IDBDatabase.prototype, "transaction");
