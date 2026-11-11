@@ -1,5 +1,15 @@
 # @will-be-done/hyperdb
 
+## 0.11.0
+
+### Minor Changes
+
+- cb5408a: Add the `uncachedTables` option to `HybridDB`. Rows of these tables never enter the in-memory cache: reads always go to the primary store, while writes still persist with the rest of their transaction, and a transaction reads its own writes until it commits. `preloadTables` rejects uncached tables, and `preloadSelectorAsync` does not prime the cache with selectors that read them.
+
+### Patch Changes
+
+- 464ad5f: Fix "Invalid bounds" errors on the in-memory and IndexedDB drivers for composite-index scans that combine an equality prefix with `gt`, or with `gte`/`gt` and `lt` on the next column, such as `q.eq("a", 1).gte("b", "x").lt("b", "z")`. Combining `gt` with `gte`, or `lt` with `lte`, on one column now throws a clear error.
+
 ## 0.10.0
 
 ### Minor Changes
