@@ -161,9 +161,6 @@ importers:
 
   packages/hyperdb-devtool:
     dependencies:
-      '@will-be-done/hyperdb':
-        specifier: workspace:*
-        version: link:../hyperdb
       goober:
         specifier: ^2.1.18
         version: 2.1.19(csstype@3.2.3)
@@ -180,6 +177,9 @@ importers:
       '@vitest/browser-playwright':
         specifier: 4.1.5
         version: 4.1.5(playwright@1.61.0)(vite@8.0.16(@types/node@24.13.2)(esbuild@0.27.7)(jiti@2.7.0))(vitest@4.1.5)
+      '@will-be-done/hyperdb':
+        specifier: workspace:*
+        version: link:../hyperdb
       dependency-cruiser:
         specifier: ^17.4.3
         version: 17.4.3
