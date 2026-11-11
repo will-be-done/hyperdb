@@ -92,6 +92,12 @@ export const convertWhereToBound = (
       ) {
         throw new Error(`Conflicting conditions for column '${col}'`);
       }
+      if (conditions.gt !== undefined && conditions.gte !== undefined) {
+        throw new Error(`Both gt and gte for column '${col}'`);
+      }
+      if (conditions.lt !== undefined && conditions.lte !== undefined) {
+        throw new Error(`Both lt and lte for column '${col}'`);
+      }
     }
 
     // Helper function to check if a column has an effective equality condition
@@ -185,63 +191,27 @@ export const convertWhereToBound = (
       const col = String(indexCols[rangeColumnIndex]);
       const conditions = conditionsByCol.get(col)!;
 
-      // For mixed eq + range conditions, we need a lower bound starting with the equality prefix
-      if (prefixValues.length > 0) {
-        const gteValues = [...prefixValues];
-        while (gteValues.length < indexCols.length) {
-          gteValues.push(MIN);
-        }
-        result.gte = gteValues;
-      }
+      const pad = (values: any[], fill: typeof MIN | typeof MAX) => {
+        while (values.length < indexCols.length) values.push(fill);
+        return values;
+      };
 
-      if (conditions.gte !== undefined) {
-        const gteValues = [...prefixValues, conditions.gte];
-        while (gteValues.length < indexCols.length) {
-          gteValues.push(MIN);
-        }
-        result.gte = gteValues;
-
-        // For gte with equality prefix, we also need an upper bound for the prefix
-        if (prefixValues.length > 0) {
-          const lteValues = [...prefixValues];
-          while (lteValues.length < indexCols.length) {
-            lteValues.push(MAX);
-          }
-          result.lte = lteValues;
-        }
-      }
-
+      // Exactly one lower and one upper bound: the range column's own bound
+      // when given, otherwise the equality prefix's edge.
       if (conditions.gt !== undefined) {
-        const gtValues = [...prefixValues, conditions.gt];
-        while (gtValues.length < indexCols.length) {
-          gtValues.push(MAX);
-        }
-        result.gt = gtValues;
-
-        // For gt with equality prefix, we also need an upper bound for the prefix
-        if (prefixValues.length > 0) {
-          const lteValues = [...prefixValues];
-          while (lteValues.length < indexCols.length) {
-            lteValues.push(MAX);
-          }
-          result.lte = lteValues;
-        }
-      }
-
-      if (conditions.lte !== undefined) {
-        const lteValues = [...prefixValues, conditions.lte];
-        while (lteValues.length < indexCols.length) {
-          lteValues.push(MAX);
-        }
-        result.lte = lteValues;
+        result.gt = pad([...prefixValues, conditions.gt], MAX);
+      } else if (conditions.gte !== undefined) {
+        result.gte = pad([...prefixValues, conditions.gte], MIN);
+      } else if (prefixValues.length > 0) {
+        result.gte = pad([...prefixValues], MIN);
       }
 
       if (conditions.lt !== undefined) {
-        const ltValues = [...prefixValues, conditions.lt];
-        while (ltValues.length < indexCols.length) {
-          ltValues.push(MIN);
-        }
-        result.lt = ltValues;
+        result.lt = pad([...prefixValues, conditions.lt], MIN);
+      } else if (conditions.lte !== undefined) {
+        result.lte = pad([...prefixValues, conditions.lte], MAX);
+      } else if (prefixValues.length > 0) {
+        result.lte = pad([...prefixValues], MAX);
       }
     }
 

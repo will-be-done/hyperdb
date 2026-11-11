@@ -643,6 +643,48 @@ describe("runtime edge case regressions", () => {
         expect(results.map((row) => row.id)).toEqual(["1x", "2y"]);
       });
 
+      it("composite eq prefix scans with open range bounds", async () => {
+        const db = new AsyncDB(new DB(await createDriver()));
+        await db.loadTables([compositeTable]);
+        await db.insert(compositeTable, [
+          ...compositeRows,
+          { id: "1w", a: 1, b: "w" },
+          { id: "1z", a: 1, b: "z" },
+        ]);
+        const scan = async (
+          range: Record<string, string>,
+          options: { order?: "asc" | "desc" } = {},
+        ) =>
+          (
+            await db.intervalScan(
+              compositeTable,
+              "byAThenB",
+              [
+                {
+                  eq: [{ col: "a", val: 1 }],
+                  ...Object.fromEntries(
+                    Object.entries(range).map(([op, val]) => [
+                      op,
+                      [{ col: "b", val }],
+                    ]),
+                  ),
+                },
+              ],
+              options,
+            )
+          ).map((row) => row.id);
+
+        expect(await scan({ gte: "x", lt: "z" })).toEqual(["1x", "1y"]);
+        expect(await scan({ gt: "w", lt: "z" })).toEqual(["1x", "1y"]);
+        expect(await scan({ gt: "x", lte: "z" })).toEqual(["1y", "1z"]);
+        expect(await scan({ gt: "x" })).toEqual(["1y", "1z"]);
+        expect(await scan({ lt: "x" })).toEqual(["1w"]);
+        expect(await scan({ gte: "x", lt: "z" }, { order: "desc" })).toEqual([
+          "1y",
+          "1x",
+        ]);
+      });
+
       it("rejects non-prefix composite range clauses when called directly", async () => {
         const driver = await createDriver();
         await execAsync(driver.loadTables([compositeTable]));
