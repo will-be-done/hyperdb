@@ -683,6 +683,19 @@ describe("runtime edge case regressions", () => {
           "1y",
           "1x",
         ]);
+        // Each OR branch gets its own bounds.
+        expect(
+          (
+            await db.intervalScan(compositeTable, "byAThenB", [
+              {
+                eq: [{ col: "a", val: 1 }],
+                gt: [{ col: "b", val: "w" }],
+                lt: [{ col: "b", val: "y" }],
+              },
+              { eq: [{ col: "a", val: 2 }], gt: [{ col: "b", val: "x" }] },
+            ])
+          ).map((row) => row.id),
+        ).toEqual(["1x", "2y"]);
       });
 
       it("rejects non-prefix composite range clauses when called directly", async () => {
