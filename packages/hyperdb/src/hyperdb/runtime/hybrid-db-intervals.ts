@@ -526,11 +526,32 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
     ) => ExtractSchema<TTable>[];
     onPersistentScan?: (info: HybridPersistentScanDebugInfo) => void;
     returnCacheAfterPersistentScan?: (target: IntervalTarget) => boolean;
+    // Reads the primary only: nothing is served from or loaded into the cache.
+    uncached?: boolean;
   } = {},
 ): Generator<DBCmd, ExtractSchema<TTable>[]> {
   if (selectOptions?.limit === 0) return [];
 
   const target = intervalFromClauses(table, indexName as string, clauses);
+  if (options.uncached) {
+    setSelectSource(selectEvent, "persist");
+    options.onPersistentScan?.({
+      target,
+      cached: [],
+      uncovered: target.intervals,
+    });
+    if (options.beforePersistentScan) {
+      yield* options.beforePersistentScan(target);
+    }
+    const primaryDB =
+      typeof primary === "function" ? yield* primary() : primary;
+    return yield* primaryDB.intervalScan(
+      table,
+      indexName,
+      clauses,
+      selectOptions,
+    );
+  }
   const exactCovered = target.exactUniqhashKeys.flatMap((exact) => {
     const isCovered = [
       cachedIntervals,

@@ -269,6 +269,29 @@ when a delete did not know the old row. That lets exact unique reads return from
 memory while broader uncached scans still wait when a pending write could affect
 their interval.
 
+### Uncached Tables
+
+Some tables are too large to keep in memory and are read through narrow,
+bounded queries anyway, such as a full-text token index. List them in
+`uncachedTables` to keep their rows out of the cache entirely:
+
+```ts
+const hybrid = new HybridDB(primary, cache, {
+  uncachedTables: [searchTokensTable],
+});
+```
+
+Reads of an uncached table always go to the primary store, after waiting for
+any pending flush that could affect them. Writes still belong to their
+transaction: inside it, reads see the transaction's own writes, and on commit
+the rows reach the primary store in the same persistence batch as the rest of
+the transaction. Nothing from these tables stays in memory once a transaction
+ends, and a selector that reads one is not primed into the cache by
+`preloadSelectorAsync`. `preloadTables` rejects uncached tables.
+
+The trade-off is that every read of an uncached table costs a primary-store
+query, so keep those reads bounded.
+
 ## `PreloadedHybridDB`
 
 `PreloadedHybridDB` is the middle ground between range-cached `HybridDB` and a

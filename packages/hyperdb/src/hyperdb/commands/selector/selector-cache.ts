@@ -632,7 +632,9 @@ export async function preloadSelectorAsync<TSelector extends AnyObjectSelector>(
   // result; priming the cache with it would serve stale data.
   const fresh =
     db.getRevision() === revision && cacheDB?.getRevision() === cacheRevision;
-  if (cacheDB && fresh) {
+  // The cache never holds uncached tables, so it could not keep this fresh.
+  const readsUncached = selectRangeCmds.some((cmd) => db.isUncached(cmd.table));
+  if (cacheDB && fresh && !readsUncached) {
     primeCachedSelector(
       cacheDB,
       input.selector,

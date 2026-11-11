@@ -746,6 +746,10 @@ export class SubscribableDB implements HyperDB {
     return this.db.getCacheDB?.();
   }
 
+  isUncached(table: TableDefinition): boolean {
+    return this.db.isUncached?.(table) ?? false;
+  }
+
   get isClosed(): boolean {
     return this.state.closed || this.db.isClosed === true;
   }

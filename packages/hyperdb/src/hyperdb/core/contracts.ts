@@ -82,6 +82,8 @@ export interface HyperDB {
    * its results there so later cached reads start warm.
    */
   getCacheDB?(): HyperDB | undefined;
+  /** True when a hybrid runtime keeps the table out of its cache. */
+  isUncached?(table: TableDefinition): boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadTables(tables: TableDefinition<any, any>[]): Generator<DBCmd, void>;
   preloadTables<const TSpecs extends readonly HybridPreloadTableSpecInput[]>(
