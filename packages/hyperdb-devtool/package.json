@@ -27,15 +27,14 @@
     "build": "vite build && tsc",
     "lint": "eslint .",
     "lint:cycles": "depcruise src --config .dependency-cruiser.cjs",
-    "prepack": "pnpm run build",
     "ts": "tsc && tsc -p tsconfig.eslint.json",
     "test": "vitest run"
   },
   "dependencies": {
-    "@will-be-done/hyperdb": "workspace:*",
     "goober": "^2.1.18"
   },
   "peerDependencies": {
+    "@will-be-done/hyperdb": ">=0.11.0 <1.0.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0"
   },
@@ -44,6 +43,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@vitest/browser-playwright": "4.1.5",
+    "@will-be-done/hyperdb": "workspace:*",
     "dependency-cruiser": "^17.4.3",
     "eslint": "^9.39.1",
     "eslint-plugin-import": "^2.32.0",
