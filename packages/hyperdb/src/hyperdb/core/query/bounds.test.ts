@@ -286,6 +286,45 @@ describe("bounds", () => {
         lte: [1, "Z", MAX],
       },
     ]);
+
+    expect(
+      convertWhereToBound(cols, [
+        {
+          eq: [{ col: "id", val: 1 }],
+          gte: [{ col: "title", val: "A" }],
+          lt: [{ col: "title", val: "Z" }],
+        },
+        {
+          eq: [{ col: "id", val: 1 }],
+          gt: [{ col: "title", val: "A" }],
+          lt: [{ col: "title", val: "Z" }],
+        },
+        {
+          eq: [{ col: "id", val: 1 }],
+          gt: [{ col: "title", val: "A" }],
+          lte: [{ col: "title", val: "Z" }],
+        },
+        {
+          eq: [{ col: "id", val: 1 }],
+          gt: [{ col: "title", val: "A" }],
+        },
+      ]),
+    ).toEqual([
+      { gte: [1, "A", MIN], lt: [1, "Z", MIN] },
+      { gt: [1, "A", MAX], lt: [1, "Z", MIN] },
+      { gt: [1, "A", MAX], lte: [1, "Z", MAX] },
+      { gt: [1, "A", MAX], lte: [1, MAX, MAX] },
+    ]);
+
+    expect(() =>
+      convertWhereToBound(cols, [
+        {
+          eq: [{ col: "id", val: 1 }],
+          gt: [{ col: "title", val: "A" }],
+          gte: [{ col: "title", val: "B" }],
+        },
+      ]),
+    ).toThrow("Both gt and gte for column 'title'");
   });
 
   // NEW: Test range conditions that terminate usable prefix
