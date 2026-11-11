@@ -1367,3 +1367,157 @@ describe("HybridDB", () => {
     expect(primaryScanSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("HybridDB uncached tables", () => {
+  const notesTable = defineTable("hybridNotes", {
+    id: v.string(),
+    value: v.number(),
+  }).index("byValue", ["value"]);
+
+  const createUncachedDBs = async () => {
+    const dbs = await createDBs({ uncachedTables: [tasksTable] });
+    await dbs.db.loadTables([tasksTable, notesTable]);
+    return dbs;
+  };
+
+  const allTasks = (db: AsyncDB | DB) =>
+    db instanceof DB
+      ? new AsyncDB(db).intervalScan(tasksTable, "byIds", [{}])
+      : db.intervalScan(tasksTable, "byIds", [{}]);
+
+  it("reads and writes through the primary only", async () => {
+    const { db, cache, primaryScanSpy } = await createUncachedDBs();
+    const tasks = [createTask(1), createTask(2)];
+    await db.insert(tasksTable, tasks);
+    await db.upsert(tasksTable, [{ ...tasks[0]!, title: "renamed" }]);
+    await db.delete(tasksTable, [tasks[1]!.id]);
+
+    const expected = [{ ...tasks[0]!, title: "renamed" }];
+    await expect(allTasks(db)).resolves.toEqual(expected);
+    await expect(allTasks(db)).resolves.toEqual(expected);
+    expect(primaryScanSpy).toHaveBeenCalledTimes(2);
+    await expect(allTasks(cache)).resolves.toEqual([]);
+  });
+
+  it("serves a transaction its own writes and keeps them out of the cache", async () => {
+    const { db, hybrid, primary, cache } = await createUncachedDBs();
+    const stored = createTask(1);
+    await db.insert(tasksTable, [stored]);
+
+    const tx = await db.beginTx();
+    const inserted = createTask(2);
+    const discarded = createTask(3);
+    await tx.insert(tasksTable, [inserted, discarded]);
+    await tx.upsert(tasksTable, [{ ...stored, title: "renamed" }]);
+    await tx.delete(tasksTable, [discarded.id]);
+    await tx.insert(notesTable, [{ id: "note", value: 1 }]);
+    const renamed = { ...stored, title: "renamed" };
+    await expect(
+      tx.intervalScan(tasksTable, "byValue", [
+        { gte: [{ col: "value", val: 1 }] },
+      ]),
+    ).resolves.toEqual([renamed, inserted]);
+    await tx.commit();
+
+    await expect(allTasks(cache)).resolves.toEqual([]);
+    await expect(
+      new AsyncDB(cache).intervalScan(notesTable, "byValue", [{}]),
+    ).resolves.toEqual([{ id: "note", value: 1 }]);
+    await execAsync(hybrid.waitForPersistence());
+    await expect(allTasks(primary)).resolves.toEqual([renamed, inserted]);
+    await expect(allTasks(db)).resolves.toEqual([renamed, inserted]);
+  });
+
+  it("waits for pending persistence before reading", async () => {
+    const { db, primary } = await createUncachedDBs();
+    const resumePersistCommit = deferred();
+    const originalBeginTx = primary.beginTx.bind(primary);
+    vi.spyOn(primary, "beginTx").mockImplementation(function* (mode) {
+      const tx = yield* originalBeginTx(mode);
+      if (mode === "readwrite" || mode === undefined) {
+        const originalCommit = tx.commit.bind(tx);
+        vi.spyOn(tx, "commit").mockImplementation(function* () {
+          yield* unwrap(resumePersistCommit.promise);
+          return yield* originalCommit();
+        });
+      }
+      return tx;
+    });
+
+    const task = createTask(1);
+    const tx = await db.beginTx();
+    await tx.insert(tasksTable, [task]);
+    await tx.commit();
+
+    let resolved = false;
+    const read = allTasks(db).then((rows) => {
+      resolved = true;
+      return rows;
+    });
+    await waitOneTurn();
+    expect(resolved).toBe(false);
+    resumePersistCommit.resolve();
+    await expect(read).resolves.toEqual([task]);
+  });
+
+  it("does not let transaction reads publish cache coverage", async () => {
+    const { db, primaryScanSpy } = await createUncachedDBs();
+    const task = createTask(1);
+    await db.insert(tasksTable, [task]);
+
+    const tx = await db.beginTx();
+    await expect(
+      tx.intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: task.slug }] },
+      ]),
+    ).resolves.toEqual([task]);
+    await tx.commit();
+
+    primaryScanSpy.mockClear();
+    await expect(
+      db.intervalScan(tasksTable, "bySlug", [
+        { eq: [{ col: "slug", val: task.slug }] },
+      ]),
+    ).resolves.toEqual([task]);
+    expect(primaryScanSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects preloading an uncached table", async () => {
+    const { hybrid } = await createUncachedDBs();
+    await expect(
+      execAsync(
+        hybrid.preloadTables([{ table: tasksTable, scanIndex: "byIds" }]),
+      ),
+    ).rejects.toThrow("cannot preload uncached table");
+  });
+});
+
+describe("HybridDB uncached table selectors", () => {
+  it("does not prime the cache with selectors that read uncached tables", async () => {
+    const { hybrid } = await createDBs({ uncachedTables: [tasksTable] });
+    const db = new SubscribableDB(hybrid);
+    const task = createTask(1);
+    await new AsyncDB(db).insert(tasksTable, [task]);
+    const projectTasks = createSelector()({
+      name: "uncachedProjectTasks",
+      args: { projectId: v.string() },
+      handler: function* uncachedProjectTasks({ projectId }) {
+        return yield* selectFrom(tasksTable, "byProjectValue").where((q) =>
+          q.eq("projectId", projectId),
+        );
+      },
+    });
+
+    await expect(
+      preloadSelectorAsync(db, {
+        selector: projectTasks,
+        args: { projectId: "a" },
+      }),
+    ).resolves.toEqual([task]);
+    const cached = createCachedSelectorStoreSync(
+      getSubscribableHybridCacheDB(db)!,
+      { selector: projectTasks, args: { projectId: "a" } },
+    );
+    expect(cached.getSnapshot()).toEqual([]);
+  });
+});

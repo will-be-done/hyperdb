@@ -57,11 +57,14 @@ type HybridDBState = {
   cachedIntervals: HybridIntervalCache;
   lock: AwaitLock;
   persistence: HybridPersistenceQueue;
+  uncachedTableNames: ReadonlySet<string>;
 };
 
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
   pendingWrites: HybridPendingWrite[];
+  // Rows of uncached tables this transaction put in its cache transaction.
+  uncachedRowIds: Map<TableDefinition, Set<string>>;
   committed: RefVar<boolean>;
   rollbacked: RefVar<boolean>;
   txCounter: RefVar<number>;
@@ -123,15 +126,19 @@ export type HybridDBDebugEvent =
   | HybridDBPersistentScanDebugEvent
   | HybridDBPersistenceFailureDebugEvent;
 
-const createHybridDBState = (): HybridDBState => ({
+const createHybridDBState = (
+  uncachedTables: readonly TableDefinition[] = [],
+): HybridDBState => ({
   cachedIntervals: createHybridIntervalCache(),
   lock: new AwaitLock(),
   persistence: new HybridPersistenceQueue(),
+  uncachedTableNames: new Set(uncachedTables.map((table) => table.tableName)),
 });
 
 const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
   cachedIntervals: createHybridIntervalCache(),
   pendingWrites: [],
+  uncachedRowIds: new Map(),
   committed: refVar(false),
   rollbacked: refVar(false),
   txCounter: refVar(1),
@@ -146,6 +153,12 @@ const createHybridReadonlyTxState = (): HybridReadonlyTxState => ({
 export type HybridDBOptions = {
   traits?: Trait[];
   debug?: boolean | ((event: HybridDBDebugEvent) => void);
+  /**
+   * Tables kept only in the primary. Their rows never enter the cache: reads
+   * always go to the primary, and writes reach it with the rest of their
+   * transaction's persistence batch.
+   */
+  uncachedTables?: readonly TableDefinition[];
 };
 
 function* acquireHybridLock(
@@ -230,6 +243,20 @@ function pendingWritesMatchTarget(
   return false;
 }
 
+const coverageTableName = (key: string) => key.slice(0, key.lastIndexOf(":"));
+
+function dropUncachedCoverage(
+  cachedIntervals: HybridIntervalCache,
+  tableNames: ReadonlySet<string>,
+): void {
+  if (tableNames.size === 0) return;
+  for (const coverage of [cachedIntervals, cachedIntervals.exactKeys]) {
+    for (const key of [...coverage.keys()]) {
+      if (tableNames.has(coverageTableName(key))) coverage.delete(key);
+    }
+  }
+}
+
 function mergeExactUniqhashWriteCoverage(
   cachedIntervals: HybridIntervalCache,
   writes: HybridPendingWrite[],
@@ -274,7 +301,11 @@ export class HybridDB implements HyperDB {
     this.cache = cache;
     this.traits = options.traits ?? [];
     this.debug = options.debug;
-    this.state = createHybridDBState();
+    this.state = createHybridDBState(options.uncachedTables);
+  }
+
+  isUncached(table: TableDefinition): boolean {
+    return this.state.uncachedTableNames.has(table.tableName);
   }
 
   withTraits<TTrait extends Trait>(...traits: TTrait[]): HyperDB {
@@ -327,6 +358,14 @@ export class HybridDB implements HyperDB {
     this.throwIfCrashed();
     const { cache, primary, state } = this;
     const traceContext = getDriverTraceContextForDB(this);
+
+    for (const spec of specs) {
+      if (this.isUncached(spec.table)) {
+        throw new Error(
+          `HybridDB cannot preload uncached table: ${spec.table.tableName}`,
+        );
+      }
+    }
 
     yield* this.waitForPendingPersistence();
     yield* withHybridLock(state, function* () {
@@ -404,6 +443,7 @@ export class HybridDB implements HyperDB {
       this.emitPersistentScanDebugEvent.bind(this);
     const waitForPendingPersistenceForScan =
       this.waitForPendingPersistenceForScan.bind(this);
+    const uncached = this.isUncached(table);
     return yield* withHybridLock(this.state, function* () {
       return yield* hybridIntervalScan(
         withDriverTraceContextTrait(primary, traceContext),
@@ -434,6 +474,7 @@ export class HybridDB implements HyperDB {
               target,
             );
           },
+          uncached,
         },
       );
     });
@@ -445,6 +486,7 @@ export class HybridDB implements HyperDB {
   ): Generator<DBCmd, void> {
     this.throwIfCrashed();
     const { cache, primary } = this;
+    const uncached = this.isUncached(table);
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
     yield* withHybridRootWrite(this.state, function* () {
@@ -452,6 +494,7 @@ export class HybridDB implements HyperDB {
         table,
         records,
       );
+      if (uncached) return;
       yield* withDriverTraceContextTrait(cache, traceContext).insert(
         table,
         records,
@@ -465,6 +508,7 @@ export class HybridDB implements HyperDB {
   ): Generator<DBCmd, void> {
     this.throwIfCrashed();
     const { cache, primary } = this;
+    const uncached = this.isUncached(table);
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
     yield* withHybridRootWrite(this.state, function* () {
@@ -472,6 +516,7 @@ export class HybridDB implements HyperDB {
         table,
         records,
       );
+      if (uncached) return;
       yield* withDriverTraceContextTrait(cache, traceContext).upsert(
         table,
         records,
@@ -485,6 +530,7 @@ export class HybridDB implements HyperDB {
   ): Generator<DBCmd, void> {
     this.throwIfCrashed();
     const { cache, primary } = this;
+    const uncached = this.isUncached(table);
     const traceContext = getDriverTraceContextForDB(this);
     yield* this.waitForPendingPersistence();
     yield* withHybridRootWrite(this.state, function* () {
@@ -492,6 +538,7 @@ export class HybridDB implements HyperDB {
         table,
         ids,
       );
+      if (uncached) return;
       yield* withDriverTraceContextTrait(cache, traceContext).delete(
         table,
         ids,
@@ -772,6 +819,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
       this.state.primaryTx = tx;
       return tx ?? tracePrimary;
     }.bind(this);
+    const uncached = hybridDB.isUncached(table);
 
     return yield* withHybridLock(state, function* () {
       return yield* hybridIntervalScan(
@@ -803,6 +851,7 @@ class HybridDBReadonlyTx implements HyperDBTx {
               target,
             );
           },
+          uncached,
         },
       );
     });
@@ -985,8 +1034,14 @@ class HybridDBTx implements HyperDBTx {
             target,
           );
         },
-        filterPersistentRows: (_target, rows) =>
-          rows.filter((row) => !ownPendingIds.has(row.id)),
+        filterPersistentRows: (_target, rows) => {
+          const loaded = rows.filter((row) => !ownPendingIds.has(row.id));
+          this.trackUncachedRows(
+            table,
+            loaded.map((row) => row.id),
+          );
+          return loaded;
+        },
         returnCacheAfterPersistentScan: (target) =>
           pendingWritesMatchTarget(this.state.pendingWrites, table, target),
       },
@@ -1006,6 +1061,10 @@ class HybridDBTx implements HyperDBTx {
       snapshots,
     );
     if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    this.trackUncachedRows(
+      table,
+      snapshots.map((record) => record.id),
+    );
     for (const record of snapshots as Row[]) {
       this.state.pendingWrites.push({
         table,
@@ -1033,6 +1092,10 @@ class HybridDBTx implements HyperDBTx {
       snapshots,
     );
     if (this.cacheTx.getOptions?.().freezeRows) deepFreeze(records);
+    this.trackUncachedRows(
+      table,
+      snapshots.map((record) => record.id),
+    );
     for (const record of snapshots as Row[]) {
       const oldValue = previousRecords.get(record.id);
       this.state.pendingWrites.push({
@@ -1082,10 +1145,21 @@ class HybridDBTx implements HyperDBTx {
       this.hybridDB.throwIfPersistenceFull(this.state.pendingWrites);
       // Accepted: close() now waits for this commit to enqueue its batch.
       releaseAcceptedCommit = this.hybridDB.acceptCommit();
+      // Uncached rows served this transaction's reads; they reach the
+      // primary through the persistence batch, never the shared cache.
+      for (const [table, ids] of this.state.uncachedRowIds) {
+        yield* this.cacheTx.delete(table, [...ids]);
+      }
       yield* this.cacheTx.commit();
       mergeExactUniqhashWriteCoverage(
         this.state.cachedIntervals,
-        this.state.pendingWrites,
+        this.state.pendingWrites.filter(
+          (write) => !this.hybridDB.isUncached(write.table),
+        ),
+      );
+      dropUncachedCoverage(
+        this.state.cachedIntervals,
+        this.hybridDB.state.uncachedTableNames,
       );
       this.hybridDB.mergeTxCoverage(this.state.cachedIntervals);
       this.hybridDB.enqueuePersistence(
@@ -1140,6 +1214,16 @@ class HybridDBTx implements HyperDBTx {
         "Cannot modify a rollbacked tx",
       );
     }
+  }
+
+  private trackUncachedRows(table: TableDefinition, ids: string[]): void {
+    if (ids.length === 0 || !this.hybridDB.isUncached(table)) return;
+    let tableIds = this.state.uncachedRowIds.get(table);
+    if (!tableIds) {
+      tableIds = new Set();
+      this.state.uncachedRowIds.set(table, tableIds);
+    }
+    for (const id of ids) tableIds.add(id);
   }
 
   private *getCachedRowsById<TTable extends TableDefinition>(

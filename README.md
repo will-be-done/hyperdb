@@ -36,7 +36,8 @@ to strain:
   primary store with an in-memory B-tree cache. Reads return cached ranges when
   possible and load missing ranges from the primary store on demand. Writes
   update the cache first so the UI can respond immediately, then flush to the
-  primary store in order.
+  primary store in order. Tables listed in `uncachedTables` skip the cache and
+  are always read from the primary store.
 - **Preloaded indexes without preloaded rows.** `PreloadedHybridDB` loads every
   declared index into memory as key-to-id entries at startup, then batch-loads
   only the entity rows selected by a scan and caches them by id. Transactions
