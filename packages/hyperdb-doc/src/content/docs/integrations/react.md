@@ -203,7 +203,8 @@ function ProjectPanel({ projectId }: { projectId: string }) {
 
 - The Suspense boundary must already be mounted for this. A boundary that
   mounts with the new view shows its fallback.
-- Errors are thrown to the nearest error boundary.
+- Errors are thrown to the nearest error boundary. A failed first read keeps
+  throwing until the database changes, then reads again.
 - The selector needs root memoization (the default). A retry after suspending
   reads the result from the shared selector cache, so
   `memoization: { root: false }` selectors throw.

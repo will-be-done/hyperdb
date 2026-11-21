@@ -1,4 +1,11 @@
-import { Suspense, act, useDeferredValue, useState } from "react";
+import {
+  Component,
+  Suspense,
+  act,
+  useDeferredValue,
+  useState,
+  type ReactNode,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DB, execSync } from "../hyperdb/db";
@@ -26,10 +33,12 @@ const tasksTable = defineTable("suspenseTasks", {
 
 const deferred = () => {
   let resolve!: () => void;
-  const promise = new Promise<void>((res) => {
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 };
 
 // A gated project reads like cold storage: its next run waits for the gate.
@@ -60,6 +69,32 @@ const gate = (projectId: string) => {
       await next.promise;
     });
 };
+
+const failingGate = (projectId: string) => {
+  const next = deferred();
+  gates.set(projectId, next);
+  return () =>
+    act(async () => {
+      gates.delete(projectId);
+      next.reject(new Error(`${projectId} failed`));
+      await next.promise.catch(() => undefined);
+    });
+};
+
+class ErrorBoundary extends Component<
+  { children: ReactNode },
+  { error?: Error }
+> {
+  state: { error?: Error } = {};
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    return this.state.error
+      ? `error: ${this.state.error.message}`
+      : this.props.children;
+  }
+}
 
 function Titles({ projectId }: { projectId: string }) {
   return (
@@ -126,6 +161,48 @@ describe("useSuspenseSelector", () => {
     expect(container.textContent).toBe("A1");
     expect(runs).toEqual(["a"]);
     expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("returns each read's own result when one component suspends on two", async () => {
+    function Both() {
+      const a = useSuspenseSelector({
+        selector: projectTitles,
+        args: { projectId: "a" },
+      });
+      const b = useSuspenseSelector({
+        selector: projectTitles,
+        args: { projectId: "b" },
+      });
+      return `${a}|${b}`;
+    }
+    const openA = gate("a");
+    const openB = gate("b");
+
+    await render(<Both />);
+    await openA();
+    expect(container.textContent).toBe("loading");
+
+    await openB();
+    expect(container.textContent).toBe("A1|B1");
+  });
+
+  it("throws a failed first read to the error boundary instead of reading again", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const fail = failingGate("a");
+
+    await render(
+      <ErrorBoundary>
+        <Titles projectId="a" />
+      </ErrorBoundary>,
+    );
+    expect(container.textContent).toBe("loading");
+
+    await fail();
+    expect(container.textContent).toBe("error: a failed");
+    expect(runs).toEqual(["a"]);
     consoleError.mockRestore();
   });
 

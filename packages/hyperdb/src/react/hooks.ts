@@ -1,5 +1,4 @@
 import type { ActionGenerator } from "../hyperdb/commands/command-types";
-import * as React from "react";
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   createCachedSelectorStoreSync,
@@ -24,6 +23,7 @@ import {
   syncDispatch,
 } from "../hyperdb/commands/action/builders";
 import { getSelectorMemoization } from "../hyperdb/commands/selector/selector-cache";
+import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
 import { useDB } from "./context";
 import {
   isNeedToRerunRange,
@@ -365,11 +365,26 @@ export function useAsyncSelector<
   return result;
 }
 
-// React 18 has no `use`; throwing the promise is its Suspense protocol.
-const suspendOn = <T>(promise: Promise<T>): T => {
-  const use = (React as { use?: <V>(usable: Promise<V>) => V }).use;
-  if (use) return use(promise);
-  throw promise;
+// A failed first read stays failed for the database revision it ran at.
+// Suspending discards the hook's state, so the retry would otherwise read again
+// and suspend forever instead of reaching the error boundary.
+const failedSuspenseReads = new WeakMap<
+  SubscribableDB,
+  WeakMap<object, Map<string, { error: unknown; revision: number }>>
+>();
+
+const getFailedSuspenseReads = (db: SubscribableDB, selector: object) => {
+  let bySelector = failedSuspenseReads.get(db);
+  if (!bySelector) {
+    bySelector = new WeakMap();
+    failedSuspenseReads.set(db, bySelector);
+  }
+  let byArgs = bySelector.get(selector);
+  if (!byArgs) {
+    byArgs = new Map();
+    bySelector.set(selector, byArgs);
+  }
+  return byArgs;
 };
 
 // Suspends until the first result for these args is ready, then stays mounted
@@ -388,14 +403,33 @@ export function useSuspenseSelector<
     );
   }
 
+  const db = hookDeps.useDB();
+  const argsKey = hookDeps.stableSerializeSelectorArgs(input.args);
+  const failedReads = getFailedSuspenseReads(db, input.selector);
+  const failed = failedReads.get(argsKey);
+  if (failed?.revision === db.getRevision()) throw failed.error;
+  failedReads.delete(argsKey);
+
   const result = useAsyncSelector({
     selector: input.selector,
     args: input.args,
     throwOnError: true,
   });
 
-  if (result.status === "pending") return suspendOn(result.promise);
-  return result.data as SelectorReturn<TSelector>;
+  if (result.status !== "pending") {
+    return result.data as SelectorReturn<TSelector>;
+  }
+
+  // Thrown rather than passed to React 19's `use`: `use` tracks promises by
+  // call order, and a retry that finds this result cached skips the call, so a
+  // later `use` in the component would get this promise's value.
+  const revision = db.getRevision();
+  throw result.promise.then(
+    () => undefined,
+    (error: unknown) => {
+      failedReads.set(argsKey, { error, revision });
+    },
+  );
 }
 
 export function useSyncDispatch() {
