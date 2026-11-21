@@ -1,5 +1,11 @@
 # @will-be-done/hyperdb
 
+## 0.11.1
+
+### Patch Changes
+
+- 1ac93cd: Fix HybridDB write transactions slowing down quadratically as they read and write more rows. Each scan subtracted every coverage interval from every target interval and rescanned all pending writes; large transactions such as an initial sync now stay linear.
+
 ## 0.11.0
 
 ### Minor Changes
