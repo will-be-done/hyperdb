@@ -340,14 +340,44 @@ export const subtractOne = (
   return result.filter((interval) => !isEmptyInterval(interval));
 };
 
+const endsBefore = (a: NormalizedInterval, b: NormalizedInterval) => {
+  const cmp = compareTuple(a.upper, b.lower);
+  return cmp < 0 || (cmp === 0 && (!a.upperInclusive || !b.lowerInclusive));
+};
+
+// Covers must be sorted and disjoint, as mergeIntervals returns them. A scan
+// then costs O(targets * log covers): transaction coverage can hold thousands
+// of point intervals.
 export const subtractIntervals = (
   targets: NormalizedInterval[],
-  covers: NormalizedInterval[],
+  sortedCovers: NormalizedInterval[],
 ) => {
-  let remaining = targets;
-  for (const cover of covers) {
-    remaining = remaining.flatMap((target) => subtractOne(target, cover));
+  const remaining: NormalizedInterval[] = [];
+
+  for (const target of mergeIntervals(targets)) {
+    let low = 0;
+    let high = sortedCovers.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (endsBefore(sortedCovers[mid], target)) low = mid + 1;
+      else high = mid;
+    }
+
+    let rest: NormalizedInterval | undefined = target;
+    for (let i = low; rest && i < sortedCovers.length; i++) {
+      const cover = sortedCovers[i];
+      if (endsBefore(rest, cover)) break;
+
+      const pieces = subtractOne(rest, cover);
+      rest = undefined;
+      for (const piece of pieces) {
+        if (endsBefore(piece, cover)) remaining.push(piece);
+        else rest = piece;
+      }
+    }
+    if (rest) remaining.push(rest);
   }
+
   return mergeIntervals(remaining);
 };
 
@@ -560,14 +590,14 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
 
     return isCovered ? [exact.interval] : [];
   });
-  const cached = mergeIntervals([
-    ...(cachedIntervals.get(target.key) ?? []),
-    ...(options.additionalCachedIntervals ?? []).flatMap(
+  const coverLists = [
+    cachedIntervals.get(target.key) ?? [],
+    ...(options.additionalCachedIntervals ?? []).map(
       (intervals) => intervals.get(target.key) ?? [],
     ),
-    ...exactCovered,
-  ]);
-  const uncovered = subtractIntervals(target.intervals, cached);
+    mergeIntervals(exactCovered),
+  ];
+  const uncovered = coverLists.reduce(subtractIntervals, target.intervals);
 
   if (uncovered.length === 0) {
     setSelectSource(selectEvent, "in-mem");
@@ -604,7 +634,9 @@ export function* hybridIntervalScan<TTable extends TableDefinition>(
   setSelectSource(selectEvent, "persist");
   options.onPersistentScan?.({
     target,
-    cached,
+    get cached() {
+      return mergeIntervals(coverLists.flat());
+    },
     uncovered,
     limitedCacheProbe,
   });
