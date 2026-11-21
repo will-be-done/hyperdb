@@ -299,6 +299,12 @@ that same promise resolves. The hook uses `createCachedSelectorStoreAsync`
 internally, so the same async subscription behavior is available without React.
 `defaultValue` may be a value or a zero-argument function that returns the value.
 
+`useSuspenseSelector({ selector, args })` returns the result directly and
+suspends until the first result for those args is ready, so a view whose reads
+all use it appears whole instead of filling in. Change its args with
+`startTransition` or `useDeferredValue` to keep the previous view on screen
+while the next one loads.
+
 ## Undo and redo
 
 Attach transaction history to a `SubscribableDB`, selecting the domain tables

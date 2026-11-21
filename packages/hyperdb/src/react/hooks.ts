@@ -22,6 +22,8 @@ import {
   asyncDispatch,
   syncDispatch,
 } from "../hyperdb/commands/action/builders";
+import { getSelectorMemoization } from "../hyperdb/commands/selector/selector-cache";
+import type { SubscribableDB } from "../hyperdb/runtime/subscribable-db";
 import { useDB } from "./context";
 import {
   isNeedToRerunRange,
@@ -361,6 +363,73 @@ export function useAsyncSelector<
   }
 
   return result;
+}
+
+// A failed first read stays failed for the database revision it ran at.
+// Suspending discards the hook's state, so the retry would otherwise read again
+// and suspend forever instead of reaching the error boundary.
+const failedSuspenseReads = new WeakMap<
+  SubscribableDB,
+  WeakMap<object, Map<string, { error: unknown; revision: number }>>
+>();
+
+const getFailedSuspenseReads = (db: SubscribableDB, selector: object) => {
+  let bySelector = failedSuspenseReads.get(db);
+  if (!bySelector) {
+    bySelector = new WeakMap();
+    failedSuspenseReads.set(db, bySelector);
+  }
+  let byArgs = bySelector.get(selector);
+  if (!byArgs) {
+    byArgs = new Map();
+    bySelector.set(selector, byArgs);
+  }
+  return byArgs;
+};
+
+// Suspends until the first result for these args is ready, then stays mounted
+// with the previous result while later database changes rerun the selector.
+export function useSuspenseSelector<
+  TSelector extends AnyObjectSelector,
+>(input: {
+  selector: TSelector;
+  args: SelectorArgs<TSelector>;
+}): SelectorReturn<TSelector> {
+  // A retry after suspending finds the result in the shared selector cache;
+  // without it every retry would start the read again and never settle.
+  if (!getSelectorMemoization(input.selector).root) {
+    throw new Error(
+      "useSuspenseSelector needs a selector with root memoization enabled",
+    );
+  }
+
+  const db = hookDeps.useDB();
+  const argsKey = hookDeps.stableSerializeSelectorArgs(input.args);
+  const failedReads = getFailedSuspenseReads(db, input.selector);
+  const failed = failedReads.get(argsKey);
+  if (failed?.revision === db.getRevision()) throw failed.error;
+  failedReads.delete(argsKey);
+
+  const result = useAsyncSelector({
+    selector: input.selector,
+    args: input.args,
+    throwOnError: true,
+  });
+
+  if (result.status !== "pending") {
+    return result.data as SelectorReturn<TSelector>;
+  }
+
+  // Thrown rather than passed to React 19's `use`: `use` tracks promises by
+  // call order, and a retry that finds this result cached skips the call, so a
+  // later `use` in the component would get this promise's value.
+  const revision = db.getRevision();
+  throw result.promise.then(
+    () => undefined,
+    (error: unknown) => {
+      failedReads.set(argsKey, { error, revision });
+    },
+  );
 }
 
 export function useSyncDispatch() {

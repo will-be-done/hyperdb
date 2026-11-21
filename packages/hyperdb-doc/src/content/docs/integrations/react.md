@@ -149,6 +149,66 @@ export async function preloadProjectRoute(
 }
 ```
 
+### `useSuspenseSelector`
+
+`useSuspenseSelector` returns the selector result directly and suspends the
+component until the first result for its args is ready. Use it for views that
+should appear whole: put every read the view needs on it and the view renders
+once, with everything loaded, instead of filling in as each read resolves.
+
+```tsx
+import { Suspense } from "react";
+import { useSuspenseSelector } from "@will-be-done/hyperdb/react";
+import { projectTasks } from "./tasks";
+
+function TaskList({ projectId }: { projectId: string }) {
+  const tasks = useSuspenseSelector({
+    selector: projectTasks,
+    args: { projectId },
+  });
+
+  return (
+    <ul>
+      {tasks.map((task) => (
+        <li key={task.id}>{task.title}</li>
+      ))}
+    </ul>
+  );
+}
+
+<Suspense fallback={null}>
+  <TaskList projectId="p1" />
+</Suspense>;
+```
+
+- A result that is already cached renders without suspending.
+- It suspends only when its args change. Database changes that rerun the
+  selector keep showing the previous result until the new one is ready.
+- Changing args in a normal update shows the nearest Suspense fallback. Change
+  them inside `startTransition`, or pass them through `useDeferredValue`, and
+  React keeps showing the previous view until the next one stops suspending:
+
+```tsx
+function ProjectPanel({ projectId }: { projectId: string }) {
+  // Switching projects keeps the current list until the next one is ready.
+  const shownProjectId = useDeferredValue(projectId);
+
+  return (
+    <Suspense fallback={null}>
+      <TaskList projectId={shownProjectId} />
+    </Suspense>
+  );
+}
+```
+
+- The Suspense boundary must already be mounted for this. A boundary that
+  mounts with the new view shows its fallback.
+- Errors are thrown to the nearest error boundary. A failed first read keeps
+  throwing until the database changes, then reads again.
+- The selector needs root memoization (the default). A retry after suspending
+  reads the result from the shared selector cache, so
+  `memoization: { root: false }` selectors throw.
+
 ### `useSyncSelector`
 
 Use `useSyncSelector` with synchronous drivers: in-memory or sync SQLite. It is
@@ -237,12 +297,13 @@ Use `useSelectSync` for synchronous drivers.
 
 ## Hook reference
 
-| Hook                     | Returns                                    | Use with                            |
-| ------------------------ | ------------------------------------------ | ----------------------------------- |
-| `useDB()`                | the `SubscribableDB`                       | accessing the DB directly           |
-| `useAsyncSelector(opts)` | query-style result object                  | `HybridDB`, IndexedDB, async SQLite |
-| `useSyncSelector(opts)`  | the selector result                        | in-memory and sync SQLite           |
-| `useAsyncDispatch()`     | `(action) => Promise<TReturn>`             | `HybridDB`, IndexedDB, async SQLite |
-| `useSyncDispatch()`      | `(action) => TReturn`                      | in-memory and sync SQLite           |
-| `useSelectAsync()`       | `({ selector, args }) => Promise<TReturn>` | one-off read, async runtimes        |
-| `useSelectSync()`        | `({ selector, args }) => TReturn`          | one-off read, sync runtimes         |
+| Hook                        | Returns                                    | Use with                            |
+| --------------------------- | ------------------------------------------ | ----------------------------------- |
+| `useDB()`                   | the `SubscribableDB`                       | accessing the DB directly           |
+| `useAsyncSelector(opts)`    | query-style result object                  | `HybridDB`, IndexedDB, async SQLite |
+| `useSuspenseSelector(opts)` | the selector result; suspends until ready  | `HybridDB`, IndexedDB, async SQLite |
+| `useSyncSelector(opts)`     | the selector result                        | in-memory and sync SQLite           |
+| `useAsyncDispatch()`        | `(action) => Promise<TReturn>`             | `HybridDB`, IndexedDB, async SQLite |
+| `useSyncDispatch()`         | `(action) => TReturn`                      | in-memory and sync SQLite           |
+| `useSelectAsync()`          | `({ selector, args }) => Promise<TReturn>` | one-off read, async runtimes        |
+| `useSelectSync()`           | `({ selector, args }) => TReturn`          | one-off read, sync runtimes         |

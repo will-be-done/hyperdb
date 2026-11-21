@@ -37,8 +37,8 @@ and views that should re-run only when the exact index ranges they read change.
   actions, runtimes, command executors, `HybridDB`, `SubscribableDB`, tracing
   setup, and core types.
 - `@will-be-done/hyperdb/react`: `DBProvider`, `useDB`, `useOptionalDB`,
-  `useSyncSelector`, `useAsyncSelector`, `useSyncDispatch`, `useAsyncDispatch`,
-  `useSelectSync`, and `useSelectAsync`.
+  `useSyncSelector`, `useAsyncSelector`, `useSuspenseSelector`,
+  `useSyncDispatch`, `useAsyncDispatch`, `useSelectSync`, and `useSelectAsync`.
 - `@will-be-done/hyperdb/undo`: `undoMiddleware`, `UndoManager`, `withoutUndo`,
   `undoIgnore`, `isUndoReplay`, `UndoConflictError`, and history types.
 - `@will-be-done/hyperdb/tracing`: tracing store, tracer configuration, and
@@ -553,6 +553,12 @@ results are visible immediately, while promise results show `defaultValue`,
 `initialData`, or `placeholderData` until that promise resolves. `defaultValue`
 may be a value or a zero-argument function that returns the value. Use
 `useSyncSelector` / `useSyncDispatch` only for purely synchronous drivers.
+
+`useSuspenseSelector({ selector, args })` returns the result directly and
+suspends until the first result for those args is ready; later database changes
+keep the previous result while rerunning. Change its args with
+`startTransition` or `useDeferredValue` so an already-mounted Suspense boundary
+keeps the previous view instead of showing its fallback.
 
 ## Traits
 
