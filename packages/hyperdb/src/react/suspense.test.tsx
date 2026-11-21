@@ -2,6 +2,8 @@ import {
   Component,
   Suspense,
   act,
+  startTransition,
+  use,
   useDeferredValue,
   useState,
   type ReactNode,
@@ -164,27 +166,41 @@ describe("useSuspenseSelector", () => {
     consoleError.mockRestore();
   });
 
-  it("returns each read's own result when one component suspends on two", async () => {
+  it("leaves a later use() in the component its own promise", async () => {
+    let resolveOther!: (value: string) => void;
+    const other = new Promise<string>((resolve) => {
+      resolveOther = resolve;
+    });
     function Both() {
-      const a = useSuspenseSelector({
+      const titles = useSuspenseSelector({
         selector: projectTitles,
         args: { projectId: "a" },
       });
-      const b = useSuspenseSelector({
-        selector: projectTitles,
-        args: { projectId: "b" },
-      });
-      return `${a}|${b}`;
+      return `${titles}|${use(other)}`;
     }
-    const openA = gate("a");
-    const openB = gate("b");
+    // Settling within a microtask lets the transition replay the component
+    // before it unwinds to the boundary.
+    const settled = deferred();
+    settled.resolve();
+    gates.set("a", settled);
 
-    await render(<Both />);
-    await openA();
-    expect(container.textContent).toBe("loading");
+    await act(async () => {
+      startTransition(() => {
+        root.render(
+          <DBProvider value={db}>
+            <Suspense fallback="loading">
+              <Both />
+            </Suspense>
+          </DBProvider>,
+        );
+      });
+    });
+    await act(async () => {
+      resolveOther("other");
+      await other;
+    });
 
-    await openB();
-    expect(container.textContent).toBe("A1|B1");
+    expect(container.textContent).toBe("A1|other");
   });
 
   it("throws a failed first read to the error boundary instead of reading again", async () => {
