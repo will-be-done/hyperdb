@@ -63,6 +63,7 @@ type HybridDBState = {
 type HybridDBTxState = {
   cachedIntervals: HybridIntervalCache;
   pendingWrites: HybridPendingWrite[];
+  pendingIdsByTable: Map<TableDefinition, Set<string>>;
   // Rows of uncached tables this transaction put in its cache transaction.
   uncachedRowIds: Map<TableDefinition, Set<string>>;
   committed: RefVar<boolean>;
@@ -138,6 +139,7 @@ const createHybridDBState = (
 const createHybridDBTxState = (releaseLock: () => void): HybridDBTxState => ({
   cachedIntervals: createHybridIntervalCache(),
   pendingWrites: [],
+  pendingIdsByTable: new Map(),
   uncachedRowIds: new Map(),
   committed: refVar(false),
   rollbacked: refVar(false),
@@ -704,6 +706,7 @@ export class HybridDB implements HyperDB {
     selectOptions: SelectOptions | undefined,
     info: HybridPersistentScanDebugInfo,
   ): void {
+    if (!this.debug) return;
     this.emitDebugEvent({
       type: "persistent-scan",
       scope,
@@ -999,11 +1002,6 @@ class HybridDBTx implements HyperDBTx {
     this.hybridDB.throwIfCrashed();
     const traceContext = getDriverTraceContextForDB(this);
     const { hybridDB } = this;
-    const ownPendingIds = new Set(
-      this.state.pendingWrites
-        .filter((write) => write.table === table)
-        .map((write) => write.id),
-    );
     return yield* hybridIntervalScan(
       withDriverTraceContextTrait(hybridDB.primary, traceContext),
       withDriverTraceContextTrait(this.cacheTx, traceContext),
@@ -1035,7 +1033,10 @@ class HybridDBTx implements HyperDBTx {
           );
         },
         filterPersistentRows: (_target, rows) => {
-          const loaded = rows.filter((row) => !ownPendingIds.has(row.id));
+          const ownPendingIds = this.state.pendingIdsByTable.get(table);
+          const loaded = ownPendingIds
+            ? rows.filter((row) => !ownPendingIds.has(row.id))
+            : rows;
           this.trackUncachedRows(
             table,
             loaded.map((row) => row.id),
@@ -1066,7 +1067,7 @@ class HybridDBTx implements HyperDBTx {
       snapshots.map((record) => record.id),
     );
     for (const record of snapshots as Row[]) {
-      this.state.pendingWrites.push({
+      this.pushPendingWrite({
         table,
         id: record.id,
         newValue: record,
@@ -1098,7 +1099,7 @@ class HybridDBTx implements HyperDBTx {
     );
     for (const record of snapshots as Row[]) {
       const oldValue = previousRecords.get(record.id);
-      this.state.pendingWrites.push({
+      this.pushPendingWrite({
         table,
         id: record.id,
         oldValue,
@@ -1122,13 +1123,23 @@ class HybridDBTx implements HyperDBTx {
     );
     for (const id of ids) {
       const oldValue = previousRecords.get(id);
-      this.state.pendingWrites.push({
+      this.pushPendingWrite({
         table,
         id,
         oldValue,
         oldValueKnown: oldValue !== undefined,
       });
     }
+  }
+
+  private pushPendingWrite(write: HybridPendingWrite): void {
+    this.state.pendingWrites.push(write);
+    let ids = this.state.pendingIdsByTable.get(write.table);
+    if (!ids) {
+      ids = new Set();
+      this.state.pendingIdsByTable.set(write.table, ids);
+    }
+    ids.add(write.id);
   }
 
   *commit(): Generator<DBCmd, void> {

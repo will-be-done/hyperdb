@@ -203,6 +203,18 @@ describe("HybridDB interval helpers", () => {
     expect(
       subtractIntervals([i([1], [2]), i([2], [3])], [i([1], [3])]),
     ).toEqual([]);
+    expect(
+      subtractIntervals(
+        [i([0], [4]), i([6], [20]), i([40], [50])],
+        [i([1], [2]), i([3], [7]), i([8], [9]), i([15], [30])],
+      ),
+    ).toEqual([
+      i([0], [1], true, false),
+      i([2], [3], false, false),
+      i([7], [8], false, false),
+      i([9], [15], false, false),
+      i([40], [50]),
+    ]);
   });
 
   it("derives cached coverage from ascending limited rows across disjoint intervals", () => {
