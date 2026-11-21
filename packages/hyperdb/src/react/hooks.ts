@@ -1,4 +1,5 @@
 import type { ActionGenerator } from "../hyperdb/commands/command-types";
+import * as React from "react";
 import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import {
   createCachedSelectorStoreSync,
@@ -22,6 +23,7 @@ import {
   asyncDispatch,
   syncDispatch,
 } from "../hyperdb/commands/action/builders";
+import { getSelectorMemoization } from "../hyperdb/commands/selector/selector-cache";
 import { useDB } from "./context";
 import {
   isNeedToRerunRange,
@@ -361,6 +363,39 @@ export function useAsyncSelector<
   }
 
   return result;
+}
+
+// React 18 has no `use`; throwing the promise is its Suspense protocol.
+const suspendOn = <T>(promise: Promise<T>): T => {
+  const use = (React as { use?: <V>(usable: Promise<V>) => V }).use;
+  if (use) return use(promise);
+  throw promise;
+};
+
+// Suspends until the first result for these args is ready, then stays mounted
+// with the previous result while later database changes rerun the selector.
+export function useSuspenseSelector<
+  TSelector extends AnyObjectSelector,
+>(input: {
+  selector: TSelector;
+  args: SelectorArgs<TSelector>;
+}): SelectorReturn<TSelector> {
+  // A retry after suspending finds the result in the shared selector cache;
+  // without it every retry would start the read again and never settle.
+  if (!getSelectorMemoization(input.selector).root) {
+    throw new Error(
+      "useSuspenseSelector needs a selector with root memoization enabled",
+    );
+  }
+
+  const result = useAsyncSelector({
+    selector: input.selector,
+    args: input.args,
+    throwOnError: true,
+  });
+
+  if (result.status === "pending") return suspendOn(result.promise);
+  return result.data as SelectorReturn<TSelector>;
 }
 
 export function useSyncDispatch() {

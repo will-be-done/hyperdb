@@ -112,6 +112,7 @@ check the matching docs below and also check the root `README.md`.
 
 - `src/content/docs/integrations/react.md`: React integration guide. Covers
   `DBProvider`, `useDB`, `useSyncSelector`, `useAsyncSelector`,
+  `useSuspenseSelector` with transitions and deferred values,
   `useSyncDispatch`, `useAsyncDispatch`, `useSelectSync`, `useSelectAsync`,
   selector options, default values, `enabled`, the React Query-style async
   selector result, its
